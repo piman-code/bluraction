@@ -46,7 +46,7 @@ final class GroupsEraserProjectTests {
 
     /// Every way of moving a drawing must carry its holes (the canvas drag moves only points).
     @Test
-    func testHolesFollowDragGroupMoveDuplicateAndClearMotion() async throws {
+    func testHolesFollowDragGroupMoveAndDuplicate() async throws {
         let session = try await ImageSession.open()
         defer { session.close() }
         let canvas = session.canvas
