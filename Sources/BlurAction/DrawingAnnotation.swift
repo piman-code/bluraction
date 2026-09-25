@@ -224,10 +224,9 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         let old = bounds
         var result = self
         result.points = points.map { MotionTrack.map($0, from: old, to: rect) }
-        let scale = Self.widthScale(sx: old.width > 0 ? rect.width / old.width : 0,
-                                    sy: old.height > 0 ? rect.height / old.height : 0)
+        // Holes move with the shape; like the stroke width, their width is unchanged by a resize.
         result.erasures = erasures.map {
-            Erasure(points: $0.points.map { MotionTrack.map($0, from: old, to: rect) }, width: $0.width * scale, from: $0.from)
+            Erasure(points: $0.points.map { MotionTrack.map($0, from: old, to: rect) }, width: $0.width, from: $0.from)
         }
         return result
     }
@@ -266,6 +265,10 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         result.red = edited.red; result.green = edited.green; result.blue = edited.blue; result.alpha = edited.alpha
         let shown = displayed(at: time)
         guard edited.points != shown.points else { return result }
+        // Edits are moves/resizes of the box, so holes are re-derived from the box change rather
+        // than trusted from the caller (which may have moved only the points).
+        var edited = edited
+        edited.erasures = shown.replacingBounds(edited.bounds).erasures
         guard let t = time, t.isFinite else { result.points = edited.points; result.erasures = edited.erasures; return result }
         let from = shown.bounds, to = edited.bounds
         guard recording else {

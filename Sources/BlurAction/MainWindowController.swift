@@ -1497,6 +1497,7 @@ final class MainWindowController: NSWindowController {
             copy.id = UUID()
             copy.groupID = nil
             copy.points = drawing.points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
+            copy.erasures = drawing.replacingBounds(drawing.bounds.offsetBy(dx: dx, dy: dy)).erasures
             copy.keyframes = drawing.keyframes.map { RegionKeyframe(time: $0.time, rect: moved($0.rect)) }
             checkpoint()
             annotations.append(copy)
@@ -1604,10 +1605,8 @@ final class MainWindowController: NSWindowController {
             let reach = shown.lineWidth / 2 + 2
             guard shown.bounds.insetBy(dx: -reach, dy: -reach).intersects(area) else { continue }
             let base = updated[index].bounds
-            let scale = DrawingAnnotation.widthScale(sx: shown.bounds.width > 0 ? base.width / shown.bounds.width : 0,
-                                                     sy: shown.bounds.height > 0 ? base.height / shown.bounds.height : 0)
             updated[index].erasures.append(DrawingAnnotation.Erasure(
-                points: points.map { MotionTrack.map($0, from: shown.bounds, to: base) }, width: width * scale, from: from))
+                points: points.map { MotionTrack.map($0, from: shown.bounds, to: base) }, width: width, from: from))
             touched += 1
         }
         guard touched > 0 else {
@@ -1675,6 +1674,7 @@ final class MainWindowController: NSWindowController {
         updated.text = string
         let box = old.bounds
         updated.points = [box.origin, CGPoint(x: box.minX + box.width * ratio, y: box.maxY)]
+        updated.erasures = old.replacingBounds(updated.bounds).erasures
         updated.keyframes = old.keyframes.map {
             RegionKeyframe(time: $0.time, rect: CGRect(x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width * ratio, height: $0.rect.height))
         }
@@ -2393,7 +2393,9 @@ final class MainWindowController: NSWindowController {
             pairs[index].effect.keyframes = []
         } else if let index = annotations.firstIndex(where: { $0.id == id }) {
             checkpoint()
-            annotations[index].points = annotations[index].displayed(at: editTime).points
+            let frozen = annotations[index].displayed(at: editTime)
+            annotations[index].points = frozen.points
+            annotations[index].erasures = frozen.erasures
             annotations[index].keyframes = []
         } else { return }
         refreshAfterEdit()

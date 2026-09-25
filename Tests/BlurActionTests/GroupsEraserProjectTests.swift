@@ -44,6 +44,42 @@ final class GroupsEraserProjectTests {
         #expect(tracked.displayed(at: 5).erasures.first?.points.first == CGPoint(x: 50, y: 45))
     }
 
+    /// Every way of moving a drawing must carry its holes (the canvas drag moves only points).
+    @Test
+    func testHolesFollowDragGroupMoveDuplicateAndClearMotion() async throws {
+        let session = try await ImageSession.open()
+        defer { session.close() }
+        let canvas = session.canvas
+        session.tool(1)
+        try session.drag(from: CGPoint(x: 20, y: 20), to: CGPoint(x: 80, y: 80))
+        let drawing = try #require(canvas.annotationsBinding?().first)
+        session.tool(2)
+        session.eraserMode(0)
+        try session.drag(from: CGPoint(x: 10, y: 50), to: CGPoint(x: 90, y: 50))
+        func hole(_ id: UUID) -> CGPoint? { canvas.annotationsBinding?().first { $0.id == id }?.erasures.first?.points.first }
+        let start = try #require(hole(drawing.id))
+
+        session.tool(1)
+        try session.drag(from: CGPoint(x: 20, y: 40), to: CGPoint(x: 60, y: 40))
+        #expect(hole(drawing.id) == CGPoint(x: start.x + 40, y: start.y), "A canvas drag moves the hole")
+
+        session.controller.perform(NSSelectorFromString("duplicateSelectedTapped"))
+        let copy = try #require(canvas.annotationsBinding?().last)
+        #expect(hole(copy.id) == CGPoint(x: start.x + 52, y: start.y - 12), "A duplicate keeps its hole in place")
+
+        session.tool(0)
+        session.controller.perform(NSSelectorFromString("addRegionTapped"))
+        let region = try #require(canvas.regionsBinding?().first)
+        try session.shiftClick(CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY))
+        session.tool(1)
+        try session.shiftClick(CGPoint(x: 60, y: 40))
+        session.controller.perform(NSSelectorFromString("groupTapped"))
+        session.tool(0)
+        let center = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
+        try session.drag(from: center, to: CGPoint(x: center.x, y: center.y + 10))
+        #expect(hole(drawing.id) == CGPoint(x: start.x + 40, y: start.y + 10), "A group move carries the hole")
+    }
+
     @Test
     func testArrowAndTextRender() throws {
         let helper = RenderingCoreTests()
