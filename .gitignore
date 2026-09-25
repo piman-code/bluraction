@@ -1,0 +1,14 @@
+# Build output and local app bundles
+.build/
+/BlurAction.app/
+*.bundle-backup
+
+# Local tooling and data
+.venv/
+Samples/
+.DS_Store
+
+# Superseded local icon generator (hard-coded local path) and its old output;
+# the current icon source is Resources/AppIcon.png.
+/scripts/make_icon.py
+/AppIcon.png
