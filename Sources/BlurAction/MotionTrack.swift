@@ -2,6 +2,10 @@ import CoreGraphics
 
 /// Time-based rectangle tracks shared by blur regions and drawings (canvas bottom-left coords).
 enum MotionTrack {
+    /// Keyframes closer than this are the same moment. Far below one frame even at 240 fps,
+    /// so stepping frame by frame never overwrites the previous frame's position.
+    static let sameTime = 0.001
+
     /// Linear interpolation between keyframes; before the first keyframe the base rect holds.
     static func rect(at t: Double, base: CGRect, keyframes: [RegionKeyframe]) -> CGRect {
         guard t.isFinite else { return base }
@@ -28,12 +32,14 @@ enum MotionTrack {
     /// Apply the position/size change `from → to` to another rect of the same track,
     /// so editing with motion recording off moves the whole recorded path.
     static func shifted(_ r: CGRect, from: CGRect, to: CGRect) -> CGRect {
-        CGRect(x: r.minX + to.minX - from.minX, y: r.minY + to.minY - from.minY,
-               width: max(0, r.width + to.width - from.width), height: max(0, r.height + to.height - from.height))
+        // A zero extent (straight line) stays zero; any other extent never collapses below 1pt.
+        func size(_ value: CGFloat, _ delta: CGFloat) -> CGFloat { value == 0 ? 0 : max(1, value + delta) }
+        return CGRect(x: r.minX + to.minX - from.minX, y: r.minY + to.minY - from.minY,
+                      width: size(r.width, to.width - from.width), height: size(r.height, to.height - from.height))
     }
 
     static func inserting(_ frame: RegionKeyframe, into frames: [RegionKeyframe]) -> [RegionKeyframe] {
-        var result = frames.filter { abs($0.time - frame.time) >= 1.0 / 60.0 }
+        var result = frames.filter { abs($0.time - frame.time) >= sameTime }
         result.append(frame)
         return result.sorted { $0.time < $1.time }
     }
@@ -47,8 +53,8 @@ enum MotionTrack {
         var frames = keyframes
         let hasPlaybackAnchor = anchor.map { $0.time.isFinite && $0.time < t } ?? false
         if frames.isEmpty {
-            guard hasPlaybackAnchor || t - start >= 1.0 / 60.0 else { return nil }
-            if t - start >= 1.0 / 60.0 {
+            guard hasPlaybackAnchor || t - start >= sameTime else { return nil }
+            if t - start >= sameTime {
                 frames = inserting(RegionKeyframe(time: max(0, start), rect: from), into: frames)
             }
         }

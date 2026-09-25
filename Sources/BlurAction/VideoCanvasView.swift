@@ -184,6 +184,13 @@ final class VideoCanvasView: NSView {
         updateCursorAtCurrentMouseLocation()
     }
 
+    /// Undo/redo can remove the selected drawing; keep the canvas in step with the controller.
+    func clearAnnotationSelection() {
+        guard selectedAnnotationID != nil else { return }
+        selectedAnnotationID = nil
+        refreshOverlay()
+    }
+
     func selectAnnotation(id: UUID) {
         if selectedID != nil { selectedID = nil; selectionChange?(nil) }
         selectedAnnotationID = id
@@ -934,9 +941,12 @@ final class VideoCanvasView: NSView {
         if activeDrag == .annotationResize, let anchor = annotationHandleAnchor {
             var target = rect(from: anchor, to: pt)
             let old = original.bounds
-            // Keep a straight line straight: a zero-extent axis stays zero.
+            // Keep a straight line straight: a zero-extent axis stays zero. Any other axis keeps
+            // at least 2pt so it can be enlarged again (a zero axis could never grow back).
             if old.width == 0 { target = CGRect(x: old.minX, y: target.minY, width: 0, height: target.height) }
+            else if target.width < 2 { target.size.width = 2; if pt.x < anchor.x { target.origin.x = anchor.x - 2 } }
             if old.height == 0 { target = CGRect(x: target.minX, y: old.minY, width: target.width, height: 0) }
+            else if target.height < 2 { target.size.height = 2; if pt.y < anchor.y { target.origin.y = anchor.y - 2 } }
             return original.replacingBounds(target)
         }
         let box = original.bounds
@@ -947,9 +957,12 @@ final class VideoCanvasView: NSView {
         return moved
     }
 
+    /// The single topmost item under the eraser (drawings render above blur regions),
+    /// matching the hover highlight so a click never removes hidden items underneath.
     private func eraseTargets(at pt: NSPoint) -> (regions: [UUID], drawings: [UUID]) {
-        ((regionsBinding?() ?? []).reversed().filter { $0.contains(point: pt, threshold: 6) }.map(\.id),
-         (annotationsBinding?() ?? []).reversed().filter { $0.hitTest(pt) }.map(\.id))
+        if let drawing = (annotationsBinding?() ?? []).reversed().first(where: { $0.hitTest(pt) }) { return ([], [drawing.id]) }
+        if let region = (regionsBinding?() ?? []).reversed().first(where: { $0.contains(point: pt, threshold: 6) }) { return ([region.id], []) }
+        return ([], [])
     }
 
     private func eraseItems(at pt: NSPoint) {

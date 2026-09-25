@@ -74,13 +74,21 @@ if [[ $build_only -eq 0 ]]; then
         install_stage="$(mktemp -d "$repo_root/.build/install-stage.XXXXXX")"
         ditto "$bundle" "$install_stage/BlurAction.app"
         codesign --verify --strict "$install_stage/BlurAction.app"
+        previous=""
         if [[ -e "$installed" ]]; then
-            mv "$installed" "$repo_root/.build/backups/Applications-BlurAction-$(date '+%Y%m%d-%H%M%S')-$$.bundle-backup"
+            previous="$repo_root/.build/backups/Applications-BlurAction-$(date '+%Y%m%d-%H%M%S')-$$.bundle-backup"
+            mv "$installed" "$previous"
         fi
-        mv "$install_stage/BlurAction.app" "$installed"
+        # If placing or verifying the new copy fails, put the previous app back (nothing is deleted).
+        if ! { mv "$install_stage/BlurAction.app" "$installed" &&
+               codesign --verify --strict "$installed" &&
+               cmp "$bundle/Contents/MacOS/BlurAction" "$installed/Contents/MacOS/BlurAction"; }; then
+            if [[ -e "$installed" ]]; then mv "$installed" "$install_stage/failed-BlurAction.app"; fi
+            if [[ -n "$previous" ]]; then mv "$previous" "$installed"; fi
+            printf 'Install failed; kept the previous app at %s\n' "$installed" >&2
+            exit 1
+        fi
         rmdir "$install_stage"
-        codesign --verify --strict "$installed"
-        cmp "$bundle/Contents/MacOS/BlurAction" "$installed/Contents/MacOS/BlurAction"
         printf 'Installed: %s\n' "$installed"
     fi
 else

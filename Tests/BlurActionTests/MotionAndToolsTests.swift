@@ -30,6 +30,13 @@ final class MotionAndToolsTests {
         #expect(second[0].effect.keyframes.map(\.time) == [1, 3, 5])
         #expect(RegionEditing.displayed(second[0], at: 4).boundingRect.minX == 70)
 
+        // Frame-by-frame stepping keeps every frame's position (k/60 steps are not exactly 1/60 apart).
+        for fps in [60.0, 120.0, 240.0] {
+            var frames: [RegionKeyframe] = []
+            for k in 0..<Int(fps * 5) { frames = MotionTrack.inserting(RegionKeyframe(time: Double(k) / fps, rect: .zero), into: frames) }
+            #expect(frames.count == Int(fps * 5), "\(fps) fps")
+        }
+
         let shifted = RegionEditing.updating([at(80)], in: second, time: 4, recording: false)
         #expect(shifted[0].effect.keyframes.map(\.rect.minX) == [20, 60, 100])
         #expect(shifted[0].shape.boundingRect.minX == 20)
@@ -210,6 +217,16 @@ final class MotionAndToolsTests {
         fill.selectItem(withTitle: "불투명 채우기")
         _ = fill.sendAction(fill.action, to: fill.target)
         #expect(canvas.annotationsBinding?().first?.fillOpacity == 1)
+
+        // Dragging in the color panel sends many changes; they are one undo step.
+        let well = try #require(session.descendants.compactMap { $0 as? NSColorWell }.first { !$0.isHiddenOrHasHiddenAncestor })
+        for value in stride(from: 0.1, through: 0.9, by: 0.1) {
+            well.color = NSColor(srgbRed: value, green: value, blue: 0, alpha: 1)
+            _ = well.sendAction(well.action, to: well.target)
+        }
+        #expect((canvas.annotationsBinding?().first?.green ?? 0) > 0.85)
+        session.controller.perform(NSSelectorFromString("undoTapped"))
+        #expect(canvas.annotationsBinding?().first?.fillOpacity == 1 && (canvas.annotationsBinding?().first?.green ?? 1) < 0.05)
 
         session.tool(0)
         let cover = try #require(session.descendants.compactMap { $0 as? NSSegmentedControl }.first { $0.label(forSegment: 1) == "모자이크" })

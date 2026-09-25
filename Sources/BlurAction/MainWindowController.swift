@@ -360,7 +360,15 @@ final class MainWindowController: NSWindowController {
         return time.isFinite ? min(doc.duration, max(0, time)) : nil
     }
 
-    private func checkpoint() {
+    /// Continuous controls outside a mouse gesture (color panel drags) coalesce per item and key.
+    private var coalescedEdit: (key: String, at: Date)?
+
+    private func checkpoint(coalescing key: String? = nil) {
+        if let key, let last = coalescedEdit, last.key == key, Date().timeIntervalSince(last.at) < 1 {
+            coalescedEdit = (key, Date())
+            return
+        }
+        coalescedEdit = key.map { ($0, Date()) }
         undoStack.append(EditorSnapshot(pairs: pairs, annotations: annotations))
         if undoStack.count > 50 { undoStack.removeFirst() }
         redoStack.removeAll()
@@ -380,6 +388,7 @@ final class MainWindowController: NSWindowController {
         gestureAnnotations = nil
         gestureStartTime = nil
         if !RegionEditing.equal(before, pairs) || beforeAnnotations != annotations {
+            coalescedEdit = nil
             undoStack.append(EditorSnapshot(pairs: before, annotations: beforeAnnotations))
             if undoStack.count > 50 { undoStack.removeFirst() }
             redoStack.removeAll()
@@ -576,7 +585,7 @@ final class MainWindowController: NSWindowController {
         featherSlider.doubleValue = 12
         featherSlider.target = self
         featherSlider.action = #selector(featherChanged(_:))
-        for slider in [blurSlider, featherSlider] {
+        for slider in [blurSlider, featherSlider, annotationWidthSlider] {
             slider.editingBegan = { [weak self] in self?.beginGesture() }
             slider.editingEnded = { [weak self] in self?.endGesture() }
         }
@@ -1120,11 +1129,13 @@ final class MainWindowController: NSWindowController {
         guard !isExporting else { return }
         endGesture()
         guard let prev = undoStack.popLast() else { BLog("[undo] stack empty"); return }
+        coalescedEdit = nil
         redoStack.append(EditorSnapshot(pairs: pairs, annotations: annotations))
         BLog("[undo] restoring \(prev.pairs.count) regions from stack depth=\(undoStack.count)")
         self.pairs = prev.pairs
         self.annotations = prev.annotations
         if let id = selectedDrawingID, !annotations.contains(where: { $0.id == id }) { selectedDrawingID = nil }
+        if selectedDrawingID == nil { canvas.clearAnnotationSelection() }
         // 캔버스와 라이브 블러에 새 상태 전달
         self.canvas.setRegionsFromExternal(prev.pairs.map(\.shape))
         self.canvas.refreshOverlay()
@@ -1137,11 +1148,13 @@ final class MainWindowController: NSWindowController {
         guard !isExporting else { return }
         endGesture()
         guard let next = redoStack.popLast() else { BLog("[redo] stack empty"); return }
+        coalescedEdit = nil
         undoStack.append(EditorSnapshot(pairs: pairs, annotations: annotations))
         BLog("[redo] restoring \(next.pairs.count) regions from stack depth=\(redoStack.count)")
         self.pairs = next.pairs
         self.annotations = next.annotations
         if let id = selectedDrawingID, !annotations.contains(where: { $0.id == id }) { selectedDrawingID = nil }
+        if selectedDrawingID == nil { canvas.clearAnnotationSelection() }
         self.canvas.setRegionsFromExternal(next.pairs.map(\.shape))
         self.canvas.refreshOverlay()
         self.refreshRegionList()
@@ -1213,7 +1226,8 @@ final class MainWindowController: NSWindowController {
         drawing.lineWidth = CGFloat(annotationWidthSlider.doubleValue).rounded()
         drawing.fillOpacity = selectedFillOpacity
         guard drawing != annotations[index] else { return }
-        if gestureSnapshot == nil { checkpoint() }
+        // Only the color well streams continuous changes; popups and the eyedropper are single edits.
+        if gestureSnapshot == nil { checkpoint(coalescing: sender is NSColorWell ? "drawing-color-\(id)" : nil) }
         annotations[index] = drawing
         refreshAfterEdit()
     }
@@ -1234,7 +1248,7 @@ final class MainWindowController: NSWindowController {
 
     @objc private func coverColorChanged(_ sender: Any?) {
         let color = RGBAColor(coverColorWell.color)
-        updateSelectedEffect { $0.color = color }
+        updateSelectedEffect(coalescing: sender is NSColorWell ? "cover-color" : nil) { $0.color = color }
     }
 
     private func applyDefaultCover(to effect: inout RegionEffect) {
@@ -1458,14 +1472,14 @@ final class MainWindowController: NSWindowController {
 
     @objc private func imageFormatChanged(_ sender: NSPopUpButton) { refreshQualityInfo() }
 
-    private func updateSelectedEffect(_ transform: (inout RegionEffect) -> Void) {
+    private func updateSelectedEffect(coalescing key: String? = nil, _ transform: (inout RegionEffect) -> Void) {
         guard let sel = selectedID,
               let idx = pairs.firstIndex(where: { $0.shape.id == sel }) else { return }
         guard !isExporting else { return }
         var eff = pairs[idx].effect
         transform(&eff)
         guard eff != pairs[idx].effect else { return }
-        if gestureSnapshot == nil { checkpoint() }
+        if gestureSnapshot == nil { checkpoint(coalescing: key.map { "\($0)-\(sel)" }) }
         pairs[idx].effect = eff
         refreshRegionList()
         canvas.refreshOverlay()
