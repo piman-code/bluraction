@@ -20,7 +20,7 @@ enum RegionEditing {
     static func updating(_ shapes: [RegionShape], in pairs: [Pair], time: Double?, recording: Bool,
                          anchorTime: Double? = nil, anchorPairs: [Pair]? = nil,
                          creationTime: Double? = nil, videoDuration: Double? = nil) -> [Pair] {
-        let byID = Dictionary(uniqueKeysWithValues: pairs.map { ($0.shape.id, $0) })
+        let byID = Dictionary(pairs.map { ($0.shape.id, $0) }, uniquingKeysWith: { first, _ in first })
         return shapes.map { shape in
             guard let old = byID[shape.id] else {
                 return (shape, .created(at: creationTime ?? time, videoDuration: videoDuration))

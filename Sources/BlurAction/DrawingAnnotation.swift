@@ -5,8 +5,15 @@ import CoreText
 /// Persistent stroke/shape annotation in the same bottom-left canvas space as blur regions.
 /// `points` are the base geometry; on video, `keyframes` move its bounding box over time.
 struct DrawingAnnotation: Equatable, Identifiable, Codable {
-    /// `eraser` is a brush stroke that clears the drawings listed before it (from its time on).
-    enum Kind: String, Equatable, Codable { case rectangle, ellipse, line, freehand, arrow, text, eraser }
+    enum Kind: String, Equatable, Codable { case rectangle, ellipse, line, freehand, arrow, text }
+
+    /// Part of this drawing rubbed out by the brush eraser, in the drawing's own base geometry,
+    /// so the hole moves, scales and reorders with the drawing. `from` = video time it starts.
+    struct Erasure: Equatable, Codable {
+        var points: [CGPoint]
+        var width: CGFloat
+        var from: Double?
+    }
 
     var id: UUID
     var kind: Kind
@@ -25,6 +32,7 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
     var text: String = ""
     /// Items sharing a group move together.
     var groupID: UUID?
+    var erasures: [Erasure] = []
 
     init(id: UUID = UUID(), kind: Kind, points: [CGPoint], color: NSColor = .systemYellow, lineWidth: CGFloat = 4,
          fillOpacity: CGFloat = 0) {
@@ -40,7 +48,6 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
 
     var color: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha) }
     var isFilled: Bool { [.rectangle, .ellipse, .freehand].contains(kind) && fillOpacity > 0 }
-    var isEraser: Bool { kind == .eraser }
 
     mutating func setColor(_ color: NSColor) {
         guard let c = color.usingColorSpace(.sRGB) else { return }
@@ -59,10 +66,9 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         case .line, .arrow:
             guard points.count >= 2 else { return path }
             path.move(to: first); path.addLine(to: points[1])
-        case .freehand, .eraser:
+        case .freehand:
             path.move(to: first)
             for point in points.dropFirst() { path.addLine(to: point) }
-            if points.count == 1 { path.addLine(to: first) } // a single dab still erases
         case .text:
             path.addRect(bounds)
         }
@@ -101,19 +107,45 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
 
     private static func font(size: CGFloat) -> NSFont { .systemFont(ofSize: size, weight: .semibold) }
 
-    /// Shared drawing for preview, canvas and export (bottom-left coordinates).
-    /// Eraser strokes clear everything drawn before them in the same context or transparency layer.
-    func render(in context: CGContext) {
+    /// Shared drawing for preview, canvas and export (bottom-left coordinates). Erasures active at
+    /// `time` (nil = still image: all) are cleared from this drawing only, inside its own layer.
+    func render(in context: CGContext, time: Double?) {
+        let active = erasures.filter { erasure in
+            guard let from = erasure.from, let time else { return true }
+            return time >= from
+        }
+        if !active.isEmpty { context.beginTransparencyLayer(auxiliaryInfo: nil) }
+        renderShape(in: context)
+        if !active.isEmpty {
+            context.saveGState()
+            context.setBlendMode(.clear)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            for erasure in active {
+                context.addPath(Self.strokePath(erasure.points))
+                context.setLineWidth(erasure.width)
+                context.strokePath()
+            }
+            context.restoreGState()
+            context.endTransparencyLayer()
+        }
+    }
+
+    static func strokePath(_ points: [CGPoint]) -> CGPath {
+        let path = CGMutablePath()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() { path.addLine(to: point) }
+        if points.count == 1 { path.addLine(to: first) } // a single dab still erases
+        return path
+    }
+
+    private func renderShape(in context: CGContext) {
         context.saveGState()
         defer { context.restoreGState() }
         context.setLineCap(.round)
         context.setLineJoin(.round)
         switch kind {
-        case .eraser:
-            context.setBlendMode(.clear)
-            context.addPath(path)
-            context.setLineWidth(lineWidth)
-            context.strokePath()
         case .text:
             renderText(in: context)
         default:
@@ -132,6 +164,14 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
                 context.fillPath()
             }
         }
+    }
+
+    /// Uniform scale for widths when a box maps to another (geometric mean of the non-zero axes),
+    /// so a round trip through any aspect ratio returns the original width exactly.
+    static func widthScale(sx: CGFloat, sy: CGFloat) -> CGFloat {
+        let factors = [sx, sy].filter { $0.isFinite && $0 > 0 }
+        guard !factors.isEmpty else { return 1 }
+        return factors.count == 2 ? (factors[0] * factors[1]).squareRoot() : factors[0]
     }
 
     /// Text is laid out at a size from the box height, then scaled horizontally to fill the box,
@@ -184,6 +224,11 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         let old = bounds
         var result = self
         result.points = points.map { MotionTrack.map($0, from: old, to: rect) }
+        let scale = Self.widthScale(sx: old.width > 0 ? rect.width / old.width : 0,
+                                    sy: old.height > 0 ? rect.height / old.height : 0)
+        result.erasures = erasures.map {
+            Erasure(points: $0.points.map { MotionTrack.map($0, from: old, to: rect) }, width: $0.width * scale, from: $0.from)
+        }
         return result
     }
 
@@ -199,8 +244,12 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         let sx = new.width / old.width, sy = new.height / old.height
         var result = self
         result.points = points.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }
-        // Line and eraser widths are canvas points; scale them with the picture too.
-        result.lineWidth = lineWidth * (sx + sy) / 2
+        // Widths are canvas points; scale them with the picture too (exactly invertible).
+        let widthScale = Self.widthScale(sx: sx, sy: sy)
+        result.lineWidth = lineWidth * widthScale
+        result.erasures = erasures.map {
+            Erasure(points: $0.points.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }, width: $0.width * widthScale, from: $0.from)
+        }
         result.keyframes = keyframes.map {
             RegionKeyframe(time: $0.time, rect: CGRect(x: $0.rect.minX * sx, y: $0.rect.minY * sy,
                                                        width: $0.rect.width * sx, height: $0.rect.height * sy))
@@ -217,11 +266,13 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         result.red = edited.red; result.green = edited.green; result.blue = edited.blue; result.alpha = edited.alpha
         let shown = displayed(at: time)
         guard edited.points != shown.points else { return result }
-        guard let t = time, t.isFinite else { result.points = edited.points; return result }
+        guard let t = time, t.isFinite else { result.points = edited.points; result.erasures = edited.erasures; return result }
         let from = shown.bounds, to = edited.bounds
         guard recording else {
-            guard !keyframes.isEmpty else { result.points = edited.points; return result }
-            result.points = edited.replacingBounds(MotionTrack.shifted(bounds, from: from, to: to)).points
+            guard !keyframes.isEmpty else { result.points = edited.points; result.erasures = edited.erasures; return result }
+            let base = edited.replacingBounds(MotionTrack.shifted(bounds, from: from, to: to))
+            result.points = base.points
+            result.erasures = base.erasures
             result.keyframes = keyframes.map {
                 RegionKeyframe(time: $0.time, rect: MotionTrack.shifted($0.rect, from: from, to: to))
             }
@@ -232,6 +283,7 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
         guard let frames = MotionTrack.recording(keyframes: keyframes, from: from, to: to, time: t,
                                                  start: start, anchor: anchorRect) else {
             result.points = edited.points // First edit at the start time just repositions the drawing.
+            result.erasures = edited.erasures
             return result
         }
         result.keyframes = frames

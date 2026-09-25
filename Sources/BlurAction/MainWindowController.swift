@@ -295,6 +295,7 @@ final class MainWindowController: NSWindowController {
             guard let self else { return (true, 24) }
             return (self.eraserIsBrush, CGFloat(self.eraserSizeSlider.doubleValue.rounded()))
         }
+        canvas.eraserStroke = { [weak self] points, width in self?.applyEraserStroke(points, width: width) }
         canvas.textPlacementHandler = { [weak self] point in self?.promptText(at: point) }
         canvas.textEditHandler = { [weak self] id in self?.editText(id) }
         canvas.multiSelectToggle = { [weak self] id in self?.toggleMultiSelection(id) }
@@ -1415,15 +1416,15 @@ final class MainWindowController: NSWindowController {
     private func addAnnotation(_ created: DrawingAnnotation) {
         guard !isExporting else { return }
         var drawing = created
-        if doc.hasVideo, !(drawing.isEraser && !eraseFromNow) {
-            // Like regions: a new drawing (or eraser stroke) applies from the time it was started to the end.
+        if doc.hasVideo {
+            // Like regions: a new drawing shows from the time it was started to the end.
             let start = canvas.creationStartTime ?? playheadTime ?? 0
             drawing.timeRange = min(doc.duration, max(0, start))...doc.duration
         }
         if gestureSnapshot == nil { checkpoint() }
         annotations.append(drawing)
         // Select on the canvas too (text is placed from a prompt, not a canvas drag).
-        if !drawing.isEraser { canvas.selectAnnotation(id: drawing.id) }
+        canvas.selectAnnotation(id: drawing.id)
         refreshAfterEdit()
     }
 
@@ -1553,7 +1554,7 @@ final class MainWindowController: NSWindowController {
         eraserSizeSlider.isEnabled = eraserIsBrush && !isExporting
         eraseFromNowCheckbox.isHidden = !doc.hasVideo
         eraserHint.stringValue = eraserIsBrush
-            ? "그림 위를 문지르면 그 부분만 지웁니다(블러 영역은 항목 지우개로). 지운 흔적도 시간을 따라 남습니다. ⌘Z로 되돌립니다."
+            ? "그림 위를 문지르면 그 부분만 지웁니다. 지운 자리는 그림을 옮기거나 순서를 바꿔도 함께 움직이고, 영상에서는 지운 시점부터 적용됩니다. 블러 영역은 항목 지우개로 지웁니다."
             : "영역이나 그림을 클릭하거나 문질러 통째로 지웁니다. 영상에서는 켜 두면 지금 시점부터 사라지고 그 전 모습은 남습니다."
     }
 
@@ -1584,6 +1585,46 @@ final class MainWindowController: NSWindowController {
         if let id = selectedID, regions.contains(id) { selectedID = nil }
         if let id = selectedDrawingID, drawings.contains(id) { selectedDrawingID = nil }
         canvas.setRegionsFromExternal(pairs.map(\.shape))
+        refreshAfterEdit()
+    }
+
+    /// Brush eraser: rubs out the part of each drawing shown under the stroke. The erasure is stored
+    /// in the drawing's own base geometry, so it follows moves, motion, groups and reordering.
+    /// Internal for tests.
+    func applyEraserStroke(_ points: [CGPoint], width: CGFloat) {
+        guard !isExporting, !points.isEmpty, width.isFinite, width > 0 else { return }
+        let time = editTime
+        let from: Double? = doc.hasVideo && eraseFromNow ? time : nil
+        let area = DrawingAnnotation.strokePath(points)
+            .copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 1).boundingBoxOfPath
+        var updated = annotations
+        var touched = 0
+        for index in updated.indices where updated[index].isVisible(at: time) {
+            let shown = updated[index].displayed(at: time)
+            let reach = shown.lineWidth / 2 + 2
+            guard shown.bounds.insetBy(dx: -reach, dy: -reach).intersects(area) else { continue }
+            let base = updated[index].bounds
+            let scale = DrawingAnnotation.widthScale(sx: shown.bounds.width > 0 ? base.width / shown.bounds.width : 0,
+                                                     sy: shown.bounds.height > 0 ? base.height / shown.bounds.height : 0)
+            updated[index].erasures.append(DrawingAnnotation.Erasure(
+                points: points.map { MotionTrack.map($0, from: shown.bounds, to: base) }, width: width * scale, from: from))
+            touched += 1
+        }
+        guard touched > 0 else {
+            workflowHint.stringValue = "지울 그림이 없습니다. 블러 영역은 항목 지우개로 지웁니다."
+            return
+        }
+        if gestureSnapshot == nil { checkpoint() }
+        annotations = updated
+        refreshAfterEdit()
+    }
+
+    @objc private func restoreErasedFromMenu(_ sender: NSMenuItem) {
+        guard !isExporting, let id = sender.representedObject as? UUID,
+              let index = annotations.firstIndex(where: { $0.id == id }), !annotations[index].erasures.isEmpty else { return }
+        endGesture()
+        checkpoint()
+        annotations[index].erasures.removeAll()
         refreshAfterEdit()
     }
 
@@ -1760,7 +1801,7 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Later items draw on top: blur regions among regions, drawings among drawings
-    /// (drawings always sit above regions; an eraser stroke only clears drawings under it).
+    /// (drawings always sit above regions).
     private func restack(_ move: StackMove) {
         guard !isExporting else { return }
         endGesture()
@@ -1781,14 +1822,15 @@ final class MainWindowController: NSWindowController {
     // MARK: - Project save / open
 
     /// The session as a project, geometry normalized to a 1×1 canvas. Internal for tests.
-    func projectData() throws -> Data {
+    func projectData(projectURL: URL? = nil) throws -> Data {
         guard let media = doc.url, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
             throw ProjectFile.ProjectError.invalidContent
         }
         let unit = CGSize(width: 1, height: 1)
         let regions = RegionEditing.scaled(pairs, from: canvas.bounds.size, to: unit).map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }
         let drawings = annotations.map { $0.scaled(from: canvas.bounds.size, to: unit) }
-        return try ProjectFile(mediaPath: media.path, regions: regions, drawings: drawings).encoded()
+        return try ProjectFile(mediaPath: ProjectFile.mediaReference(for: media, projectURL: projectURL),
+                               regions: regions, drawings: drawings).encoded()
     }
 
     @objc private func saveProjectTapped() {
@@ -1804,7 +1846,7 @@ final class MainWindowController: NSWindowController {
             return
         }
         do {
-            try projectData().write(to: url, options: .atomic)
+            try projectData(projectURL: url).write(to: url, options: .atomic)
             workflowHint.stringValue = "프로젝트를 저장했습니다: \(url.lastPathComponent)"
         } catch { showError(error.localizedDescription) }
     }
@@ -1821,7 +1863,7 @@ final class MainWindowController: NSWindowController {
             guard values.isRegularFile == true else { throw ProjectFile.ProjectError.invalidContent }
             guard (values.fileSize ?? 0) <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
             let project = try ProjectFile.decode(Data(contentsOf: url))
-            var media = URL(fileURLWithPath: project.mediaPath)
+            var media = project.mediaURL(relativeTo: url)
             if !VideoCanvasView.isSupportedDropFile(media) {
                 // The media moved or was renamed: let the person point to it.
                 let locate = NSOpenPanel()
@@ -1842,14 +1884,17 @@ final class MainWindowController: NSWindowController {
 
     private func applyProject(_ project: ProjectFile) {
         let size = canvas.bounds.size
-        guard size.width > 0, size.height > 0 else { return }
+        guard size.width > 0, size.height > 0 else {
+            showError("화면을 준비하지 못해 프로젝트 내용을 적용하지 못했습니다. 창을 키운 뒤 다시 열어 주세요.")
+            return
+        }
         let unit = CGSize(width: 1, height: 1)
         pairs = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size)
         annotations = project.drawings.map { $0.scaled(from: unit, to: size) }
         undoStack.removeAll()
         redoStack.removeAll()
         canvas.setRegionsFromExternal(pairs.map(\.shape))
-        workflowHint.stringValue = "프로젝트를 열었습니다: 영역 \(pairs.count)개 · 그림 \(annotations.filter { !$0.isEraser }.count)개"
+        workflowHint.stringValue = "프로젝트를 열었습니다: 영역 \(pairs.count)개 · 그림 \(annotations.count)개"
         refreshAfterEdit()
     }
 
@@ -2293,6 +2338,11 @@ final class MainWindowController: NSWindowController {
             let item = NSMenuItem(title: title, action: #selector(restackFromMenu(_:)), keyEquivalent: "")
             item.target = self; item.representedObject = id; item.tag = index
             menu.addItem(item)
+        }
+        if annotations.first(where: { $0.id == id })?.erasures.isEmpty == false {
+            let restore = NSMenuItem(title: "지운 부분 되살리기", action: #selector(restoreErasedFromMenu(_:)), keyEquivalent: "")
+            restore.target = self; restore.representedObject = id
+            menu.addItem(restore)
         }
         if groupIDOfItem(id) != nil {
             let ungroup = NSMenuItem(title: "그룹 풀기", action: #selector(ungroupFromMenu(_:)), keyEquivalent: "")

@@ -16,6 +16,8 @@ struct ProjectFile: Codable, Equatable {
     static var contentType: UTType { UTType(filenameExtension: fileExtension) ?? .json }
 
     var version = currentVersion
+    /// The media file name when it sits next to the project (keeps usernames out of shared
+    /// projects), otherwise an absolute path.
     var mediaPath: String
     var regions: [Region]
     var drawings: [DrawingAnnotation]
@@ -29,6 +31,20 @@ struct ProjectFile: Codable, Equatable {
             case .invalidContent: return "프로젝트 파일 내용이 올바르지 않습니다."
             }
         }
+    }
+
+    static func mediaReference(for media: URL, projectURL: URL?) -> String {
+        guard let projectURL,
+              media.deletingLastPathComponent().standardizedFileURL == projectURL.deletingLastPathComponent().standardizedFileURL
+        else { return media.path }
+        return media.lastPathComponent
+    }
+
+    /// Resolves `mediaPath` against the project's folder when it is a bare file name.
+    func mediaURL(relativeTo projectURL: URL?) -> URL {
+        if mediaPath.hasPrefix("/") || projectURL == nil { return URL(fileURLWithPath: mediaPath) }
+        let name = (mediaPath as NSString).lastPathComponent // never climb out of the folder
+        return projectURL!.deletingLastPathComponent().appendingPathComponent(name)
     }
 
     func encoded() throws -> Data {
@@ -58,17 +74,30 @@ struct ProjectFile: Codable, Equatable {
         }
         guard !mediaPath.isEmpty, mediaPath.count <= 4096, !mediaPath.contains("\0"),
               regions.count <= 1_000, drawings.count <= 5_000 else { return false }
+        // Every item needs its own ID: editing code indexes items by ID.
+        let ids = regions.map(\.shape.id) + drawings.map(\.id)
+        guard Set(ids).count == ids.count else { return false }
         for region in regions {
             let effect = region.effect
             guard ok(region.shape.boundingRect), ok(effect.timeRange), ok(effect.keyframes), effect.color.isValid,
                   effect.blurRadius.isFinite, (0...500).contains(effect.blurRadius),
                   effect.featherRadius.isFinite, (0...500).contains(effect.featherRadius) else { return false }
-            if case .polygon(_, let points) = region.shape, points.count > 100_000 || !points.allSatisfy(ok) { return false }
+            switch region.shape {
+            case .rectangle(_, _, let size), .ellipse(_, _, let size):
+                guard size.width >= 0, size.height >= 0 else { return false }
+            case .polygon(_, let points):
+                guard points.count <= 100_000, points.allSatisfy(ok) else { return false }
+            }
         }
         for drawing in drawings {
             guard drawing.points.count <= 100_000, drawing.points.allSatisfy(ok), ok(drawing.timeRange), ok(drawing.keyframes),
                   RGBAColor(red: drawing.red, green: drawing.green, blue: drawing.blue, alpha: drawing.alpha).isValid,
-                  drawing.lineWidth.isFinite, drawing.lineWidth > 0, drawing.lineWidth <= 1,
+                  drawing.lineWidth.isFinite, drawing.lineWidth > 0, drawing.lineWidth <= 16,
+                  drawing.erasures.count <= 10_000,
+                  drawing.erasures.allSatisfy({ e in
+                      e.points.count <= 100_000 && e.points.allSatisfy(ok) && e.width.isFinite && e.width > 0 && e.width <= 16
+                          && (e.from.map { $0.isFinite && $0 >= 0 } ?? true)
+                  }),
                   drawing.fillOpacity.isFinite, (0...1).contains(drawing.fillOpacity),
                   drawing.text.count <= 1_000 else { return false }
         }

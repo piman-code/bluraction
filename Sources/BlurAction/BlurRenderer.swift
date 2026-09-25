@@ -103,7 +103,7 @@ enum BlurRenderer {
                   annotation.fillOpacity.isFinite, (0...1).contains(annotation.fillOpacity),
                   [annotation.red, annotation.green, annotation.blue, annotation.alpha].allSatisfy({ $0.isFinite && (0...1).contains($0) }),
                   annotation.points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { throw RenderError.invalidGeometry }
-            annotation.render(in: context)
+            annotation.render(in: context, time: time)
         }
         guard let overlay = context.makeImage() else { throw RenderError.maskAllocation }
         let overlayImage = CIImage(cgImage: overlay).transformed(by: .init(translationX: extent.minX, y: extent.minY)).cropped(to: extent)

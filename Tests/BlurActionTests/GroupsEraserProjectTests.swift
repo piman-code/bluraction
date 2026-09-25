@@ -10,27 +10,38 @@ final class GroupsEraserProjectTests {
     // MARK: Rendering
 
     @Test
-    func testBrushEraserIsTimedAndClearsOnlyDrawingsBelow() throws {
+    func testErasureIsTimedAndFollowsItsDrawing() throws {
         let helper = RenderingCoreTests()
         let source = helper.checker()
         let size = helper.size
-        let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
-        let below = DrawingAnnotation(kind: .rectangle, points: [CGPoint(x: 10, y: 10), CGPoint(x: 110, y: 80)],
-                                      color: red, lineWidth: 2, fillOpacity: 1)
-        var eraser = DrawingAnnotation(kind: .eraser, points: [CGPoint(x: 0, y: 45), CGPoint(x: 128, y: 45)], lineWidth: 12)
-        eraser.timeRange = 2...5
-        let above = DrawingAnnotation(kind: .ellipse, points: [CGPoint(x: 70, y: 35), CGPoint(x: 90, y: 55)],
+        var erased = DrawingAnnotation(kind: .rectangle, points: [CGPoint(x: 10, y: 10), CGPoint(x: 60, y: 80)],
+                                       color: NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1), lineWidth: 2, fillOpacity: 1)
+        erased.erasures = [.init(points: [CGPoint(x: 0, y: 45), CGPoint(x: 70, y: 45)], width: 12, from: 2)]
+        let other = DrawingAnnotation(kind: .ellipse, points: [CGPoint(x: 20, y: 35), CGPoint(x: 40, y: 55)],
                                       color: NSColor(srgbRed: 0, green: 0, blue: 1, alpha: 1), lineWidth: 2, fillOpacity: 1)
-        let items = [below, eraser, above]
         func pixel(_ image: CIImage, _ x: CGFloat, _ y: CGFloat) -> [UInt8] {
             helper.pixels(image.cropped(to: CGRect(x: x, y: y, width: 1, height: 1)))
         }
-        let before = try BlurRenderer.render(image: source, pairs: [], canvasSize: size, time: 1, annotations: items)
-        let during = try BlurRenderer.render(image: source, pairs: [], canvasSize: size, time: 3, annotations: items)
-        #expect(pixel(before, 30, 45)[0] >= 253, "Before the eraser's time the drawing is whole")
-        #expect(pixel(during, 30, 45) == pixel(source, 30, 45), "The stroke reveals the video under the drawing")
-        #expect(pixel(during, 30, 70)[0] >= 253, "Only the brushed band is erased")
-        #expect(pixel(during, 80, 45)[2] >= 253, "A drawing added after the eraser stays")
+        func render(_ items: [DrawingAnnotation], _ time: Double) throws -> CIImage {
+            try BlurRenderer.render(image: source, pairs: [], canvasSize: size, time: time, annotations: items)
+        }
+        // The other drawing is under the erased one, then on top: the erasure only affects its owner.
+        let before = try render([other, erased], 1), during = try render([other, erased], 3)
+        #expect(pixel(before, 50, 45)[0] >= 253, "Before the erase time the drawing is whole")
+        #expect(pixel(during, 50, 45) == pixel(source, 50, 45), "The rubbed band shows the video")
+        #expect(pixel(during, 50, 70)[0] >= 253, "Only the rubbed band is erased")
+        #expect(pixel(during, 30, 45)[2] >= 253, "A drawing underneath is not erased")
+        let reordered = try render([erased, other], 3)
+        #expect(pixel(reordered, 30, 45)[2] >= 253 && pixel(reordered, 50, 45) == pixel(source, 50, 45))
+
+        // Moving the drawing (here by recorded motion) carries the hole with it.
+        var moved = erased
+        moved.points = erased.points.map { CGPoint(x: $0.x + 50, y: $0.y) }
+        let tracked = erased.applyingEdit(moved.replacingBounds(moved.bounds), time: 4, recording: true)
+        let late = try render([tracked], 5)
+        #expect(pixel(late, 100, 45) == pixel(source, 100, 45), "The erased band moved with the drawing")
+        #expect(pixel(late, 100, 70)[0] >= 253)
+        #expect(tracked.displayed(at: 5).erasures.first?.points.first == CGPoint(x: 50, y: 45))
     }
 
     @Test
@@ -74,11 +85,18 @@ final class GroupsEraserProjectTests {
         let ended = try #require(canvas.annotationsBinding?().first { $0.id == drawing.id })
         #expect(ended.isVisible(at: 1) && !ended.isVisible(at: 2))
 
-        // Partial (brush) erasing adds a timed eraser stroke from now on.
+        // Partial (brush) erasing is stored on the drawing, from now on.
+        session.tool(1)
+        try session.drag(from: CGPoint(x: 60, y: 60), to: CGPoint(x: 100, y: 90))
+        let target = try #require(canvas.annotationsBinding?().last)
+        session.tool(2)
         session.eraserMode(0)
-        try session.drag(from: CGPoint(x: 5, y: 20), to: CGPoint(x: 50, y: 20))
-        let stroke = try #require(canvas.annotationsBinding?().last)
-        #expect(stroke.isEraser && abs(stroke.timeRange.lowerBound - 2) < 0.01)
+        try session.drag(from: CGPoint(x: 50, y: 75), to: CGPoint(x: 110, y: 75))
+        let rubbed = try #require(canvas.annotationsBinding?().first { $0.id == target.id })
+        #expect(rubbed.erasures.count == 1 && abs((rubbed.erasures.first?.from ?? 0) - 2) < 0.01)
+        session.controller.perform(NSSelectorFromString("undoTapped"))
+        #expect(canvas.annotationsBinding?().first { $0.id == target.id }?.erasures.isEmpty == true, "One rub is one undo")
+        session.controller.perform(NSSelectorFromString("undoTapped")) // the new drawing
 
         // Turning "from now" off removes items entirely.
         let fromNow = try #require(session.descendants.compactMap { $0 as? NSButton }.first { $0.title == "영상: 지금 시점부터 지우기" })
@@ -217,6 +235,14 @@ final class GroupsEraserProjectTests {
         let sx = container.canvas.bounds.width / canvas.bounds.width
         #expect(abs(restored.boundingRect.width - region.boundingRect.width * sx) < 0.5, "Scaled to the new window")
         #expect(container.canvas.annotationsBinding?().count == 1)
+        // Widths survive a round trip through a non-square canvas exactly (no growth per save).
+        let savedWidth = try #require(canvas.annotationsBinding?().first?.lineWidth)
+        let reopenedWidth = try #require(container.canvas.annotationsBinding?().first?.lineWidth)
+        let widthScale = DrawingAnnotation.widthScale(sx: container.canvas.bounds.width / canvas.bounds.width,
+                                                      sy: container.canvas.bounds.height / canvas.bounds.height)
+        #expect(abs(reopenedWidth - savedWidth * widthScale) < 0.0001)
+        let twice = try ProjectFile.decode(try reopened.projectData())
+        #expect(abs(twice.drawings[0].lineWidth - project.drawings[0].lineWidth) < 1e-9)
 
         var json = try #require(String(data: data, encoding: .utf8))
         json = json.replacingOccurrences(of: "\"version\" : 1", with: "\"version\" : 99")
@@ -225,6 +251,23 @@ final class GroupsEraserProjectTests {
         wild.drawings[0].points[0] = CGPoint(x: 1e9, y: 0)
         #expect(throws: ProjectFile.ProjectError.self) { try ProjectFile.decode(try wild.encoded()) }
         #expect(throws: ProjectFile.ProjectError.self) { try ProjectFile.decode(Data("{}".utf8)) }
+        var duplicate = project
+        duplicate.regions.append(project.regions[0])
+        #expect(throws: ProjectFile.ProjectError.self) { try ProjectFile.decode(try duplicate.encoded()) }
+        var negative = project
+        negative.regions[0].shape = .rectangle(id: UUID(), origin: .zero, size: CGSize(width: -1, height: 0.2))
+        #expect(throws: ProjectFile.ProjectError.self) { try ProjectFile.decode(try negative.encoded()) }
+
+        // Next to the media, a project stores only the file name (no user folders).
+        let media = URL(fileURLWithPath: project.mediaPath)
+        let beside = media.deletingLastPathComponent().appendingPathComponent("edit.bluraction")
+        let local = try ProjectFile.decode(try session.controller.projectData(projectURL: beside))
+        #expect(local.mediaPath == media.lastPathComponent)
+        #expect(local.mediaURL(relativeTo: beside).standardizedFileURL == media.standardizedFileURL)
+        var sneaky = local
+        sneaky.mediaPath = "../../secret.mp4"
+        #expect(sneaky.mediaURL(relativeTo: beside).deletingLastPathComponent().standardizedFileURL
+                == beside.deletingLastPathComponent().standardizedFileURL, "Relative names never leave the folder")
     }
 }
 
