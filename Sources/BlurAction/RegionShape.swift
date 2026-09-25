@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// 영역 단위: 사각형 또는 자유형 폴리곤. 캔버스 BOTTOM-LEFT 좌표 기준.
-enum RegionShape: Equatable, Identifiable {
+enum RegionShape: Equatable, Identifiable, Codable {
     case rectangle(id: UUID, origin: CGPoint, size: CGSize)
     case ellipse(id: UUID, origin: CGPoint, size: CGSize) // 원형/타원. size.w == size.h 이면 원
     case polygon(id: UUID, points: [CGPoint])
@@ -112,7 +112,7 @@ enum RegionShape: Equatable, Identifiable {
 }
 
 /// 영역 단위 효과.
-struct RegionEffect: Equatable {
+struct RegionEffect: Equatable, Codable {
     /// 0 = 비활성 (전체 영상 동안 블러 안 함). 0 초과 = 강도.
     var blurRadius: CGFloat = 25.0
     /// 테두리 feather (마스크 가장자리 부드럽게), 0~50 px.
@@ -130,7 +130,10 @@ struct RegionEffect: Equatable {
     /// Fill for `.solid`, sRGB components.
     var color: RGBAColor = .black
 
-    enum CoverStyle: Equatable, CaseIterable { case blur, mosaic, solid }
+    /// Items sharing a group move together.
+    var groupID: UUID?
+
+    enum CoverStyle: String, Equatable, CaseIterable, Codable { case blur, mosaic, solid }
 
     static func alwaysOn() -> RegionEffect {
         RegionEffect(blurRadius: 25, featherRadius: 12, timeRange: 0.0...0.0, enabled: true)
@@ -162,7 +165,7 @@ struct RegionEffect: Equatable {
 }
 
 /// 키프레임: 특정 시간에 영역의 사각형 위치 (캔버스 좌표).
-struct RegionKeyframe: Equatable {
+struct RegionKeyframe: Equatable, Codable {
     var time: Double  // seconds
     var rect: NSRect  // canvas coords
 }
@@ -230,7 +233,7 @@ extension RegionEffect {
 }
 
 /// Plain sRGB color value that stays Equatable and renderer-friendly.
-struct RGBAColor: Equatable {
+struct RGBAColor: Equatable, Codable {
     var red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat
     static let black = RGBAColor(red: 0, green: 0, blue: 0, alpha: 1)
 

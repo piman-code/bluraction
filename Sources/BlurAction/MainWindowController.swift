@@ -47,6 +47,17 @@ final class MainWindowController: NSWindowController {
     private let coverPickButton = NSButton(title: "스포이드", target: nil, action: nil)
     private let coverColorRow = NSStackView()
     private let eraserTools = NSStackView()
+    private let eraserModeSegment = NSSegmentedControl(labels: ["부분 지우개", "항목 지우개"], trackingMode: .selectOne, target: nil, action: nil)
+    private let eraserSizeSlider = NSSlider(value: 24, minValue: 4, maxValue: 120, target: nil, action: nil)
+    private let eraserSizeLabel = NSTextField(labelWithString: "크기 24pt")
+    private let eraseFromNowCheckbox = NSButton(checkboxWithTitle: "영상: 지금 시점부터 지우기", target: nil, action: nil)
+    private let eraserHint = NSTextField(wrappingLabelWithString: "")
+    private let arrangeTools = NSStackView()
+    /// Extra items picked with Shift-click for grouping (may mix regions and drawings).
+    private var multiSelection: [UUID] = []
+    private var eraseFromNow = true
+    /// A project waiting for its media to finish loading before its items are applied.
+    private var pendingProject: ProjectFile?
     private let trackMotionCheckbox = NSButton(checkboxWithTitle: "움직임 기록", target: nil, action: nil)
     private let trackMotionHint = NSTextField(wrappingLabelWithString: "켜면 옮긴 시점의 위치가 기록되어 영역·그림이 움직임을 따라갑니다. 재생 중 끌어도, 멈춘 채 프레임을 넘기며 옮겨도 됩니다. 끄면 기록된 경로 전체가 함께 옮겨집니다.")
     private let motionTools = NSStackView()
@@ -272,9 +283,25 @@ final class MainWindowController: NSWindowController {
         }
         canvas.annotationAdded = { [weak self] created in self?.addAnnotation(created) }
         canvas.annotationChanged = { [weak self] edited in self?.editAnnotation(edited) }
-        canvas.itemsErased = { [weak self] regions, drawings in self?.eraseItems(regions: regions, drawings: drawings) }
+        canvas.itemsErased = { [weak self] regions, drawings, fromEraser in
+            guard let self else { return }
+            if fromEraser, self.doc.hasVideo, self.eraseFromNow {
+                self.endItems(regions: regions, drawings: drawings, at: self.editTime ?? 0)
+            } else {
+                self.eraseItems(regions: regions, drawings: drawings)
+            }
+        }
+        canvas.eraserStyleBinding = { [weak self] in
+            guard let self else { return (true, 24) }
+            return (self.eraserIsBrush, CGFloat(self.eraserSizeSlider.doubleValue.rounded()))
+        }
+        canvas.textPlacementHandler = { [weak self] point in self?.promptText(at: point) }
+        canvas.textEditHandler = { [weak self] id in self?.editText(id) }
+        canvas.multiSelectToggle = { [weak self] id in self?.toggleMultiSelection(id) }
+        canvas.selectionDecorationsProvider = { [weak self] in self?.selectionDecorations() ?? ([], nil) }
         canvas.annotationSelectionChange = { [weak self] id in
             guard let self else { return }
+            if let id, !self.multiSelection.contains(id) { self.multiSelection.removeAll() }
             self.selectedDrawingID = id
             if id != nil { self.selectedID = nil }
             if let id, let drawing = self.annotations.first(where: { $0.id == id }) { self.showDrawingStyle(drawing) }
@@ -297,9 +324,17 @@ final class MainWindowController: NSWindowController {
             for index in result.indices where !existing.contains(result[index].shape.id) {
                 self.applyDefaultCover(to: &result[index].effect)
             }
+            // A grouped region moved as a whole carries the rest of its group along.
+            let moves = updated.compactMap { shape -> (move: (group: UUID, dx: CGFloat, dy: CGFloat), source: UUID)? in
+                guard let old = self.pairs.first(where: { $0.shape.id == shape.id }),
+                      let move = self.groupMove(from: RegionEditing.displayed(old, at: self.editTime).boundingRect,
+                                                to: shape.boundingRect, group: old.effect.groupID) else { return nil }
+                return (move, shape.id)
+            }
             if !RegionEditing.equal(self.pairs, result) {
                 if self.gestureSnapshot == nil { self.checkpoint() }
                 self.pairs = result
+                for (move, source) in moves { self.moveGroupMembers(move, except: source) }
             }
             self.refreshRegionList()
             self.refreshSelectedEditor()
@@ -324,6 +359,7 @@ final class MainWindowController: NSWindowController {
         canvas.playPauseHandler = { [weak self] in self?.togglePlay() }
         canvas.deleteSelectedHandler = { [weak self] in self?.deleteSelected() }
         canvas.selectionChange = { [weak self] id in
+            if let id, self?.multiSelection.contains(id) == false { self?.multiSelection.removeAll() }
             if id != nil { self?.selectedDrawingID = nil }
             self?.selectedID = id
             self?.refreshSelectedEditor()
@@ -555,20 +591,61 @@ final class MainWindowController: NSWindowController {
         motionTools.spacing = 4
         for view in [trackMotionCheckbox, trackMotionHint] { motionTools.addArrangedSubview(view) }
         motionTools.isHidden = true
-        let eraserHint = NSTextField(wrappingLabelWithString: "캔버스에서 지울 영역이나 그림을 클릭하거나 문질러 지웁니다. 모든 지우기는 ⌘Z로 되돌릴 수 있습니다.")
         eraserHint.font = .systemFont(ofSize: 11)
         eraserHint.textColor = .secondaryLabelColor
         eraserHint.preferredMaxLayoutWidth = 260
+        eraserModeSegment.selectedSegment = 0
+        eraserModeSegment.target = self
+        eraserModeSegment.action = #selector(eraserStyleChanged(_:))
+        eraserModeSegment.toolTip = "부분: 그림의 문지른 부분만 지움 · 항목: 닿은 영역·그림을 통째로 지움"
+        eraserSizeSlider.target = self
+        eraserSizeSlider.action = #selector(eraserStyleChanged(_:))
+        eraserSizeSlider.isContinuous = true
+        eraserSizeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        eraserSizeLabel.textColor = .secondaryLabelColor
+        eraseFromNowCheckbox.state = .on
+        eraseFromNowCheckbox.target = self
+        eraseFromNowCheckbox.action = #selector(eraserStyleChanged(_:))
+        eraseFromNowCheckbox.toolTip = "켜면 지금 보고 있는 시점부터 지워지고, 그 전의 모습은 그대로 남습니다."
         eraserTools.orientation = .vertical
         eraserTools.alignment = .leading
         eraserTools.spacing = 6
-        eraserTools.addArrangedSubview(eraserHint)
+        let eraserSizeRow = NSStackView(views: [eraserSizeSlider, eraserSizeLabel])
+        eraserSizeRow.spacing = 8
+        eraserSizeSlider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        for view in [eraserModeSegment, eraserSizeRow, eraseFromNowCheckbox, eraserHint] as [NSView] { eraserTools.addArrangedSubview(view) }
         for (title, action) in [("선택 항목 지우기", #selector(deleteSelectedTapped)), ("블러 영역 모두 지우기", #selector(clearRegionsTapped)),
                                 ("그리기 모두 지우기", #selector(clearDrawingsTapped)), ("모두 지우기", #selector(clearAllTapped))] {
             let button = NSButton(title: title, target: self, action: action)
             button.bezelStyle = .rounded
             eraserTools.addArrangedSubview(button)
         }
+        let arrangeTitle = NSTextField(labelWithString: "순서·그룹")
+        arrangeTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        let orderRow = NSStackView()
+        let groupRow = NSStackView()
+        for (row, items) in [(orderRow, [("맨 뒤", #selector(sendToBackTapped), "맨 뒤로 보내기 (⇧⌘[)"), ("뒤로", #selector(sendBackwardTapped), "뒤로 보내기 (⌘[)"),
+                                         ("앞으로", #selector(bringForwardTapped), "앞으로 가져오기 (⌘])"), ("맨 앞", #selector(bringToFrontTapped), "맨 앞으로 가져오기 (⇧⌘])")]),
+                             (groupRow, [("그룹 만들기", #selector(groupTapped), "Shift+클릭으로 여러 항목을 고른 뒤 묶습니다 (⌘G)"),
+                                         ("그룹 풀기", #selector(ungroupTapped), "선택 항목의 그룹을 풉니다 (⇧⌘G)")])] {
+            row.spacing = 4
+            for (title, action, tip) in items {
+                let button = NSButton(title: title, target: self, action: action)
+                button.bezelStyle = .rounded
+                button.controlSize = .small
+                button.toolTip = tip
+                row.addArrangedSubview(button)
+            }
+        }
+        let arrangeHint = NSTextField(wrappingLabelWithString: "Shift+클릭으로 여러 항목(영역·그림)을 고르고 묶으면 하나를 옮길 때 함께 움직입니다. 겹친 것은 앞·뒤 순서로 가립니다.")
+        arrangeHint.font = .systemFont(ofSize: 11)
+        arrangeHint.textColor = .secondaryLabelColor
+        arrangeHint.preferredMaxLayoutWidth = 260
+        arrangeTools.orientation = .vertical
+        arrangeTools.alignment = .leading
+        arrangeTools.spacing = 6
+        for view in [arrangeTitle, orderRow, groupRow, arrangeHint] as [NSView] { arrangeTools.addArrangedSubview(view) }
+        refreshEraserControls()
         toolSegment.toolTip = "블러(B) · 그리기(D) · 지우개(E)"
         toolChanged(toolSegment)
 
@@ -753,7 +830,7 @@ final class MainWindowController: NSWindowController {
         for v in [workflowHint,
                   toolSegment, modeSegment, annotationColorRow, annotationWidthTitle, annotationWidthSlider, annotationFillPopup,
                   annotationHint, eraserTools,
-                  coverTitle, coverSegment, effectTitle, blurRow, featherTitle, featherRow, coverColorRow, regionTitle,
+                  coverTitle, coverSegment, effectTitle, blurRow, featherTitle, featherRow, coverColorRow, arrangeTools, regionTitle,
                   scrollContainer, timeRangeEditor, motionTools, preciseTools,
                   qualityTitle, qualityPopup, qualityInfoLabel, buttonRow, progressIndicator, progressLabel] {
             sidebarStack.addArrangedSubview(v)
@@ -805,6 +882,13 @@ final class MainWindowController: NSWindowController {
         exportItem.target = self
         fileMenu.addItem(exportItem)
         fileMenu.addItem(NSMenuItem.separator())
+        for (title, action, key, mask) in [("프로젝트 저장…", #selector(saveProjectTapped), "s", NSEvent.ModifierFlags.command),
+                                           ("프로젝트 열기…", #selector(openProjectTapped), "O", [.command, .shift])] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = mask
+            item.target = self
+            fileMenu.addItem(item)
+        }
         fileItem.submenu = fileMenu
         main.addItem(fileItem)
         let editItem = NSMenuItem()
@@ -825,6 +909,18 @@ final class MainWindowController: NSWindowController {
         clearItem.keyEquivalentModifierMask = [.command, .option]
         clearItem.target = self
         editMenu.addItem(clearItem)
+        editMenu.addItem(NSMenuItem.separator())
+        for (title, action, key, mask) in [("앞으로 가져오기", #selector(bringForwardTapped), "]", NSEvent.ModifierFlags.command),
+                                           ("뒤로 보내기", #selector(sendBackwardTapped), "[", [.command]),
+                                           ("맨 앞으로 가져오기", #selector(bringToFrontTapped), "]", [.command, .shift]),
+                                           ("맨 뒤로 보내기", #selector(sendToBackTapped), "[", [.command, .shift]),
+                                           ("그룹 만들기", #selector(groupTapped), "g", [.command]),
+                                           ("그룹 풀기", #selector(ungroupTapped), "G", [.command, .shift])] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = mask
+            item.target = self
+            editMenu.addItem(item)
+        }
         editMenu.addItem(NSMenuItem.separator())
         let undoItem = NSMenuItem(title: "실행취소", action: #selector(undoTapped), keyEquivalent: "z")
         undoItem.keyEquivalentModifierMask = [.command]
@@ -1084,7 +1180,7 @@ final class MainWindowController: NSWindowController {
         exportButton.isEnabled = !value && doc.mediaKind != .none && hasEffectiveEffect
         for control in [blurSlider, featherSlider, toolSegment, modeSegment, annotationColorPopup, annotationWidthSlider, qualityPopup, imageFormatPopup,
                         annotationColorWell, annotationPickButton, annotationFillPopup, coverSegment, coverColorWell, coverPickButton,
-                        trackMotionCheckbox] as [NSControl] {
+                        trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox] as [NSControl] {
             control.isEnabled = !value
         }
         mainContainer.playPauseButton.isEnabled = !value && doc.hasVideo
@@ -1165,7 +1261,10 @@ final class MainWindowController: NSWindowController {
     @objc private func modeChanged(_ sender: NSSegmentedControl) {
         if toolSegment.selectedSegment == 1 {
             switch sender.selectedSegment { case 0: canvasMode = .drawRectangle; case 1: canvasMode = .drawEllipse
-            case 2: canvasMode = .drawLine; case 3: canvasMode = .drawFreehand; default: canvasMode = .drawRectangle }
+            case 2: canvasMode = .drawLine; case 3: canvasMode = .drawFreehand; case 4: canvasMode = .drawArrow
+            case 5: canvasMode = .drawText; default: canvasMode = .drawRectangle }
+            annotationWidthTitle.stringValue = canvasMode == .drawText ? "글자 크기" : "선 굵기"
+            annotationFillPopup.isEnabled = [.drawRectangle, .drawEllipse, .drawFreehand].contains(canvasMode)
         } else {
             switch sender.selectedSegment { case 0: canvasMode = .rectangle; case 1: canvasMode = .ellipse
             case 2: canvasMode = .polygonClick; case 3: canvasMode = .polygonFree; default: canvasMode = .rectangle }
@@ -1176,9 +1275,15 @@ final class MainWindowController: NSWindowController {
     @objc private func toolChanged(_ sender: NSSegmentedControl) {
         let drawing = sender.selectedSegment == 1
         let erasing = sender.selectedSegment == 2
-        let labels = drawing ? ["사각형", "타원", "선", "펜"] : ["사각형", "원", "점찍기", "자유"]
-        for (index, label) in labels.enumerated() { modeSegment.setLabel(label, forSegment: index) }
+        let labels = drawing ? ["사각형", "타원", "선", "펜", "화살표", "글자"] : ["사각형", "원", "점찍기", "자유"]
+        modeSegment.segmentCount = labels.count
+        for (index, label) in labels.enumerated() {
+            modeSegment.setLabel(label, forSegment: index)
+            modeSegment.setWidth(0, forSegment: index)
+        }
         modeSegment.selectedSegment = 0
+        annotationWidthTitle.stringValue = "선 굵기"
+        annotationFillPopup.isEnabled = true
         modeSegment.isHidden = erasing
         canvasMode = erasing ? .erase : drawing ? .drawRectangle : .rectangle
         annotationColorRow?.isHidden = !drawing
@@ -1310,15 +1415,15 @@ final class MainWindowController: NSWindowController {
     private func addAnnotation(_ created: DrawingAnnotation) {
         guard !isExporting else { return }
         var drawing = created
-        if doc.hasVideo {
-            // Like regions: a new drawing shows from the time it was started to the end.
+        if doc.hasVideo, !(drawing.isEraser && !eraseFromNow) {
+            // Like regions: a new drawing (or eraser stroke) applies from the time it was started to the end.
             let start = canvas.creationStartTime ?? playheadTime ?? 0
             drawing.timeRange = min(doc.duration, max(0, start))...doc.duration
         }
         if gestureSnapshot == nil { checkpoint() }
         annotations.append(drawing)
-        selectedID = nil
-        selectedDrawingID = drawing.id
+        // Select on the canvas too (text is placed from a prompt, not a canvas drag).
+        if !drawing.isEraser { canvas.selectAnnotation(id: drawing.id) }
         refreshAfterEdit()
     }
 
@@ -1327,10 +1432,14 @@ final class MainWindowController: NSWindowController {
         let anchor = gestureStartTime.flatMap { time in
             gestureAnnotations?.first(where: { $0.id == edited.id }).map { (time: time, annotation: $0) }
         }
-        let updated = annotations[index].applyingEdit(edited, time: editTime, recording: motionRecording, anchor: anchor)
-        guard updated != annotations[index] else { return }
+        let before = annotations[index]
+        let updated = before.applyingEdit(edited, time: editTime, recording: motionRecording, anchor: anchor)
+        guard updated != before else { return }
         if gestureSnapshot == nil { checkpoint() }
         annotations[index] = updated
+        if let move = groupMove(from: before.displayed(at: editTime).bounds, to: edited.bounds, group: before.groupID) {
+            moveGroupMembers(move, except: before.id)
+        }
         refreshAfterEdit()
     }
 
@@ -1385,6 +1494,7 @@ final class MainWindowController: NSWindowController {
         if let id = selectedDrawingID, let drawing = annotations.first(where: { $0.id == id }) {
             var copy = drawing
             copy.id = UUID()
+            copy.groupID = nil
             copy.points = drawing.points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
             copy.keyframes = drawing.keyframes.map { RegionKeyframe(time: $0.time, rect: moved($0.rect)) }
             checkpoint()
@@ -1399,6 +1509,7 @@ final class MainWindowController: NSWindowController {
             case .polygon(_, let points): shape = .polygon(id: newID, points: points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) })
             }
             var effect = pair.effect
+            effect.groupID = nil
             effect.keyframes = effect.keyframes.map { RegionKeyframe(time: $0.time, rect: moved($0.rect)) }
             checkpoint()
             pairs.append((shape, effect))
@@ -1426,6 +1537,322 @@ final class MainWindowController: NSWindowController {
         toolChanged(toolSegment)
     }
 
+    // MARK: - Eraser options
+
+    @objc private func eraserStyleChanged(_ sender: Any?) {
+        eraseFromNow = eraseFromNowCheckbox.state == .on
+        refreshEraserControls()
+        canvas.refreshOverlay()
+    }
+
+    private var eraserIsBrush: Bool { eraserModeSegment.selectedSegment == 0 }
+
+    private func refreshEraserControls() {
+        let size = Int(eraserSizeSlider.doubleValue.rounded())
+        eraserSizeLabel.stringValue = "크기 \(size)pt"
+        eraserSizeSlider.isEnabled = eraserIsBrush && !isExporting
+        eraseFromNowCheckbox.isHidden = !doc.hasVideo
+        eraserHint.stringValue = eraserIsBrush
+            ? "그림 위를 문지르면 그 부분만 지웁니다(블러 영역은 항목 지우개로). 지운 흔적도 시간을 따라 남습니다. ⌘Z로 되돌립니다."
+            : "영역이나 그림을 클릭하거나 문질러 통째로 지웁니다. 영상에서는 켜 두면 지금 시점부터 사라지고 그 전 모습은 남습니다."
+    }
+
+    /// Eraser-tool removal on video ends each item just before the current time instead of
+    /// deleting it, so everything shown earlier stays. Items that start now are removed.
+    private func endItems(regions: Set<UUID>, drawings: Set<UUID>, at time: Double) {
+        let cutoff = time - MotionTrack.sameTime / 2
+        func trimmed(_ range: ClosedRange<Double>, entire: Bool) -> ClosedRange<Double>? {
+            let start = entire ? 0 : range.lowerBound
+            return cutoff - start > MotionTrack.sameTime ? start...cutoff : nil
+        }
+        var removeRegions = Set<UUID>(), removeDrawings = Set<UUID>()
+        var newPairs = pairs, newDrawings = annotations
+        for index in newPairs.indices where regions.contains(newPairs[index].shape.id) {
+            let effect = newPairs[index].effect
+            if let range = trimmed(effect.timeRange, entire: effect.appliesToEntireVideo) { newPairs[index].effect.timeRange = range }
+            else { removeRegions.insert(newPairs[index].shape.id) }
+        }
+        for index in newDrawings.indices where drawings.contains(newDrawings[index].id) {
+            let drawing = newDrawings[index]
+            if let range = trimmed(drawing.timeRange, entire: drawing.appliesToEntireVideo) { newDrawings[index].timeRange = range }
+            else { removeDrawings.insert(drawing.id) }
+        }
+        guard !RegionEditing.equal(newPairs, pairs) || newDrawings != annotations else { return }
+        if gestureSnapshot == nil { checkpoint() }
+        pairs = newPairs.filter { !removeRegions.contains($0.shape.id) }
+        annotations = newDrawings.filter { !removeDrawings.contains($0.id) }
+        if let id = selectedID, regions.contains(id) { selectedID = nil }
+        if let id = selectedDrawingID, drawings.contains(id) { selectedDrawingID = nil }
+        canvas.setRegionsFromExternal(pairs.map(\.shape))
+        refreshAfterEdit()
+    }
+
+    // MARK: - Text
+
+    private func promptText(at point: NSPoint) {
+        guard let text = askText(title: "글자 넣기", initial: "") else { return }
+        addText(text, at: point)
+    }
+
+    private func askText(title: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "한 줄 글자를 입력하세요. 넣은 뒤 끌어서 옮기고 모서리로 크기를 바꿀 수 있습니다."
+        let field = NSTextField(string: initial)
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "확인")
+        alert.addButton(withTitle: "취소")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : String(text.prefix(500))
+    }
+
+    /// Places a one-line text with its top-left corner at `point`. Internal for tests.
+    func addText(_ string: String, at point: CGPoint) {
+        guard !isExporting, !string.isEmpty else { return }
+        let size = DrawingAnnotation.fontSize(forLineWidth: CGFloat(annotationWidthSlider.doubleValue))
+        var drawing = DrawingAnnotation.text(string, at: .zero, fontSize: size, color: annotationColorWell.color)
+        let box = drawing.bounds
+        let origin = CGPoint(x: min(max(0, point.x), max(0, canvas.bounds.width - box.width)),
+                             y: min(max(0, point.y - box.height), max(0, canvas.bounds.height - box.height)))
+        drawing.points = drawing.points.map { CGPoint(x: $0.x + origin.x, y: $0.y + origin.y) }
+        addAnnotation(drawing)
+    }
+
+    /// Edits the text and widens/narrows its box (and recorded boxes) by the new natural width.
+    func replaceText(of id: UUID, with string: String) {
+        guard !isExporting, !string.isEmpty, let index = annotations.firstIndex(where: { $0.id == id }),
+              annotations[index].kind == .text, annotations[index].text != string else { return }
+        let old = annotations[index]
+        let size = old.bounds.height / 1.25
+        let oldWidth = DrawingAnnotation.text(old.text, at: .zero, fontSize: size, color: .white).bounds.width
+        let newWidth = DrawingAnnotation.text(string, at: .zero, fontSize: size, color: .white).bounds.width
+        let ratio = oldWidth > 0 ? newWidth / oldWidth : 1
+        var updated = old
+        updated.text = string
+        let box = old.bounds
+        updated.points = [box.origin, CGPoint(x: box.minX + box.width * ratio, y: box.maxY)]
+        updated.keyframes = old.keyframes.map {
+            RegionKeyframe(time: $0.time, rect: CGRect(x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width * ratio, height: $0.rect.height))
+        }
+        checkpoint()
+        annotations[index] = updated
+        refreshAfterEdit()
+    }
+
+    private func editText(_ id: UUID) {
+        guard let drawing = annotations.first(where: { $0.id == id }), drawing.kind == .text,
+              let text = askText(title: "글자 고치기", initial: drawing.text) else { return }
+        replaceText(of: id, with: text)
+    }
+
+    // MARK: - Grouping
+
+    private var currentSelectionID: UUID? { selectedID ?? selectedDrawingID }
+
+    private func groupIDOfItem(_ id: UUID) -> UUID? {
+        if let pair = pairs.first(where: { $0.shape.id == id }) { return pair.effect.groupID }
+        return annotations.first(where: { $0.id == id })?.groupID
+    }
+
+    private func displayedBounds(of id: UUID) -> CGRect? {
+        if let pair = pairs.first(where: { $0.shape.id == id }) { return RegionEditing.displayed(pair, at: editTime).boundingRect }
+        return annotations.first(where: { $0.id == id }).map { $0.displayed(at: editTime).bounds }
+    }
+
+    private func toggleMultiSelection(_ id: UUID) {
+        if multiSelection.isEmpty, let current = currentSelectionID, current != id { multiSelection.append(current) }
+        if let index = multiSelection.firstIndex(of: id) { multiSelection.remove(at: index) } else { multiSelection.append(id) }
+        workflowHint.stringValue = multiSelection.count >= 2
+            ? "\(multiSelection.count)개 선택됨 · ⌘G 또는 [그룹 만들기]로 묶습니다."
+            : "Shift+클릭으로 묶을 항목을 더 고르세요."
+        canvas.refreshOverlay()
+    }
+
+    private func selectionDecorations() -> (multi: [CGRect], group: CGRect?) {
+        let multi = multiSelection.compactMap { displayedBounds(of: $0) }
+        guard let current = currentSelectionID, let group = groupIDOfItem(current) else { return (multi, nil) }
+        let members = pairs.filter { $0.effect.groupID == group }.map(\.shape.id) + annotations.filter { $0.groupID == group }.map(\.id)
+        let union = members.compactMap { displayedBounds(of: $0) }.reduce(CGRect.null) { $0.union($1) }
+        return (multi, union.isNull ? nil : union)
+    }
+
+    @objc private func groupTapped() {
+        guard !isExporting else { return }
+        var ids = multiSelection
+        if let current = currentSelectionID, !ids.contains(current) { ids.append(current) }
+        ids = ids.filter { keyframesOfItem($0) != nil }
+        guard ids.count >= 2 else {
+            NSSound.beep()
+            workflowHint.stringValue = "Shift+클릭으로 두 개 이상 고른 뒤 묶으세요."
+            return
+        }
+        endGesture()
+        checkpoint()
+        let group = UUID()
+        for index in pairs.indices where ids.contains(pairs[index].shape.id) { pairs[index].effect.groupID = group }
+        for index in annotations.indices where ids.contains(annotations[index].id) { annotations[index].groupID = group }
+        multiSelection.removeAll()
+        workflowHint.stringValue = "\(ids.count)개를 그룹으로 묶었습니다. 하나를 옮기면 함께 움직입니다."
+        refreshAfterEdit()
+    }
+
+    @objc private func ungroupTapped() {
+        guard !isExporting else { return }
+        let groups = Set((multiSelection + [currentSelectionID].compactMap { $0 }).compactMap { groupIDOfItem($0) })
+        guard !groups.isEmpty else { NSSound.beep(); return }
+        endGesture()
+        checkpoint()
+        for index in pairs.indices where pairs[index].effect.groupID.map(groups.contains) == true { pairs[index].effect.groupID = nil }
+        for index in annotations.indices where annotations[index].groupID.map(groups.contains) == true { annotations[index].groupID = nil }
+        multiSelection.removeAll()
+        workflowHint.stringValue = "그룹을 풀었습니다."
+        refreshAfterEdit()
+    }
+
+    /// A pure move (same size) of a grouped item, as (group, dx, dy).
+    private func groupMove(from old: CGRect, to new: CGRect, group: UUID?) -> (group: UUID, dx: CGFloat, dy: CGFloat)? {
+        guard let group, abs(old.width - new.width) < 0.01, abs(old.height - new.height) < 0.01,
+              old.minX != new.minX || old.minY != new.minY else { return nil }
+        return (group, new.minX - old.minX, new.minY - old.minY)
+    }
+
+    /// Moves the other members of a group by the same offset, with the same motion rules.
+    private func moveGroupMembers(_ move: (group: UUID, dx: CGFloat, dy: CGFloat), except source: UUID) {
+        let shapes = pairs.map { pair -> RegionShape in
+            let shown = RegionEditing.displayed(pair, at: editTime)
+            guard pair.effect.groupID == move.group, pair.shape.id != source else { return shown }
+            return shown.replacing(rect: shown.boundingRect.offsetBy(dx: move.dx, dy: move.dy))
+        }
+        pairs = RegionEditing.updating(shapes, in: pairs, time: editTime, recording: motionRecording,
+                                       anchorTime: gestureStartTime, anchorPairs: gestureSnapshot)
+        for index in annotations.indices where annotations[index].groupID == move.group && annotations[index].id != source {
+            var moved = annotations[index].displayed(at: editTime)
+            moved.points = moved.points.map { CGPoint(x: $0.x + move.dx, y: $0.y + move.dy) }
+            let anchor = gestureStartTime.flatMap { time in
+                gestureAnnotations?.first(where: { $0.id == moved.id }).map { (time: time, annotation: $0) }
+            }
+            annotations[index] = annotations[index].applyingEdit(moved, time: editTime, recording: motionRecording, anchor: anchor)
+        }
+    }
+
+    // MARK: - Stacking order
+
+    private enum StackMove { case forward, backward, front, back }
+
+    @objc private func bringForwardTapped() { restack(.forward) }
+    @objc private func sendBackwardTapped() { restack(.backward) }
+    @objc private func bringToFrontTapped() { restack(.front) }
+    @objc private func sendToBackTapped() { restack(.back) }
+
+    private func restacked<T>(_ items: [T], index: Int, _ move: StackMove) -> [T] {
+        var result = items
+        let item = result.remove(at: index)
+        switch move {
+        case .forward: result.insert(item, at: min(result.count, index + 1))
+        case .backward: result.insert(item, at: max(0, index - 1))
+        case .front: result.append(item)
+        case .back: result.insert(item, at: 0)
+        }
+        return result
+    }
+
+    /// Later items draw on top: blur regions among regions, drawings among drawings
+    /// (drawings always sit above regions; an eraser stroke only clears drawings under it).
+    private func restack(_ move: StackMove) {
+        guard !isExporting else { return }
+        endGesture()
+        if let id = selectedID, let index = pairs.firstIndex(where: { $0.shape.id == id }) {
+            let result = restacked(pairs, index: index, move)
+            guard !RegionEditing.equal(result, pairs) else { return }
+            checkpoint()
+            pairs = result
+        } else if let id = selectedDrawingID, let index = annotations.firstIndex(where: { $0.id == id }) {
+            let result = restacked(annotations, index: index, move)
+            guard result != annotations else { return }
+            checkpoint()
+            annotations = result
+        } else { NSSound.beep(); return }
+        refreshAfterEdit()
+    }
+
+    // MARK: - Project save / open
+
+    /// The session as a project, geometry normalized to a 1×1 canvas. Internal for tests.
+    func projectData() throws -> Data {
+        guard let media = doc.url, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
+            throw ProjectFile.ProjectError.invalidContent
+        }
+        let unit = CGSize(width: 1, height: 1)
+        let regions = RegionEditing.scaled(pairs, from: canvas.bounds.size, to: unit).map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }
+        let drawings = annotations.map { $0.scaled(from: canvas.bounds.size, to: unit) }
+        return try ProjectFile(mediaPath: media.path, regions: regions, drawings: drawings).encoded()
+    }
+
+    @objc private func saveProjectTapped() {
+        guard !isExporting, doc.mediaKind != .none, let media = doc.url else { NSSound.beep(); return }
+        endGesture()
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [ProjectFile.contentType]
+        panel.nameFieldStringValue = media.deletingPathExtension().lastPathComponent + "." + ProjectFile.fileExtension
+        panel.directoryURL = media.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard url.standardizedFileURL != media.standardizedFileURL else {
+            showError("원본 파일 이름으로는 프로젝트를 저장할 수 없습니다.")
+            return
+        }
+        do {
+            try projectData().write(to: url, options: .atomic)
+            workflowHint.stringValue = "프로젝트를 저장했습니다: \(url.lastPathComponent)"
+        } catch { showError(error.localizedDescription) }
+    }
+
+    @objc private func openProjectTapped() {
+        guard !isExporting else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [ProjectFile.contentType]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values.isRegularFile == true else { throw ProjectFile.ProjectError.invalidContent }
+            guard (values.fileSize ?? 0) <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
+            let project = try ProjectFile.decode(Data(contentsOf: url))
+            var media = URL(fileURLWithPath: project.mediaPath)
+            if !VideoCanvasView.isSupportedDropFile(media) {
+                // The media moved or was renamed: let the person point to it.
+                let locate = NSOpenPanel()
+                locate.message = "프로젝트의 원본(\(media.lastPathComponent))을 찾을 수 없습니다. 원본 파일을 선택하세요."
+                locate.allowsMultipleSelection = false
+                locate.canChooseDirectories = false
+                guard locate.runModal() == .OK, let found = locate.url else { return }
+                media = found
+            }
+            openProject(project, media: media)
+        } catch { showError(error.localizedDescription) }
+    }
+
+    /// Loads `media`, then applies the project's items once the media is laid out. Internal for tests.
+    func openProject(_ project: ProjectFile, media: URL) {
+        load(url: media, project: project)
+    }
+
+    private func applyProject(_ project: ProjectFile) {
+        let size = canvas.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        let unit = CGSize(width: 1, height: 1)
+        pairs = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size)
+        annotations = project.drawings.map { $0.scaled(from: unit, to: size) }
+        undoStack.removeAll()
+        redoStack.removeAll()
+        canvas.setRegionsFromExternal(pairs.map(\.shape))
+        workflowHint.stringValue = "프로젝트를 열었습니다: 영역 \(pairs.count)개 · 그림 \(annotations.filter { !$0.isEraser }.count)개"
+        refreshAfterEdit()
+    }
+
     // MARK: - Selected item timing (region or drawing)
 
     private var hasSelection: Bool { selectedID != nil || selectedDrawingID != nil }
@@ -1441,12 +1868,22 @@ final class MainWindowController: NSWindowController {
         return selectedKeyframes.map { CGPoint(x: $0.rect.midX, y: $0.rect.midY) }
     }
 
+    /// Applies to the selected item and, when it is grouped, to every member of its group.
     private func setSelectedTimeRange(_ range: ClosedRange<Double>) {
-        if selectedID != nil { updateSelectedEffect { $0.timeRange = range }; return }
-        guard let id = selectedDrawingID, let index = annotations.firstIndex(where: { $0.id == id }),
-              annotations[index].timeRange != range else { return }
+        guard let id = currentSelectionID else { return }
+        let group = groupIDOfItem(id)
+        func member(_ itemID: UUID, _ itemGroup: UUID?) -> Bool { itemID == id || (group != nil && itemGroup == group) }
+        var newPairs = pairs, newDrawings = annotations
+        for index in newPairs.indices where member(newPairs[index].shape.id, newPairs[index].effect.groupID) {
+            newPairs[index].effect.timeRange = range
+        }
+        for index in newDrawings.indices where member(newDrawings[index].id, newDrawings[index].groupID) {
+            newDrawings[index].timeRange = range
+        }
+        guard !RegionEditing.equal(newPairs, pairs) || newDrawings != annotations else { return }
         if gestureSnapshot == nil { checkpoint() }
-        annotations[index].timeRange = range
+        pairs = newPairs
+        annotations = newDrawings
         refreshAfterEdit()
     }
 
@@ -1606,7 +2043,9 @@ final class MainWindowController: NSWindowController {
         liveBlur.refresh()
     }
 
-    func load(url: URL) {
+    func load(url: URL) { load(url: url, project: nil) }
+
+    private func load(url: URL, project: ProjectFile?) {
         Self.dropLoadLog.notice("load-requested")
         guard !isExporting else {
             Self.dropLoadLog.notice("load-blocked-by-export")
@@ -1630,6 +2069,7 @@ final class MainWindowController: NSWindowController {
         gestureAnnotations = nil
         selectedID = nil
         selectedDrawingID = nil
+        multiSelection.removeAll()
         canvas.resetInteraction()
         canvas.isEditable = false
         canvas.currentVideoTime = 0
@@ -1644,12 +2084,14 @@ final class MainWindowController: NSWindowController {
         progressLabel.stringValue = ""
         exportButton.isEnabled = false
         refreshRegionList(); refreshSelectedEditor()
+        pendingProject = project
         doc.load(url: url)
     }
 
     private func documentLoaded() {
         guard doc.mediaKind != .none else {
             Self.dropLoadLog.notice("load-failed")
+            pendingProject = nil
             fileLabel.stringValue = "파일을 열지 못했습니다"
             if let error = doc.errorMessage { showError(error) }
             return
@@ -1696,6 +2138,11 @@ final class MainWindowController: NSWindowController {
         }
         mainContainer.refreshMediaLayout()
         setExporting(false)
+        refreshEraserControls()
+        if let project = pendingProject {
+            pendingProject = nil
+            applyProject(project)
+        }
         refreshRegionList(); refreshSelectedEditor()
         canvas.refreshOverlay(); liveBlur.refresh()
     }
@@ -1842,6 +2289,16 @@ final class MainWindowController: NSWindowController {
         let duplicate = NSMenuItem(title: "복제", action: #selector(duplicateFromMenu(_:)), keyEquivalent: "")
         duplicate.target = self; duplicate.representedObject = id
         menu.addItem(duplicate)
+        for (index, title) in ["맨 앞으로", "앞으로", "뒤로", "맨 뒤로"].enumerated() {
+            let item = NSMenuItem(title: title, action: #selector(restackFromMenu(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = id; item.tag = index
+            menu.addItem(item)
+        }
+        if groupIDOfItem(id) != nil {
+            let ungroup = NSMenuItem(title: "그룹 풀기", action: #selector(ungroupFromMenu(_:)), keyEquivalent: "")
+            ungroup.target = self; ungroup.representedObject = id
+            menu.addItem(ungroup)
+        }
         menu.addItem(NSMenuItem.separator())
         let delItem = NSMenuItem(title: isDrawing ? "그림 삭제" : "영역 삭제", action: #selector(deleteRegionFromMenu(_:)), keyEquivalent: "")
         delItem.target = self
@@ -1890,6 +2347,18 @@ final class MainWindowController: NSWindowController {
             annotations[index].keyframes = []
         } else { return }
         refreshAfterEdit()
+    }
+
+    @objc private func restackFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        selectItem(id)
+        restack([StackMove.front, .forward, .backward, .back][max(0, min(3, sender.tag))])
+    }
+
+    @objc private func ungroupFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        selectItem(id)
+        ungroupTapped()
     }
 
     @objc private func duplicateFromMenu(_ sender: NSMenuItem) {

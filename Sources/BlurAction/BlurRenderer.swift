@@ -103,17 +103,7 @@ enum BlurRenderer {
                   annotation.fillOpacity.isFinite, (0...1).contains(annotation.fillOpacity),
                   [annotation.red, annotation.green, annotation.blue, annotation.alpha].allSatisfy({ $0.isFinite && (0...1).contains($0) }),
                   annotation.points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { throw RenderError.invalidGeometry }
-            if annotation.isFilled {
-                context.addPath(annotation.fillPath)
-                context.setFillColor(red: annotation.red, green: annotation.green, blue: annotation.blue,
-                                     alpha: annotation.alpha * annotation.fillOpacity)
-                context.fillPath()
-            }
-            context.addPath(annotation.path)
-            context.setStrokeColor(red: annotation.red, green: annotation.green, blue: annotation.blue, alpha: annotation.alpha)
-            context.setLineWidth(annotation.lineWidth)
-            context.setLineCap(.round); context.setLineJoin(.round)
-            context.strokePath()
+            annotation.render(in: context)
         }
         guard let overlay = context.makeImage() else { throw RenderError.maskAllocation }
         let overlayImage = CIImage(cgImage: overlay).transformed(by: .init(translationX: extent.minX, y: extent.minY)).cropped(to: extent)

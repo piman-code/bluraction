@@ -171,6 +171,7 @@ final class MotionAndToolsTests {
 
         try session.key("e")
         #expect(session.tools.selectedSegment == 2, "E switches to the eraser")
+        session.eraserMode(1) // whole items
         let center = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
         try session.drag(from: center, to: center)
         #expect(regions.isEmpty)
@@ -289,16 +290,16 @@ final class MotionAndToolsTests {
 // MARK: - Sessions
 
 @MainActor
-private func allSubviews(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(allSubviews) }
+func allSubviews(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(allSubviews) }
 
 @MainActor
-private func waitUntil(_ predicate: () -> Bool) async throws {
+func waitUntil(_ predicate: () -> Bool) async throws {
     for _ in 0..<500 where !predicate() { try await Task.sleep(nanoseconds: 10_000_000) }
     try #require(predicate(), "Timed out")
 }
 
 @MainActor
-private class EditorSession {
+class EditorSession {
     let controller = MainWindowController()
     let directory: URL
     var window: NSWindow { controller.window! }
@@ -318,7 +319,12 @@ private class EditorSession {
     func tool(_ index: Int) { tools.selectedSegment = index; _ = tools.sendAction(tools.action, to: tools.target) }
 
     func mode(_ index: Int) {
-        let modes = descendants.compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 4 }!
+        let modes = descendants.compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount >= 4 && $0.label(forSegment: 0) == "사각형" }!
+        modes.selectedSegment = index; _ = modes.sendAction(modes.action, to: modes.target)
+    }
+
+    func eraserMode(_ index: Int) {
+        let modes = descendants.compactMap { $0 as? NSSegmentedControl }.first { $0.label(forSegment: 0) == "부분 지우개" }!
         modes.selectedSegment = index; _ = modes.sendAction(modes.action, to: modes.target)
     }
 
@@ -344,7 +350,7 @@ private class EditorSession {
 }
 
 @MainActor
-private final class ImageSession: EditorSession {
+final class ImageSession: EditorSession {
     /// A 320×160 PNG: checkerboard, or (split) solid red left half and blue right half.
     static func open(split: Bool = false) async throws -> ImageSession {
         _ = NSApplication.shared
@@ -377,7 +383,7 @@ private final class ImageSession: EditorSession {
 }
 
 @MainActor
-private final class VideoSession: EditorSession {
+final class VideoSession: EditorSession {
     static func open() async throws -> VideoSession {
         _ = NSApplication.shared
         let helper = VideoExportTests()

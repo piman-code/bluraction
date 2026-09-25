@@ -1,10 +1,12 @@
 import AppKit
 import CoreGraphics
+import CoreText
 
 /// Persistent stroke/shape annotation in the same bottom-left canvas space as blur regions.
 /// `points` are the base geometry; on video, `keyframes` move its bounding box over time.
-struct DrawingAnnotation: Equatable, Identifiable {
-    enum Kind: Equatable { case rectangle, ellipse, line, freehand }
+struct DrawingAnnotation: Equatable, Identifiable, Codable {
+    /// `eraser` is a brush stroke that clears the drawings listed before it (from its time on).
+    enum Kind: String, Equatable, Codable { case rectangle, ellipse, line, freehand, arrow, text, eraser }
 
     var id: UUID
     var kind: Kind
@@ -19,6 +21,10 @@ struct DrawingAnnotation: Equatable, Identifiable {
     /// Video time interval in seconds; `0...0` means the whole video (same sentinel as regions).
     var timeRange: ClosedRange<Double> = 0...0
     var keyframes: [RegionKeyframe] = []
+    /// Text content for `.text`; the text is fitted into the box given by the two points.
+    var text: String = ""
+    /// Items sharing a group move together.
+    var groupID: UUID?
 
     init(id: UUID = UUID(), kind: Kind, points: [CGPoint], color: NSColor = .systemYellow, lineWidth: CGFloat = 4,
          fillOpacity: CGFloat = 0) {
@@ -33,7 +39,8 @@ struct DrawingAnnotation: Equatable, Identifiable {
     }
 
     var color: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha) }
-    var isFilled: Bool { kind != .line && fillOpacity > 0 }
+    var isFilled: Bool { [.rectangle, .ellipse, .freehand].contains(kind) && fillOpacity > 0 }
+    var isEraser: Bool { kind == .eraser }
 
     mutating func setColor(_ color: NSColor) {
         guard let c = color.usingColorSpace(.sRGB) else { return }
@@ -49,14 +56,102 @@ struct DrawingAnnotation: Equatable, Identifiable {
             let rect = CGRect(x: min(first.x, points[1].x), y: min(first.y, points[1].y),
                               width: abs(points[1].x - first.x), height: abs(points[1].y - first.y))
             if kind == .rectangle { path.addRect(rect) } else { path.addEllipse(in: rect) }
-        case .line:
+        case .line, .arrow:
             guard points.count >= 2 else { return path }
             path.move(to: first); path.addLine(to: points[1])
-        case .freehand:
+        case .freehand, .eraser:
             path.move(to: first)
             for point in points.dropFirst() { path.addLine(to: point) }
+            if points.count == 1 { path.addLine(to: first) } // a single dab still erases
+        case .text:
+            path.addRect(bounds)
         }
         return path
+    }
+
+    /// Filled triangle at the end point of an arrow.
+    var arrowHead: CGPath? {
+        guard kind == .arrow, points.count >= 2 else { return nil }
+        let tip = points[1], tail = points[0]
+        let length = hypot(tip.x - tail.x, tip.y - tail.y)
+        guard length > 0 else { return nil }
+        let ux = (tip.x - tail.x) / length, uy = (tip.y - tail.y) / length
+        let size = max(10, lineWidth * 3.5), half = size * 0.55
+        let base = CGPoint(x: tip.x - ux * size, y: tip.y - uy * size)
+        let head = CGMutablePath()
+        head.move(to: tip)
+        head.addLine(to: CGPoint(x: base.x - uy * half, y: base.y + ux * half))
+        head.addLine(to: CGPoint(x: base.x + uy * half, y: base.y - ux * half))
+        head.closeSubpath()
+        return head
+    }
+
+    /// Font size for new text boxes from the line-width control (1…20 → 13…70 pt).
+    static func fontSize(forLineWidth width: CGFloat) -> CGFloat { 10 + width * 3 }
+
+    /// A text drawing whose box fits `string` at `fontSize`, with its lower-left corner at `origin`.
+    static func text(_ string: String, at origin: CGPoint, fontSize: CGFloat, color: NSColor) -> DrawingAnnotation {
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [.font: font(size: fontSize)]))
+        let width = max(fontSize * 0.5, CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        var drawing = DrawingAnnotation(kind: .text, points: [origin, CGPoint(x: origin.x + width, y: origin.y + fontSize * 1.25)],
+                                        color: color, lineWidth: 2)
+        drawing.text = string
+        return drawing
+    }
+
+    private static func font(size: CGFloat) -> NSFont { .systemFont(ofSize: size, weight: .semibold) }
+
+    /// Shared drawing for preview, canvas and export (bottom-left coordinates).
+    /// Eraser strokes clear everything drawn before them in the same context or transparency layer.
+    func render(in context: CGContext) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        switch kind {
+        case .eraser:
+            context.setBlendMode(.clear)
+            context.addPath(path)
+            context.setLineWidth(lineWidth)
+            context.strokePath()
+        case .text:
+            renderText(in: context)
+        default:
+            if isFilled {
+                context.addPath(fillPath)
+                context.setFillColor(red: red, green: green, blue: blue, alpha: alpha * fillOpacity)
+                context.fillPath()
+            }
+            context.addPath(path)
+            context.setStrokeColor(red: red, green: green, blue: blue, alpha: alpha)
+            context.setLineWidth(lineWidth)
+            context.strokePath()
+            if let head = arrowHead {
+                context.addPath(head)
+                context.setFillColor(red: red, green: green, blue: blue, alpha: alpha)
+                context.fillPath()
+            }
+        }
+    }
+
+    /// Text is laid out at a size from the box height, then scaled horizontally to fill the box,
+    /// so moving or resizing the box (including motion keyframes) resizes the text with it.
+    private func renderText(in context: CGContext) {
+        let box = bounds
+        guard !text.isEmpty, box.width > 0, box.height > 0 else { return }
+        let size = box.height / 1.25
+        let attributed = NSAttributedString(string: text, attributes: [
+            .font: Self.font(size: size), .foregroundColor: color
+        ])
+        let line = CTLineCreateWithAttributedString(attributed)
+        var descent: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(line, nil, &descent, nil))
+        guard width > 0 else { return }
+        context.translateBy(x: box.minX, y: box.minY + descent + (box.height - size * 1.2) / 2)
+        context.scaleBy(x: box.width / width, y: 1)
+        context.textMatrix = .identity
+        context.textPosition = .zero
+        CTLineDraw(line, context)
     }
 
     /// Closed outline used for filling (a freehand stroke closes back to its first point).
@@ -93,6 +188,7 @@ struct DrawingAnnotation: Equatable, Identifiable {
     }
 
     func hitTest(_ point: CGPoint) -> Bool {
+        if kind == .text { return bounds.insetBy(dx: -4, dy: -4).contains(point) }
         if isFilled, fillPath.contains(point) { return true }
         return path.copy(strokingWithWidth: max(12, lineWidth + 8), lineCap: .round, lineJoin: .round, miterLimit: 1)
             .contains(point)
@@ -103,6 +199,8 @@ struct DrawingAnnotation: Equatable, Identifiable {
         let sx = new.width / old.width, sy = new.height / old.height
         var result = self
         result.points = points.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }
+        // Line and eraser widths are canvas points; scale them with the picture too.
+        result.lineWidth = lineWidth * (sx + sy) / 2
         result.keyframes = keyframes.map {
             RegionKeyframe(time: $0.time, rect: CGRect(x: $0.rect.minX * sx, y: $0.rect.minY * sy,
                                                        width: $0.rect.width * sx, height: $0.rect.height * sy))
@@ -115,6 +213,7 @@ struct DrawingAnnotation: Equatable, Identifiable {
                       anchor: (time: Double, annotation: DrawingAnnotation)? = nil) -> DrawingAnnotation {
         var result = self
         result.kind = edited.kind; result.lineWidth = edited.lineWidth; result.fillOpacity = edited.fillOpacity
+        result.text = edited.text; result.groupID = edited.groupID
         result.red = edited.red; result.green = edited.green; result.blue = edited.blue; result.alpha = edited.alpha
         let shown = displayed(at: time)
         guard edited.points != shown.points else { return result }

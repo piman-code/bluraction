@@ -8,8 +8,8 @@ import os
 /// 비디오 영역 위에 떠 있는 영역 편집 + 드래그앤드롭 통합 캔버스.
 final class VideoCanvasView: NSView {
     enum Mode {
-        case rectangle, ellipse, polygonClick, polygonFree, drawRectangle, drawEllipse, drawLine, drawFreehand, erase
-        var isDrawing: Bool { [.drawRectangle, .drawEllipse, .drawLine, .drawFreehand].contains(self) }
+        case rectangle, ellipse, polygonClick, polygonFree, drawRectangle, drawEllipse, drawLine, drawFreehand, drawArrow, drawText, erase
+        var isDrawing: Bool { [.drawRectangle, .drawEllipse, .drawLine, .drawFreehand, .drawArrow, .drawText].contains(self) }
     }
 
     // 콜백
@@ -20,8 +20,17 @@ final class VideoCanvasView: NSView {
     var annotationAdded: ((DrawingAnnotation) -> Void)?
     /// A displayed-geometry edit (move/resize) of an existing drawing.
     var annotationChanged: ((DrawingAnnotation) -> Void)?
-    /// Eraser and Delete: (blur region IDs, drawing IDs).
-    var itemsErased: ((Set<UUID>, Set<UUID>) -> Void)?
+    /// Eraser and Delete: (blur region IDs, drawing IDs, from the eraser tool).
+    var itemsErased: ((Set<UUID>, Set<UUID>, Bool) -> Void)?
+    /// Eraser tool: brush (partial, erases drawings under the stroke) or whole items; brush size.
+    var eraserStyleBinding: (() -> (brush: Bool, size: CGFloat))?
+    /// Text mode: a click on empty canvas asks for text at that point; double-click edits text.
+    var textPlacementHandler: ((NSPoint) -> Void)?
+    var textEditHandler: ((UUID) -> Void)?
+    /// Shift-click adds or removes an item from the multi-selection (for grouping).
+    var multiSelectToggle: ((UUID) -> Void)?
+    /// Outlines for multi-selected items and the selected item's group.
+    var selectionDecorationsProvider: (() -> (multi: [CGRect], group: CGRect?))?
     var annotationSelectionChange: ((UUID?) -> Void)?
     var rightClickOnAnnotation: ((UUID, NSPoint) -> Void)?
     /// (stroke color, line width, fill opacity) for new drawings.
@@ -97,6 +106,7 @@ final class VideoCanvasView: NSView {
     private var dragAnnotation: DrawingAnnotation?
     private var annotationHandleAnchor: NSPoint?
     private var eraseHoverID: UUID?
+    private var eraserBuffer: [NSPoint] = []
     private var lastMouseLocation: NSPoint? = nil
     /// drag 중 마지막 키프레임 기록 시간. 30Hz 간격 체크용.
     private var lastKeyframeTime: Double = -1
@@ -147,7 +157,9 @@ final class VideoCanvasView: NSView {
         lastMouseLocation = clamped(point)
         updateCursor(at: point)
         if !polygonBuffer.isEmpty { refreshOverlay() }
-        if modeBinding?() == .erase {
+        if modeBinding?() == .erase, eraserStyleBinding?().brush == true {
+            refreshOverlay()
+        } else if modeBinding?() == .erase {
             let hover = eraseTargets(at: lastMouseLocation ?? point)
             let id = hover.regions.first ?? hover.drawings.first
             if id != eraseHoverID { eraseHoverID = id; refreshOverlay() }
@@ -240,22 +252,37 @@ final class VideoCanvasView: NSView {
         let regions = regionsBinding?() ?? []
         let currentTime = currentTimeProvider?() ?? 0
         let highlightedAnnotationID = liveAnnotationSelectionID
-        for annotation in annotationsBinding?() ?? [] {
-            let path = NSBezierPath(cgPath: annotation.path)
-            path.lineWidth = annotation.lineWidth
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            // The preview layer renders visible drawings; outside their time only a faint guide shows.
-            let visible = videoSizeBinding?() == .zero || annotation.isVisible(at: currentTime)
-            if visible {
-                annotation.color.setStroke()
-            } else {
-                annotation.color.withAlphaComponent(0.25).setStroke()
-                path.setLineDash([6, 4], count: 2, phase: 0)
+        let annotations = annotationsBinding?() ?? []
+        let mode = modeBinding?() ?? .rectangle
+        let hasTime = videoSizeBinding?() != .zero
+        if let cg = NSGraphicsContext.current?.cgContext, !annotations.isEmpty {
+            // Same drawing code as export; the transparency layer keeps eraser strokes from
+            // clearing the canvas beneath. Items outside their time show as a faint guide.
+            cg.beginTransparencyLayer(auxiliaryInfo: nil)
+            for annotation in annotations where !hasTime || annotation.isVisible(at: currentTime) { annotation.render(in: cg) }
+            cg.endTransparencyLayer()
+            cg.saveGState()
+            cg.setAlpha(0.25)
+            cg.setLineDash(phase: 0, lengths: [6, 4])
+            for annotation in annotations where hasTime && !annotation.isVisible(at: currentTime) && !annotation.isEraser {
+                cg.addPath(annotation.path)
+                cg.setStrokeColor(annotation.color.cgColor)
+                cg.setLineWidth(max(1, annotation.lineWidth))
+                cg.strokePath()
             }
-            path.stroke()
+            cg.restoreGState()
+        }
+        for annotation in annotations {
+            if annotation.isEraser {
+                // Eraser strokes are invisible; the eraser tool shows where they are.
+                guard mode == .erase, !hasTime || annotation.isVisible(at: currentTime) else { continue }
+                let path = NSBezierPath(cgPath: annotation.path)
+                path.lineWidth = 1; path.setLineDash([3, 3], count: 2, phase: 0)
+                NSColor.systemPink.withAlphaComponent(0.7).setStroke(); path.stroke()
+            }
             if annotation.id == highlightedAnnotationID {
-                NSColor.white.setStroke(); path.lineWidth = annotation.lineWidth + 3
+                let path = NSBezierPath(cgPath: annotation.path)
+                NSColor.white.setStroke(); path.lineWidth = annotation.kind == .text ? 1.5 : annotation.lineWidth + 3
                 path.setLineDash([3, 3], count: 2, phase: 0); path.stroke()
                 for corner in corners(of: annotation.bounds) {
                     let dot = NSBezierPath(rect: NSRect(x: corner.x - 4, y: corner.y - 4, width: 8, height: 8))
@@ -265,17 +292,41 @@ final class VideoCanvasView: NSView {
             }
             if annotation.id == eraseHoverID { drawEraseHighlight(NSBezierPath(cgPath: annotation.path)) }
         }
-        if !annotationBuffer.isEmpty, let mode = modeBinding?(), mode.isDrawing {
+        if !annotationBuffer.isEmpty, mode.isDrawing, let cg = NSGraphicsContext.current?.cgContext {
             let style = annotationStyleBinding?() ?? (.systemYellow, 4, 0)
-            let annotation = DrawingAnnotation(kind: annotationKind(for: mode), points: annotationBuffer, color: style.0,
-                                               lineWidth: style.1, fillOpacity: style.2)
-            if annotation.isFilled {
-                annotation.color.withAlphaComponent(annotation.alpha * annotation.fillOpacity * 0.8).setFill()
-                NSBezierPath(cgPath: annotation.fillPath).fill()
+            let preview = DrawingAnnotation(kind: annotationKind(for: mode), points: annotationBuffer,
+                                            color: style.0.withAlphaComponent(0.8), lineWidth: style.1, fillOpacity: style.2)
+            preview.render(in: cg)
+        }
+        if mode == .erase, let style = eraserStyleBinding?(), style.brush {
+            if eraserBuffer.count >= 1 {
+                let stroke = DrawingAnnotation(kind: .eraser, points: eraserBuffer, lineWidth: style.size)
+                let path = NSBezierPath(cgPath: stroke.path)
+                path.lineWidth = style.size; path.lineCapStyle = .round; path.lineJoinStyle = .round
+                NSColor.systemPink.withAlphaComponent(0.35).setStroke(); path.stroke()
             }
-            let path = NSBezierPath(cgPath: annotation.path)
-            path.lineWidth = annotation.lineWidth; path.lineCapStyle = .round; path.lineJoinStyle = .round
-            annotation.color.withAlphaComponent(0.8).setStroke(); path.stroke()
+            if let hover = lastMouseLocation {
+                let ring = NSBezierPath(ovalIn: NSRect(x: hover.x - style.size / 2, y: hover.y - style.size / 2,
+                                                       width: style.size, height: style.size))
+                ring.lineWidth = 1.5
+                NSColor.white.setStroke(); ring.stroke()
+                ring.setLineDash([3, 3], count: 2, phase: 0)
+                NSColor.black.setStroke(); ring.stroke()
+            }
+        }
+        if let decorations = selectionDecorationsProvider?() {
+            NSColor.systemPurple.setStroke()
+            for rect in decorations.multi {
+                let path = NSBezierPath(rect: rect.insetBy(dx: -4, dy: -4))
+                path.lineWidth = 2; path.setLineDash([5, 3], count: 2, phase: 0); path.stroke()
+            }
+            if let group = decorations.group {
+                let path = NSBezierPath(roundedRect: group.insetBy(dx: -8, dy: -8), xRadius: 6, yRadius: 6)
+                path.lineWidth = 1.5; path.setLineDash([8, 4], count: 2, phase: 0); path.stroke()
+                NSAttributedString(string: "그룹", attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .bold),
+                                                              .foregroundColor: NSColor.systemPurple])
+                    .draw(at: NSPoint(x: group.minX - 8, y: group.maxY + 10))
+            }
         }
         for r in regions {
             let eff = effectForID?(r.id)
@@ -288,7 +339,6 @@ final class VideoCanvasView: NSView {
         if recordingKeyframes { drawRecordingBadge() }
 
         // 폴리곤 진행 중
-        let mode = modeBinding?() ?? .rectangle
         if (mode == .polygonClick || mode == .polygonFree), polygonBuffer.count >= 1 {
             let path = NSBezierPath()
             path.move(to: polygonBuffer[0])
@@ -631,6 +681,7 @@ final class VideoCanvasView: NSView {
         annotationBuffer.removeAll()
         dragAnnotation = nil
         eraseHoverID = nil
+        eraserBuffer.removeAll()
         polygonBuffer.removeAll()
         creationStartTime = nil
         activeDrag = nil
@@ -662,11 +713,22 @@ final class VideoCanvasView: NSView {
             if selectedID != nil { selectedID = nil; selectionChange?(nil) }
             if selectedAnnotationID != nil { selectedAnnotationID = nil; annotationSelectionChange?(nil) }
             activeDrag = .erase
-            eraseItems(at: pt)
+            if eraserStyleBinding?().brush == true {
+                captureCreationTime()
+                eraserBuffer = [pt]
+                refreshOverlay()
+            } else {
+                eraseItems(at: pt)
+            }
+            return
+        }
+        if event.modifierFlags.contains(.shift), let id = multiSelectTarget(at: pt, mode: mode) {
+            multiSelectToggle?(id)
+            refreshOverlay()
             return
         }
         if mode.isDrawing {
-            let annotations = annotationsBinding?() ?? []
+            let annotations = (annotationsBinding?() ?? []).filter { !$0.isEraser }
             if let selected = liveAnnotationSelectionID, let current = annotations.first(where: { $0.id == selected }),
                let opposite = corners(of: current.bounds).enumerated().first(where: { dist($0.element, pt) < 10 }).map({
                    corners(of: current.bounds)[3 - $0.offset] }) {
@@ -679,6 +741,7 @@ final class VideoCanvasView: NSView {
             if let hit = annotations.reversed().first(where: { $0.hitTest(pt) }) {
                 selectAnnotation(id: hit.id)
                 annotationBuffer.removeAll()
+                if event.clickCount >= 2, hit.kind == .text { textEditHandler?(hit.id); return }
                 if event.clickCount >= 2 { deleteSelectedAnnotation(); refreshOverlay(); return }
                 dragAnnotation = hit
                 activeDrag = .annotationMove
@@ -686,6 +749,11 @@ final class VideoCanvasView: NSView {
             }
             if selectedAnnotationID != nil { selectedAnnotationID = nil; annotationSelectionChange?(nil) }
             captureCreationTime()
+            if mode == .drawText {
+                textPlacementHandler?(pt)
+                refreshOverlay()
+                return
+            }
             annotationBuffer = [pt]
             activeDrag = .annotation
             refreshOverlay()
@@ -821,7 +889,12 @@ final class VideoCanvasView: NSView {
             if let edited = editedAnnotation(at: pt) { annotationChanged?(edited) }
             refreshOverlay()
         } else if activeDrag == .erase {
-            eraseItems(at: pt)
+            if eraserStyleBinding?().brush == true {
+                if let last = eraserBuffer.last, hypot(pt.x - last.x, pt.y - last.y) >= 2 { eraserBuffer.append(pt) }
+                refreshOverlay()
+            } else {
+                eraseItems(at: pt)
+            }
         } else if activeDrag == .annotation {
             if modeBinding?() == .drawFreehand {
                 if let last = annotationBuffer.last, hypot(pt.x - last.x, pt.y - last.y) >= 2 { annotationBuffer.append(pt) }
@@ -870,6 +943,11 @@ final class VideoCanvasView: NSView {
                 annotationSelectionChange?(created.id)
             }
             annotationBuffer.removeAll()
+        }
+        if activeDrag == .erase, !eraserBuffer.isEmpty, let style = eraserStyleBinding?(), style.brush {
+            if let last = eraserBuffer.last, hypot(pt.x - last.x, pt.y - last.y) >= 1 { eraserBuffer.append(pt) }
+            annotationAdded?(DrawingAnnotation(kind: .eraser, points: eraserBuffer, lineWidth: style.size))
+            eraserBuffer.removeAll()
         }
         if activeDrag == .annotationMove || activeDrag == .annotationResize {
             if hypot(pt.x - dragStart.x, pt.y - dragStart.y) > 0, let edited = editedAnnotation(at: pt) {
@@ -932,7 +1010,16 @@ final class VideoCanvasView: NSView {
 
     private func annotationKind(for mode: Mode) -> DrawingAnnotation.Kind {
         switch mode { case .drawRectangle: return .rectangle; case .drawEllipse: return .ellipse
-        case .drawLine: return .line; default: return .freehand }
+        case .drawLine: return .line; case .drawArrow: return .arrow; case .drawText: return .text; default: return .freehand }
+    }
+
+    /// Shift-click target: blur regions in blur modes, drawings in drawing modes (topmost first).
+    private func multiSelectTarget(at pt: NSPoint, mode: Mode) -> UUID? {
+        if mode.isDrawing {
+            return (annotationsBinding?() ?? []).reversed().first { !$0.isEraser && $0.hitTest(pt) }?.id
+        }
+        guard mode != .erase else { return nil }
+        return (regionsBinding?() ?? []).reversed().first { $0.contains(point: pt, threshold: 0) }?.id
     }
 
     /// Displayed geometry of the dragged drawing for a move (clamped to the media) or corner resize.
@@ -959,16 +1046,23 @@ final class VideoCanvasView: NSView {
 
     /// The single topmost item under the eraser (drawings render above blur regions),
     /// matching the hover highlight so a click never removes hidden items underneath.
+    /// Only items shown at the current time can be erased (earlier traces stay untouched).
     private func eraseTargets(at pt: NSPoint) -> (regions: [UUID], drawings: [UUID]) {
-        if let drawing = (annotationsBinding?() ?? []).reversed().first(where: { $0.hitTest(pt) }) { return ([], [drawing.id]) }
-        if let region = (regionsBinding?() ?? []).reversed().first(where: { $0.contains(point: pt, threshold: 6) }) { return ([region.id], []) }
+        let now = currentTimeProvider?() ?? 0
+        let timed = videoSizeBinding?() != .zero
+        if let drawing = (annotationsBinding?() ?? []).reversed().first(where: {
+            (!timed || $0.isVisible(at: now)) && $0.hitTest(pt)
+        }) { return ([], [drawing.id]) }
+        if let region = (regionsBinding?() ?? []).reversed().first(where: {
+            (!timed || effectForID?($0.id)?.isActive(at: now) != false) && $0.contains(point: pt, threshold: 6)
+        }) { return ([region.id], []) }
         return ([], [])
     }
 
     private func eraseItems(at pt: NSPoint) {
         let targets = eraseTargets(at: pt)
         guard !targets.regions.isEmpty || !targets.drawings.isEmpty else { return }
-        itemsErased?(Set(targets.regions), Set(targets.drawings))
+        itemsErased?(Set(targets.regions), Set(targets.drawings), true)
         eraseHoverID = nil
         refreshOverlay()
         liveBlurRefreshCallback?()
@@ -986,7 +1080,7 @@ final class VideoCanvasView: NSView {
         guard let id = liveAnnotationSelectionID else { return }
         selectedAnnotationID = nil
         annotationSelectionChange?(nil)
-        itemsErased?([], [id])
+        itemsErased?([], [id], false)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1304,7 +1398,7 @@ final class VideoCanvasView: NSView {
         let pt = convert(event.locationInWindow, from: nil)
         // 영역 hit test (빈 공간 → nil)
         let hitID = (regionsBinding?() ?? []).reversed().first { $0.contains(point: pt, threshold: 6) }?.id
-        if hitID == nil, let drawing = (annotationsBinding?() ?? []).reversed().first(where: { $0.hitTest(pt) }) {
+        if hitID == nil, let drawing = (annotationsBinding?() ?? []).reversed().first(where: { !$0.isEraser && $0.hitTest(pt) }) {
             selectAnnotation(id: drawing.id)
             rightClickOnAnnotation?(drawing.id, pt)
             return
