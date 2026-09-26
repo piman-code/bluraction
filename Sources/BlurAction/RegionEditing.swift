@@ -27,16 +27,22 @@ enum RegionEditing {
             }
             let shown = displayed(old, at: time)
             guard shape != shown else { return old }
-            guard let t = time, t.isFinite else { return (shape, old.effect) }
+            // Holes live in the base box; whenever the base changes they follow it.
+            func rebased(_ base: RegionShape, _ effect: RegionEffect) -> Pair {
+                var effect = effect
+                effect.erasures = effect.erasures.map { $0.mapped(from: old.shape.boundingRect, to: base.boundingRect) }
+                return (base, effect)
+            }
+            guard let t = time, t.isFinite else { return rebased(shape, old.effect) }
             let from = shown.boundingRect, to = shape.boundingRect
             var effect = old.effect
             guard recording else {
-                guard !effect.keyframes.isEmpty else { return (shape, effect) }
+                guard !effect.keyframes.isEmpty else { return rebased(shape, effect) }
                 // Whole-path edit: keep the recorded motion and apply this change to every position.
                 effect.keyframes = effect.keyframes.map {
                     RegionKeyframe(time: $0.time, rect: MotionTrack.shifted($0.rect, from: from, to: to))
                 }
-                return (shape.replacing(rect: MotionTrack.shifted(old.shape.boundingRect, from: from, to: to)), effect)
+                return rebased(shape.replacing(rect: MotionTrack.shifted(old.shape.boundingRect, from: from, to: to)), effect)
             }
             let start = effect.appliesToEntireVideo ? 0 : effect.timeRange.lowerBound
             let anchor = anchorTime.flatMap { at in
@@ -44,7 +50,7 @@ enum RegionEditing {
             }
             guard let frames = MotionTrack.recording(keyframes: effect.keyframes, from: from, to: to,
                                                      time: t, start: start, anchor: anchor) else {
-                return (shape, effect) // First edit at the start time just repositions the region.
+                return rebased(shape, effect) // First edit at the start time just repositions the region.
             }
             effect.keyframes = frames
             if case .polygon = shape, case .polygon = old.shape {
@@ -69,6 +75,7 @@ enum RegionEditing {
             } else { shape = pair.shape.replacing(rect: rect(pair.shape.boundingRect)) }
             var effect = pair.effect
             effect.keyframes = effect.keyframes.map { RegionKeyframe(time: $0.time, rect: rect($0.rect)) }
+            effect.erasures = effect.erasures.map { $0.scaled(sx: sx, sy: sy, width: DrawingAnnotation.widthScale(sx: sx, sy: sy)) }
             return (shape, effect)
         }
     }

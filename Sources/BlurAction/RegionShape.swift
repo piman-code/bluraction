@@ -132,6 +132,12 @@ struct RegionEffect: Equatable, Codable {
 
     /// Items sharing a group move together.
     var groupID: UUID?
+    /// Parts rubbed out of the cover, in the base shape's bounding-box geometry.
+    var erasures: [EraseStroke] = []
+    /// Layer name shown in the layer list (nil = automatic name).
+    var name: String?
+    /// Locked layers cannot be selected, moved or erased on the canvas.
+    var locked = false
 
     enum CoverStyle: String, Equatable, CaseIterable, Codable { case blur, mosaic, solid }
 
@@ -238,4 +244,60 @@ struct RGBAColor: Equatable, Codable {
     static let black = RGBAColor(red: 0, green: 0, blue: 0, alpha: 1)
 
     var isValid: Bool { [red, green, blue, alpha].allSatisfy { $0.isFinite && (0...1).contains($0) } }
+}
+
+/// Part of an item rubbed out by the brush eraser, stored in the item's own base geometry
+/// (a drawing's points, or a region's base bounding box) so the hole moves, scales and
+/// reorders with the item. `from` is the video time it starts (nil = always).
+struct EraseStroke: Equatable, Codable {
+    var points: [CGPoint]
+    var width: CGFloat
+    var from: Double?
+
+    func isActive(at time: Double?) -> Bool {
+        guard let from, let time else { return true }
+        return time >= from
+    }
+
+    /// Same stroke after its item's box changes from `old` to `new` (width kept, like stroke widths).
+    func mapped(from old: CGRect, to new: CGRect) -> EraseStroke {
+        EraseStroke(points: points.map { MotionTrack.map($0, from: old, to: new) }, width: width, from: from)
+    }
+
+    func scaled(sx: CGFloat, sy: CGFloat, width widthScale: CGFloat) -> EraseStroke {
+        EraseStroke(points: points.map { CGPoint(x: $0.x * sx, y: $0.y * sy) }, width: width * widthScale, from: from)
+    }
+
+    static func path(_ points: [CGPoint]) -> CGPath {
+        let path = CGMutablePath()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() { path.addLine(to: point) }
+        if points.count == 1 { path.addLine(to: first) } // a single dab still erases
+        return path
+    }
+
+    var isValid: Bool {
+        points.count <= 100_000 && points.allSatisfy { $0.x.isFinite && $0.y.isFinite }
+            && width.isFinite && width > 0 && (from.map { $0.isFinite && $0 >= 0 } ?? true)
+    }
+}
+
+extension RegionEffect {
+    /// Fields added after 0.4 are optional in files so older projects still open.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        blurRadius = try c.decode(CGFloat.self, forKey: .blurRadius)
+        featherRadius = try c.decode(CGFloat.self, forKey: .featherRadius)
+        timeRange = try c.decode(ClosedRange<Double>.self, forKey: .timeRange)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        keyframes = try c.decode([RegionKeyframe].self, forKey: .keyframes)
+        style = try c.decodeIfPresent(CoverStyle.self, forKey: .style) ?? .blur
+        color = try c.decodeIfPresent(RGBAColor.self, forKey: .color) ?? .black
+        groupID = try c.decodeIfPresent(UUID.self, forKey: .groupID)
+        erasures = try c.decodeIfPresent([EraseStroke].self, forKey: .erasures) ?? []
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+    }
 }

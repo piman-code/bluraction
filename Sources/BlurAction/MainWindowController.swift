@@ -48,11 +48,16 @@ final class MainWindowController: NSWindowController {
     private let coverColorRow = NSStackView()
     private let eraserTools = NSStackView()
     private let eraserModeSegment = NSSegmentedControl(labels: ["부분 지우개", "항목 지우개"], trackingMode: .selectOne, target: nil, action: nil)
+    private let eraserTargetPopup = NSPopUpButton()
     private let eraserSizeSlider = NSSlider(value: 24, minValue: 4, maxValue: 120, target: nil, action: nil)
     private let eraserSizeLabel = NSTextField(labelWithString: "크기 24pt")
     private let eraseFromNowCheckbox = NSButton(checkboxWithTitle: "영상: 지금 시점부터 지우기", target: nil, action: nil)
     private let eraserHint = NSTextField(wrappingLabelWithString: "")
     private let arrangeTools = NSStackView()
+    private let textTools = NSStackView()
+    private let textFontPopup = NSPopUpButton()
+    private let textBoldCheckbox = NSButton(checkboxWithTitle: "굵게", target: nil, action: nil)
+    private let textBackgroundPopup = NSPopUpButton()
     /// Extra items picked with Shift-click for grouping (may mix regions and drawings).
     private var multiSelection: [UUID] = []
     private var eraseFromNow = true
@@ -61,8 +66,10 @@ final class MainWindowController: NSWindowController {
     private let trackMotionCheckbox = NSButton(checkboxWithTitle: "움직임 기록", target: nil, action: nil)
     private let trackMotionHint = NSTextField(wrappingLabelWithString: "켜면 옮긴 시점의 위치가 기록되어 영역·그림이 움직임을 따라갑니다. 재생 중 끌어도, 멈춘 채 프레임을 넘기며 옮겨도 됩니다. 끄면 기록된 경로 전체가 함께 옮겨집니다.")
     private let motionTools = NSStackView()
+    private let autoTrackButton = NSButton(title: "선택 항목 자동 추적", target: nil, action: nil)
+    private var trackingCancellation: ObjectTracker.Cancellation?
     private var annotationColorRow: NSStackView?
-    private let regionTitle = NSTextField(labelWithString: "영역")
+    private let regionTitle = NSTextField(labelWithString: "레이어 (위가 앞)")
     private let regionScroll = NSScrollView()
     private let regionList = RegionTableView()
     private let timeRangeEditor = NSStackView()
@@ -76,6 +83,8 @@ final class MainWindowController: NSWindowController {
     private let previousFrameButton = NSButton(title: "◀ 약 1프레임", target: nil, action: nil)
     private let nextFrameButton = NSButton(title: "약 1프레임 ▶", target: nil, action: nil)
     private let recordPositionButton = NSButton(title: "현재 위치 기록", target: nil, action: nil)
+    private let previousKeyButton = NSButton(title: "◀ 이전 기록", target: nil, action: nil)
+    private let nextKeyButton = NSButton(title: "다음 기록 ▶", target: nil, action: nil)
     private let positionX = NSTextField(string: "0")
     private let positionY = NSTextField(string: "0")
     private let positionWidth = NSTextField(string: "0")
@@ -275,8 +284,9 @@ final class MainWindowController: NSWindowController {
         }
         canvas.annotationsBinding = { [weak self] in
             guard let self else { return [] }
-            return self.annotations.map { $0.displayed(at: self.editTime) }
+            return self.annotations.filter { !$0.hidden }.map { $0.displayed(at: self.editTime) }
         }
+        canvas.isLocked = { [weak self] id in self?.layerState(id).locked ?? false }
         canvas.annotationStyleBinding = { [weak self] in
             guard let self else { return (.systemYellow, 4, 0) }
             return (self.annotationColorWell.color, CGFloat(self.annotationWidthSlider.doubleValue), self.selectedFillOpacity)
@@ -305,7 +315,11 @@ final class MainWindowController: NSWindowController {
             if let id, !self.multiSelection.contains(id) { self.multiSelection.removeAll() }
             self.selectedDrawingID = id
             if id != nil { self.selectedID = nil }
-            if let id, let drawing = self.annotations.first(where: { $0.id == id }) { self.showDrawingStyle(drawing) }
+            if let id, let drawing = self.annotations.first(where: { $0.id == id }) {
+                self.showDrawingStyle(drawing)
+                self.showTextStyle(drawing)
+            }
+            self.refreshTextControls()
             self.refreshSelectedEditor()
             self.refreshRegionList()
         }
@@ -313,6 +327,8 @@ final class MainWindowController: NSWindowController {
         canvas.colorPickCancelled = { [weak self] in self?.workflowHint.stringValue = "색 고르기를 취소했습니다." }
         canvas.shortcutHandler = { [weak self] key in self?.handleShortcut(key) ?? false }
         canvas.motionPathProvider = { [weak self] in self?.selectedMotionPath() ?? [] }
+        mainContainer.slider.markerMoved = { [weak self] index, time in self?.retimeKeyframe(index, to: time) }
+        mainContainer.slider.rangeEdgeMoved = { [weak self] start, time in self?.moveRangeEdge(start: start, to: time) }
         canvas.editingBegan = { [weak self] in self?.beginGesture() }
         canvas.editingEnded = { [weak self] in self?.endGesture() }
         canvas.regionsUpdate = { [weak self] updated in
@@ -325,11 +341,14 @@ final class MainWindowController: NSWindowController {
             for index in result.indices where !existing.contains(result[index].shape.id) {
                 self.applyDefaultCover(to: &result[index].effect)
             }
-            // A grouped region moved as a whole carries the rest of its group along.
-            let moves = updated.compactMap { shape -> (move: (group: UUID, dx: CGFloat, dy: CGFloat), source: UUID)? in
-                guard let old = self.pairs.first(where: { $0.shape.id == shape.id }),
-                      let move = self.groupMove(from: RegionEditing.displayed(old, at: self.editTime).boundingRect,
-                                                to: shape.boundingRect, group: old.effect.groupID) else { return nil }
+            // A grouped region moved or resized as a whole carries the rest of its group along
+            // (a polygon vertex edit is not a box change and stays local).
+            let moves = updated.compactMap { shape -> (move: GroupChange, source: UUID)? in
+                guard let old = self.pairs.first(where: { $0.shape.id == shape.id }) else { return nil }
+                let shown = RegionEditing.displayed(old, at: self.editTime)
+                guard Self.sameGeometry(shape, shown.replacing(rect: shape.boundingRect)),
+                      let move = self.groupMove(from: shown.boundingRect, to: shape.boundingRect,
+                                                group: old.effect.groupID) else { return nil }
                 return (move, shape.id)
             }
             if !RegionEditing.equal(self.pairs, result) {
@@ -559,6 +578,24 @@ final class MainWindowController: NSWindowController {
         annotationFillPopup.target = self
         annotationFillPopup.action = #selector(annotationStyleChanged(_:))
         annotationFillPopup.toolTip = "사각형·타원·펜 도형 안을 같은 색으로 채웁니다 (선은 채우지 않음)"
+        textFontPopup.addItems(withTitles: ["시스템 글꼴"] + DrawingAnnotation.availableFontFamilies)
+        textFontPopup.target = self
+        textFontPopup.action = #selector(textStyleChanged(_:))
+        textFontPopup.toolTip = "글꼴"
+        textBoldCheckbox.state = .on
+        textBoldCheckbox.target = self
+        textBoldCheckbox.action = #selector(textStyleChanged(_:))
+        textBackgroundPopup.addItems(withTitles: ["배경 없음", "반투명 검정 배경", "검정 배경", "반투명 흰색 배경", "흰색 배경"])
+        textBackgroundPopup.target = self
+        textBackgroundPopup.action = #selector(textStyleChanged(_:))
+        textBackgroundPopup.toolTip = "글자 뒤에 자막처럼 상자를 깝니다"
+        let fontRow = NSStackView(views: [textFontPopup, textBoldCheckbox])
+        fontRow.spacing = 8
+        textTools.orientation = .vertical
+        textTools.alignment = .leading
+        textTools.spacing = 6
+        for view in [fontRow, textBackgroundPopup] as [NSView] { textTools.addArrangedSubview(view) }
+        textTools.isHidden = true
         annotationWidthSlider.minValue = 1
         annotationWidthSlider.maxValue = 20
         annotationWidthSlider.doubleValue = 4
@@ -590,7 +627,11 @@ final class MainWindowController: NSWindowController {
         motionTools.orientation = .vertical
         motionTools.alignment = .leading
         motionTools.spacing = 4
-        for view in [trackMotionCheckbox, trackMotionHint] { motionTools.addArrangedSubview(view) }
+        autoTrackButton.bezelStyle = .rounded
+        autoTrackButton.target = self
+        autoTrackButton.action = #selector(autoTrackTapped)
+        autoTrackButton.toolTip = "선택한 영역·그림 안의 대상을 지금부터 끝까지 자동으로 따라가며 위치를 기록합니다 (Vision). ⌘Z로 되돌립니다."
+        for view in [trackMotionCheckbox, trackMotionHint, autoTrackButton] as [NSView] { motionTools.addArrangedSubview(view) }
         motionTools.isHidden = true
         eraserHint.font = .systemFont(ofSize: 11)
         eraserHint.textColor = .secondaryLabelColor
@@ -614,7 +655,11 @@ final class MainWindowController: NSWindowController {
         let eraserSizeRow = NSStackView(views: [eraserSizeSlider, eraserSizeLabel])
         eraserSizeRow.spacing = 8
         eraserSizeSlider.widthAnchor.constraint(equalToConstant: 180).isActive = true
-        for view in [eraserModeSegment, eraserSizeRow, eraseFromNowCheckbox, eraserHint] as [NSView] { eraserTools.addArrangedSubview(view) }
+        eraserTargetPopup.addItems(withTitles: ["그림과 블러 모두", "그림만", "블러 영역만"])
+        eraserTargetPopup.target = self
+        eraserTargetPopup.action = #selector(eraserStyleChanged(_:))
+        eraserTargetPopup.toolTip = "부분 지우개가 지울 대상"
+        for view in [eraserModeSegment, eraserTargetPopup, eraserSizeRow, eraseFromNowCheckbox, eraserHint] as [NSView] { eraserTools.addArrangedSubview(view) }
         for (title, action) in [("선택 항목 지우기", #selector(deleteSelectedTapped)), ("블러 영역 모두 지우기", #selector(clearRegionsTapped)),
                                 ("그리기 모두 지우기", #selector(clearDrawingsTapped)), ("모두 지우기", #selector(clearAllTapped))] {
             let button = NSButton(title: title, target: self, action: action)
@@ -706,15 +751,20 @@ final class MainWindowController: NSWindowController {
 
         regionList.headerView = nil
         regionList.rowSizeStyle = .custom
-        regionList.rowHeight = 26
+        regionList.rowHeight = 34
+        regionList.target = self
+        regionList.doubleAction = #selector(layerDoubleClicked)
+        regionList.setAccessibilityLabel("레이어 목록")
         regionList.usesAlternatingRowBackgroundColors = false
         regionList.dataSource = self
         regionList.delegate = self
         // NSTableColumn 필수 — view-based table에서도 column 없으면 row 안 그려짐
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("RegionColumn"))
         col.title = "영역"
-        col.width = 300
-        col.minWidth = 200
+        col.width = 260
+        col.minWidth = 160
+        col.resizingMask = .autoresizingMask
+        regionList.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         regionList.addTableColumn(col)
         regionList.reloadData()
         regionScroll.documentView = regionList
@@ -785,6 +835,10 @@ final class MainWindowController: NSWindowController {
             button.toolTip = "원본 평균 FPS를 기준으로 이동합니다. 가변 프레임률 영상에서는 실제 프레임과 차이가 날 수 있습니다."
         }
         recordPositionButton.target = self; recordPositionButton.action = #selector(recordCurrentPosition)
+        previousKeyButton.target = self; previousKeyButton.action = #selector(previousKeyframe)
+        nextKeyButton.target = self; nextKeyButton.action = #selector(nextKeyframe)
+        previousKeyButton.toolTip = "선택 항목의 이전 기록 위치로 이동 (<)"
+        nextKeyButton.toolTip = "선택 항목의 다음 기록 위치로 이동 (>)"
         recordPositionButton.toolTip = "선택 영역의 현재 모양을 이 시점의 위치 기록으로 저장합니다."
         for (field, title) in zip([positionX, positionY, positionWidth, positionHeight], ["왼쪽 X", "위쪽 Y", "너비", "높이"]) {
             field.placeholderString = title
@@ -806,7 +860,9 @@ final class MainWindowController: NSWindowController {
         preciseTools.orientation = .vertical
         preciseTools.alignment = .leading
         preciseTools.spacing = 6
-        for item in [precisionTitle, frameRow, recordPositionButton, positionRow, sizeRow,
+        let keyRow = NSStackView(views: [previousKeyButton, nextKeyButton])
+        keyRow.spacing = 6
+        for item in [precisionTitle, frameRow, keyRow, recordPositionButton, positionRow, sizeRow,
                      applyPositionButton, coordinateHint] as [NSView] { preciseTools.addArrangedSubview(item) }
 
         let scrollContainer = NSView()
@@ -818,7 +874,7 @@ final class MainWindowController: NSWindowController {
             regionScroll.bottomAnchor.constraint(equalTo: scrollContainer.bottomAnchor),
             regionScroll.leadingAnchor.constraint(equalTo: scrollContainer.leadingAnchor),
             regionScroll.trailingAnchor.constraint(equalTo: scrollContainer.trailingAnchor),
-            scrollContainer.heightAnchor.constraint(equalToConstant: 160)
+            scrollContainer.heightAnchor.constraint(equalToConstant: 200)
         ])
 
         for v in [fileTitle, fileLabel, sourceInfoLabel] { sidebarHeader.addArrangedSubview(v) }
@@ -829,7 +885,7 @@ final class MainWindowController: NSWindowController {
         coverColorWell.widthAnchor.constraint(equalToConstant: 44).isActive = true
         self.annotationColorRow = annotationColorRow
         for v in [workflowHint,
-                  toolSegment, modeSegment, annotationColorRow, annotationWidthTitle, annotationWidthSlider, annotationFillPopup,
+                  toolSegment, modeSegment, annotationColorRow, annotationWidthTitle, annotationWidthSlider, annotationFillPopup, textTools,
                   annotationHint, eraserTools,
                   coverTitle, coverSegment, effectTitle, blurRow, featherTitle, featherRow, coverColorRow, arrangeTools, regionTitle,
                   scrollContainer, timeRangeEditor, motionTools, preciseTools,
@@ -884,7 +940,9 @@ final class MainWindowController: NSWindowController {
         fileMenu.addItem(exportItem)
         fileMenu.addItem(NSMenuItem.separator())
         for (title, action, key, mask) in [("프로젝트 저장…", #selector(saveProjectTapped), "s", NSEvent.ModifierFlags.command),
-                                           ("프로젝트 열기…", #selector(openProjectTapped), "O", [.command, .shift])] {
+                                           ("프로젝트 열기…", #selector(openProjectTapped), "O", [.command, .shift]),
+                                           ("다른 영상에 프로젝트 적용…", #selector(applyProjectToOtherMediaTapped), "", []),
+                                           ("프로젝트 항목 가져오기…", #selector(importProjectItemsTapped), "I", [.command, .shift])] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.keyEquivalentModifierMask = mask
             item.target = self
@@ -1159,7 +1217,96 @@ final class MainWindowController: NSWindowController {
         progressLabel.stringValue = ""
     }
 
-    @objc private func cancelTapped() { exporter.cancel() }
+    @objc private func cancelTapped() {
+        if let trackingCancellation { trackingCancellation.cancel() } else { exporter.cancel() }
+    }
+
+    // MARK: - Automatic tracking (Vision)
+
+    @objc private func autoTrackTapped() {
+        guard doc.hasVideo, !isExporting, let url = doc.url, let id = currentSelectionID, let rect = selectedDisplayedRect,
+              let start = playheadTime, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
+            NSSound.beep()
+            workflowHint.stringValue = "영상에서 따라갈 영역이나 그림을 먼저 선택하세요."
+            return
+        }
+        guard !layerState(id).locked else { NSSound.beep(); workflowHint.stringValue = "잠긴 레이어는 추적할 수 없습니다."; return }
+        let end = selectedTiming.map { $0.lowerBound == 0 && $0.upperBound == 0 ? doc.duration : min(doc.duration, $0.upperBound) } ?? doc.duration
+        guard end - start > 0.05 else { NSSound.beep(); workflowHint.stringValue = "이 항목은 지금 이후로 표시되는 시간이 없습니다."; return }
+        let size = canvas.bounds.size
+        let box = CGRect(x: rect.minX / size.width, y: rect.minY / size.height, width: rect.width / size.width, height: rect.height / size.height)
+        stopPlayback()
+        endGesture()
+        let cancellation = ObjectTracker.Cancellation()
+        trackingCancellation = cancellation
+        setExporting(true)
+        progressIndicator.doubleValue = 0
+        progressIndicator.isHidden = false
+        cancelButton.isHidden = false
+        progressLabel.stringValue = "자동 추적 중… (취소하면 여기까지만 기록)"
+        let indicator = progressIndicator
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try ObjectTracker.track(url: url, from: start, until: end, box: box, cancellation: cancellation) { value in
+                    DispatchQueue.main.async { indicator.doubleValue = value }
+                } }
+            }.value
+            self?.finishTracking(result, itemID: id, start: start, initialBox: box)
+        }
+    }
+
+    private func finishTracking(_ result: Result<ObjectTracker.Outcome, Error>, itemID id: UUID, start: Double, initialBox: CGRect) {
+        trackingCancellation = nil
+        setExporting(false)
+        progressIndicator.isHidden = true
+        cancelButton.isHidden = true
+        progressLabel.stringValue = ""
+        switch result {
+        case .failure(let error):
+            showError(error.localizedDescription)
+        case .success(let outcome):
+            applyTracking(outcome, itemID: id, start: start, initialBox: initialBox)
+        }
+    }
+
+    /// Writes tracked boxes as recorded positions from `start` on (replacing positions recorded in
+    /// that span). Regions take the tracked box; drawings keep their size and follow its movement.
+    /// Internal for tests.
+    func applyTracking(_ outcome: ObjectTracker.Outcome, itemID id: UUID, start: Double, initialBox: CGRect) {
+        let size = canvas.bounds.size
+        guard let last = outcome.samples.last?.time, size.width > 0, size.height > 0 else {
+            workflowHint.stringValue = outcome.cancelled ? "자동 추적을 취소했습니다." : "대상을 따라가지 못했습니다. 영역을 대상에 딱 맞게 잡고 다시 시도하세요."
+            return
+        }
+        func canvasRect(_ box: CGRect) -> CGRect {
+            CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
+        }
+        func merged(_ frames: [RegionKeyframe], anchor: CGRect, tracked: [RegionKeyframe]) -> [RegionKeyframe] {
+            var result = frames.filter { $0.time < start - MotionTrack.sameTime || $0.time > last + MotionTrack.sameTime }
+            for frame in [RegionKeyframe(time: start, rect: anchor)] + tracked { result = MotionTrack.inserting(frame, into: result) }
+            return result
+        }
+        if let index = pairs.firstIndex(where: { $0.shape.id == id }) {
+            let anchor = RegionEditing.displayed(pairs[index], at: start).boundingRect
+            let tracked = outcome.samples.map { RegionKeyframe(time: $0.time, rect: canvasRect($0.box)) }
+            checkpoint()
+            pairs[index].effect.keyframes = merged(pairs[index].effect.keyframes, anchor: anchor, tracked: tracked)
+        } else if let index = annotations.firstIndex(where: { $0.id == id }) {
+            let anchor = annotations[index].displayed(at: start).bounds
+            let origin = canvasRect(initialBox)
+            let tracked = outcome.samples.map { sample -> RegionKeyframe in
+                let box = canvasRect(sample.box)
+                return RegionKeyframe(time: sample.time, rect: anchor.offsetBy(dx: box.midX - origin.midX, dy: box.midY - origin.midY))
+            }
+            checkpoint()
+            annotations[index].keyframes = merged(annotations[index].keyframes, anchor: anchor, tracked: tracked)
+        } else { return }
+        var note = "자동 추적: \(outcome.samples.count)개 위치를 \(format(last))까지 기록했습니다."
+        if outcome.lostTarget { note += " 대상이 가려지거나 사라져 거기서 멈췄습니다." }
+        if outcome.cancelled { note += " (취소한 곳까지)" }
+        workflowHint.stringValue = note + " ⌘Z로 되돌립니다."
+        refreshAfterEdit()
+    }
 
     private var hasEffectiveBlur: Bool {
         pairs.contains { pair in
@@ -1173,7 +1320,7 @@ final class MainWindowController: NSWindowController {
         }
     }
 
-    private var hasEffectiveEffect: Bool { hasEffectiveBlur || !annotations.isEmpty }
+    private var hasEffectiveEffect: Bool { hasEffectiveBlur || annotations.contains { !$0.hidden } }
 
     private func setExporting(_ value: Bool) {
         isExporting = value
@@ -1181,7 +1328,8 @@ final class MainWindowController: NSWindowController {
         exportButton.isEnabled = !value && doc.mediaKind != .none && hasEffectiveEffect
         for control in [blurSlider, featherSlider, toolSegment, modeSegment, annotationColorPopup, annotationWidthSlider, qualityPopup, imageFormatPopup,
                         annotationColorWell, annotationPickButton, annotationFillPopup, coverSegment, coverColorWell, coverPickButton,
-                        trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox] as [NSControl] {
+                        trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox, eraserTargetPopup,
+                        textFontPopup, textBoldCheckbox, textBackgroundPopup] as [NSControl] {
             control.isEnabled = !value
         }
         mainContainer.playPauseButton.isEnabled = !value && doc.hasVideo
@@ -1265,6 +1413,7 @@ final class MainWindowController: NSWindowController {
             case 2: canvasMode = .drawLine; case 3: canvasMode = .drawFreehand; case 4: canvasMode = .drawArrow
             case 5: canvasMode = .drawText; default: canvasMode = .drawRectangle }
             annotationWidthTitle.stringValue = canvasMode == .drawText ? "글자 크기" : "선 굵기"
+            refreshTextControls()
             annotationFillPopup.isEnabled = [.drawRectangle, .drawEllipse, .drawFreehand].contains(canvasMode)
         } else {
             switch sender.selectedSegment { case 0: canvasMode = .rectangle; case 1: canvasMode = .ellipse
@@ -1295,6 +1444,7 @@ final class MainWindowController: NSWindowController {
         eraserTools.isHidden = !erasing
         canvas.resetInteraction()
         refreshCoverControls()
+        refreshTextControls()
     }
 
     /// Cover controls follow the blur tool and the selected region's (or next region's) style.
@@ -1483,26 +1633,35 @@ final class MainWindowController: NSWindowController {
     /// One undo step. Internal for tests (the confirmation sheet cannot be clicked there).
     func clearItems(_ scope: ClearScope) {
         endGesture()
-        eraseItems(regions: scope == .drawings ? [] : Set(pairs.map(\.shape.id)),
-                   drawings: scope == .regions ? [] : Set(annotations.map(\.id)))
+        // Locked layers are kept.
+        eraseItems(regions: scope == .drawings ? [] : Set(pairs.filter { !$0.effect.locked }.map(\.shape.id)),
+                   drawings: scope == .regions ? [] : Set(annotations.filter { !$0.locked }.map(\.id)))
     }
 
+    /// ⌘D: copies the selected item, or its whole group (as a new group), 12pt down-right.
     @objc private func duplicateSelectedTapped() {
-        guard !isExporting else { return }
+        guard !isExporting, let selected = currentSelectionID else { NSSound.beep(); return }
         endGesture()
         let dx: CGFloat = 12, dy: CGFloat = -12
         func moved(_ r: CGRect) -> CGRect { r.offsetBy(dx: dx, dy: dy) }
-        if let id = selectedDrawingID, let drawing = annotations.first(where: { $0.id == id }) {
+        let group = groupIDOfItem(selected)
+        let newGroup: UUID? = group == nil ? nil : UUID()
+        func included(_ id: UUID, _ itemGroup: UUID?) -> Bool { id == selected || (group != nil && itemGroup == group) }
+        var copiedSelection: UUID?
+        var newDrawings: [DrawingAnnotation] = []
+        for drawing in annotations where included(drawing.id, drawing.groupID) {
             var copy = drawing
             copy.id = UUID()
-            copy.groupID = nil
+            copy.groupID = newGroup
+            copy.name = drawing.name.map { $0 + " 사본" }
             copy.points = drawing.points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
             copy.erasures = drawing.replacingBounds(drawing.bounds.offsetBy(dx: dx, dy: dy)).erasures
             copy.keyframes = drawing.keyframes.map { RegionKeyframe(time: $0.time, rect: moved($0.rect)) }
-            checkpoint()
-            annotations.append(copy)
-            canvas.selectAnnotation(id: copy.id)
-        } else if let id = selectedID, let pair = pairs.first(where: { $0.shape.id == id }) {
+            if drawing.id == selected { copiedSelection = copy.id }
+            newDrawings.append(copy)
+        }
+        var newPairs: [RegionEditing.Pair] = []
+        for pair in pairs where included(pair.shape.id, pair.effect.groupID) {
             let newID = UUID()
             let shape: RegionShape
             switch pair.shape {
@@ -1511,12 +1670,20 @@ final class MainWindowController: NSWindowController {
             case .polygon(_, let points): shape = .polygon(id: newID, points: points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) })
             }
             var effect = pair.effect
-            effect.groupID = nil
+            effect.groupID = newGroup
+            effect.name = pair.effect.name.map { $0 + " 사본" }
             effect.keyframes = effect.keyframes.map { RegionKeyframe(time: $0.time, rect: moved($0.rect)) }
-            checkpoint()
-            pairs.append((shape, effect))
-            canvas.selectRegion(id: newID)
-        } else { NSSound.beep(); return }
+            effect.erasures = effect.erasures.map { $0.mapped(from: pair.shape.boundingRect, to: shape.boundingRect) }
+            if pair.shape.id == selected { copiedSelection = newID }
+            newPairs.append((shape, effect))
+        }
+        guard let copiedSelection else { NSSound.beep(); return }
+        checkpoint()
+        annotations.append(contentsOf: newDrawings)
+        pairs.append(contentsOf: newPairs)
+        if newPairs.contains(where: { $0.shape.id == copiedSelection }) { canvas.selectRegion(id: copiedSelection) }
+        else { canvas.selectAnnotation(id: copiedSelection) }
+        if newGroup != nil { workflowHint.stringValue = "그룹 전체(\(newDrawings.count + newPairs.count)개)를 복제했습니다." }
         refreshAfterEdit()
     }
 
@@ -1528,6 +1695,8 @@ final class MainWindowController: NSWindowController {
         case "i": startColorPick(toolSegment.selectedSegment == 1 ? .drawing : .cover)
         case ",": previousFrame()
         case ".": nextFrame()
+        case "<": previousKeyframe()
+        case ">": nextKeyframe()
         default: return false
         }
         return true
@@ -1553,9 +1722,10 @@ final class MainWindowController: NSWindowController {
         let size = Int(eraserSizeSlider.doubleValue.rounded())
         eraserSizeLabel.stringValue = "크기 \(size)pt"
         eraserSizeSlider.isEnabled = eraserIsBrush && !isExporting
+        eraserTargetPopup.isHidden = !eraserIsBrush
         eraseFromNowCheckbox.isHidden = !doc.hasVideo
         eraserHint.stringValue = eraserIsBrush
-            ? "그림 위를 문지르면 그 부분만 지웁니다. 지운 자리는 그림을 옮기거나 순서를 바꿔도 함께 움직이고, 영상에서는 지운 시점부터 적용됩니다. 블러 영역은 항목 지우개로 지웁니다."
+            ? "문지른 부분만 지웁니다(블러 영역을 지우면 그 자리는 가려지지 않습니다). 지운 자리는 항목을 옮기거나 순서를 바꿔도 함께 움직이고, 영상에서는 지운 시점부터 적용됩니다."
             : "영역이나 그림을 클릭하거나 문질러 통째로 지웁니다. 영상에서는 켜 두면 지금 시점부터 사라지고 그 전 모습은 남습니다."
     }
 
@@ -1596,34 +1766,50 @@ final class MainWindowController: NSWindowController {
         guard !isExporting, !points.isEmpty, width.isFinite, width > 0 else { return }
         let time = editTime
         let from: Double? = doc.hasVideo && eraseFromNow ? time : nil
-        let area = DrawingAnnotation.strokePath(points)
+        let area = EraseStroke.path(points)
             .copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 1).boundingBoxOfPath
-        var updated = annotations
+        let target = eraserTargetPopup.indexOfSelectedItem // 0 all, 1 drawings, 2 blur regions
+        var drawings = annotations, regions = pairs
         var touched = 0
-        for index in updated.indices where updated[index].isVisible(at: time) {
-            let shown = updated[index].displayed(at: time)
-            let reach = shown.lineWidth / 2 + 2
-            guard shown.bounds.insetBy(dx: -reach, dy: -reach).intersects(area) else { continue }
-            let base = updated[index].bounds
-            updated[index].erasures.append(DrawingAnnotation.Erasure(
-                points: points.map { MotionTrack.map($0, from: shown.bounds, to: base) }, width: width, from: from))
-            touched += 1
+        if target != 2 {
+            for index in drawings.indices where drawings[index].isVisible(at: time) && !drawings[index].locked {
+                let shown = drawings[index].displayed(at: time)
+                let reach = shown.lineWidth / 2 + 2
+                guard shown.bounds.insetBy(dx: -reach, dy: -reach).intersects(area) else { continue }
+                drawings[index].erasures.append(EraseStroke(points: points, width: width, from: from)
+                    .mapped(from: shown.bounds, to: drawings[index].bounds))
+                touched += 1
+            }
+        }
+        if target != 1 {
+            for index in regions.indices where regions[index].effect.isActive(at: time) && !regions[index].effect.locked {
+                let shown = RegionEditing.displayed(regions[index], at: time).boundingRect
+                guard shown.intersects(area) else { continue }
+                regions[index].effect.erasures.append(EraseStroke(points: points, width: width, from: from)
+                    .mapped(from: shown, to: regions[index].shape.boundingRect))
+                touched += 1
+            }
         }
         guard touched > 0 else {
-            workflowHint.stringValue = "지울 그림이 없습니다. 블러 영역은 항목 지우개로 지웁니다."
+            workflowHint.stringValue = "문지른 자리에 지울 항목이 없습니다."
             return
         }
         if gestureSnapshot == nil { checkpoint() }
-        annotations = updated
+        annotations = drawings
+        pairs = regions
         refreshAfterEdit()
     }
 
     @objc private func restoreErasedFromMenu(_ sender: NSMenuItem) {
-        guard !isExporting, let id = sender.representedObject as? UUID,
-              let index = annotations.firstIndex(where: { $0.id == id }), !annotations[index].erasures.isEmpty else { return }
+        guard !isExporting, let id = sender.representedObject as? UUID else { return }
         endGesture()
-        checkpoint()
-        annotations[index].erasures.removeAll()
+        if let index = annotations.firstIndex(where: { $0.id == id }), !annotations[index].erasures.isEmpty {
+            checkpoint()
+            annotations[index].erasures.removeAll()
+        } else if let index = pairs.firstIndex(where: { $0.shape.id == id }), !pairs[index].effect.erasures.isEmpty {
+            checkpoint()
+            pairs[index].effect.erasures.removeAll()
+        } else { return }
         refreshAfterEdit()
     }
 
@@ -1634,26 +1820,59 @@ final class MainWindowController: NSWindowController {
         addText(text, at: point)
     }
 
+    /// Multi-line prompt (Return adds a line; the 확인 button confirms).
     private func askText(title: String, initial: String) -> String? {
         let alert = NSAlert()
         alert.messageText = title
-        alert.informativeText = "한 줄 글자를 입력하세요. 넣은 뒤 끌어서 옮기고 모서리로 크기를 바꿀 수 있습니다."
-        let field = NSTextField(string: initial)
-        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
-        alert.accessoryView = field
+        alert.informativeText = "여러 줄로 쓸 수 있습니다(Return으로 줄바꿈). 넣은 뒤 끌어서 옮기고 모서리로 크기를 바꿀 수 있습니다."
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 280, height: 90))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let view = NSTextView(frame: scroll.bounds)
+        view.string = initial
+        view.font = .systemFont(ofSize: 13)
+        view.isRichText = false
+        view.autoresizingMask = [.width]
+        view.setAccessibilityLabel("글자 내용")
+        scroll.documentView = view
+        alert.accessoryView = scroll
         alert.addButton(withTitle: "확인")
         alert.addButton(withTitle: "취소")
-        alert.window.initialFirstResponder = field
+        alert.window.initialFirstResponder = view
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : String(text.prefix(500))
+        return Self.cleanedText(view.string)
     }
 
-    /// Places a one-line text with its top-left corner at `point`. Internal for tests.
+    /// Trims outer blank space and lines; keeps inner line breaks; caps the length.
+    static func cleanedText(_ raw: String) -> String? {
+        let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : String(text.prefix(1000))
+    }
+
+    private var selectedTextFont: String? {
+        let index = textFontPopup.indexOfSelectedItem
+        return index <= 0 ? nil : textFontPopup.titleOfSelectedItem
+    }
+
+    private var selectedTextBackground: RGBAColor? {
+        switch textBackgroundPopup.indexOfSelectedItem {
+        case 1: return RGBAColor(red: 0, green: 0, blue: 0, alpha: 0.55)
+        case 2: return RGBAColor(red: 0, green: 0, blue: 0, alpha: 1)
+        case 3: return RGBAColor(red: 1, green: 1, blue: 1, alpha: 0.7)
+        case 4: return RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)
+        default: return nil
+        }
+    }
+
+    /// Places text with its top-left corner at `point`, using the current text settings. Internal for tests.
     func addText(_ string: String, at point: CGPoint) {
-        guard !isExporting, !string.isEmpty else { return }
+        guard !isExporting, let string = Self.cleanedText(string) else { return }
         let size = DrawingAnnotation.fontSize(forLineWidth: CGFloat(annotationWidthSlider.doubleValue))
-        var drawing = DrawingAnnotation.text(string, at: .zero, fontSize: size, color: annotationColorWell.color)
+        var drawing = DrawingAnnotation.text(string, at: .zero, fontSize: size, color: annotationColorWell.color,
+                                             fontName: selectedTextFont, bold: textBoldCheckbox.state == .on,
+                                             background: selectedTextBackground)
         let box = drawing.bounds
         let origin = CGPoint(x: min(max(0, point.x), max(0, canvas.bounds.width - box.width)),
                              y: min(max(0, point.y - box.height), max(0, canvas.bounds.height - box.height)))
@@ -1661,26 +1880,42 @@ final class MainWindowController: NSWindowController {
         addAnnotation(drawing)
     }
 
-    /// Edits the text and widens/narrows its box (and recorded boxes) by the new natural width.
+    /// Edits the text, keeping its size and top-left corner. Internal for tests.
     func replaceText(of id: UUID, with string: String) {
-        guard !isExporting, !string.isEmpty, let index = annotations.firstIndex(where: { $0.id == id }),
+        guard !isExporting, let string = Self.cleanedText(string), let index = annotations.firstIndex(where: { $0.id == id }),
               annotations[index].kind == .text, annotations[index].text != string else { return }
-        let old = annotations[index]
-        let size = old.bounds.height / 1.25
-        let oldWidth = DrawingAnnotation.text(old.text, at: .zero, fontSize: size, color: .white).bounds.width
-        let newWidth = DrawingAnnotation.text(string, at: .zero, fontSize: size, color: .white).bounds.width
-        let ratio = oldWidth > 0 ? newWidth / oldWidth : 1
-        var updated = old
-        updated.text = string
-        let box = old.bounds
-        updated.points = [box.origin, CGPoint(x: box.minX + box.width * ratio, y: box.maxY)]
-        updated.erasures = old.replacingBounds(updated.bounds).erasures
-        updated.keyframes = old.keyframes.map {
-            RegionKeyframe(time: $0.time, rect: CGRect(x: $0.rect.minX, y: $0.rect.minY, width: $0.rect.width * ratio, height: $0.rect.height))
-        }
+        checkpoint()
+        annotations[index] = annotations[index].withText(string)
+        refreshAfterEdit()
+    }
+
+    /// Font, weight and background controls: set the next text and restyle a selected text.
+    @objc private func textStyleChanged(_ sender: Any?) {
+        guard !isExporting, let id = selectedDrawingID, let index = annotations.firstIndex(where: { $0.id == id }),
+              annotations[index].kind == .text else { return }
+        var updated = annotations[index].withText(annotations[index].text, fontName: .some(selectedTextFont),
+                                                  bold: textBoldCheckbox.state == .on)
+        updated.textBackground = selectedTextBackground
+        guard updated != annotations[index] else { return }
         checkpoint()
         annotations[index] = updated
         refreshAfterEdit()
+    }
+
+    private func showTextStyle(_ drawing: DrawingAnnotation) {
+        guard drawing.kind == .text else { return }
+        if let font = drawing.fontName, textFontPopup.itemTitles.contains(font) { textFontPopup.selectItem(withTitle: font) }
+        else { textFontPopup.selectItem(at: 0) }
+        textBoldCheckbox.state = drawing.bold ? .on : .off
+        let options: [RGBAColor?] = [nil, RGBAColor(red: 0, green: 0, blue: 0, alpha: 0.55), RGBAColor(red: 0, green: 0, blue: 0, alpha: 1),
+                                     RGBAColor(red: 1, green: 1, blue: 1, alpha: 0.7), RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)]
+        textBackgroundPopup.selectItem(at: options.firstIndex(where: { $0 == drawing.textBackground }) ?? 0)
+    }
+
+    /// Text controls show in text mode or while a text drawing is selected.
+    private func refreshTextControls() {
+        let selectedText = selectedDrawingID.flatMap { id in annotations.first { $0.id == id } }?.kind == .text
+        textTools.isHidden = !(toolSegment.selectedSegment == 1 && (canvasMode == .drawText || selectedText))
     }
 
     private func editText(_ id: UUID) {
@@ -1753,30 +1988,153 @@ final class MainWindowController: NSWindowController {
         refreshAfterEdit()
     }
 
-    /// A pure move (same size) of a grouped item, as (group, dx, dy).
-    private func groupMove(from old: CGRect, to new: CGRect, group: UUID?) -> (group: UUID, dx: CGFloat, dy: CGFloat)? {
-        guard let group, abs(old.width - new.width) < 0.01, abs(old.height - new.height) < 0.01,
-              old.minX != new.minX || old.minY != new.minY else { return nil }
-        return (group, new.minX - old.minX, new.minY - old.minY)
+    /// Equal up to rounding (a polygon moved by its box is not bit-identical).
+    private static func sameGeometry(_ a: RegionShape, _ b: RegionShape) -> Bool {
+        func points(_ shape: RegionShape) -> [CGPoint] {
+            if case .polygon(_, let pts) = shape { return pts }
+            let r = shape.boundingRect
+            return [r.origin, CGPoint(x: r.maxX, y: r.maxY)]
+        }
+        let pa = points(a), pb = points(b)
+        return pa.count == pb.count && zip(pa, pb).allSatisfy { abs($0.x - $1.x) < 0.01 && abs($0.y - $1.y) < 0.01 }
     }
 
-    /// Moves the other members of a group by the same offset, with the same motion rules.
-    private func moveGroupMembers(_ move: (group: UUID, dx: CGFloat, dy: CGFloat), except source: UUID) {
+    /// A grouped item's box change; the other members get the same change relative to it.
+    private struct GroupChange {
+        let group: UUID
+        let from: CGRect
+        let to: CGRect
+
+        /// Maps another member's box: same offset for a move, scaled about the edited box for a resize.
+        func apply(_ rect: CGRect) -> CGRect {
+            let sx = from.width > 0 ? to.width / from.width : 1
+            let sy = from.height > 0 ? to.height / from.height : 1
+            return CGRect(x: to.minX + (rect.minX - from.minX) * sx, y: to.minY + (rect.minY - from.minY) * sy,
+                          width: rect.width * sx, height: rect.height * sy)
+        }
+    }
+
+    private func groupMove(from old: CGRect, to new: CGRect, group: UUID?) -> GroupChange? {
+        guard let group, old != new else { return nil }
+        return GroupChange(group: group, from: old, to: new)
+    }
+
+    /// Applies the same box change to the other members of a group, with the same motion rules.
+    private func moveGroupMembers(_ move: GroupChange, except source: UUID) {
         let shapes = pairs.map { pair -> RegionShape in
             let shown = RegionEditing.displayed(pair, at: editTime)
-            guard pair.effect.groupID == move.group, pair.shape.id != source else { return shown }
-            return shown.replacing(rect: shown.boundingRect.offsetBy(dx: move.dx, dy: move.dy))
+            guard pair.effect.groupID == move.group, pair.shape.id != source, !pair.effect.locked else { return shown }
+            return shown.replacing(rect: move.apply(shown.boundingRect))
         }
         pairs = RegionEditing.updating(shapes, in: pairs, time: editTime, recording: motionRecording,
                                        anchorTime: gestureStartTime, anchorPairs: gestureSnapshot)
-        for index in annotations.indices where annotations[index].groupID == move.group && annotations[index].id != source {
-            var moved = annotations[index].displayed(at: editTime)
-            moved.points = moved.points.map { CGPoint(x: $0.x + move.dx, y: $0.y + move.dy) }
+        for index in annotations.indices where annotations[index].groupID == move.group && annotations[index].id != source
+            && !annotations[index].locked {
+            let shown = annotations[index].displayed(at: editTime)
+            let moved = shown.replacingBounds(move.apply(shown.bounds))
             let anchor = gestureStartTime.flatMap { time in
                 gestureAnnotations?.first(where: { $0.id == moved.id }).map { (time: time, annotation: $0) }
             }
             annotations[index] = annotations[index].applyingEdit(moved, time: editTime, recording: motionRecording, anchor: anchor)
         }
+    }
+
+    // MARK: - Layers: name, visibility, lock
+
+    private func layerState(_ id: UUID) -> (hidden: Bool, locked: Bool) {
+        if let pair = pairs.first(where: { $0.shape.id == id }) { return (!pair.effect.enabled, pair.effect.locked) }
+        if let drawing = annotations.first(where: { $0.id == id }) { return (drawing.hidden, drawing.locked) }
+        return (false, false)
+    }
+
+    /// Hidden = left out of preview and export (regions use `enabled`). Internal for tests.
+    func setLayerHidden(_ id: UUID, _ hidden: Bool) {
+        guard !isExporting else { return }
+        endGesture()
+        if let index = pairs.firstIndex(where: { $0.shape.id == id }), pairs[index].effect.enabled == hidden {
+            checkpoint()
+            pairs[index].effect.enabled = !hidden
+        } else if let index = annotations.firstIndex(where: { $0.id == id }), annotations[index].hidden != hidden {
+            checkpoint()
+            annotations[index].hidden = hidden
+            if hidden, selectedDrawingID == id { canvas.clearAnnotationSelection() }
+        } else { return }
+        refreshAfterEdit()
+    }
+
+    /// Locked = cannot be picked, moved or erased on the canvas. Internal for tests.
+    func setLayerLocked(_ id: UUID, _ locked: Bool) {
+        guard !isExporting else { return }
+        endGesture()
+        if let index = pairs.firstIndex(where: { $0.shape.id == id }), pairs[index].effect.locked != locked {
+            checkpoint()
+            pairs[index].effect.locked = locked
+        } else if let index = annotations.firstIndex(where: { $0.id == id }), annotations[index].locked != locked {
+            checkpoint()
+            annotations[index].locked = locked
+        } else { return }
+        refreshAfterEdit()
+    }
+
+    /// Empty or whitespace names fall back to the automatic name. Internal for tests.
+    func renameLayer(_ id: UUID, to name: String) {
+        guard !isExporting else { return }
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        let value: String? = trimmed.isEmpty ? nil : trimmed
+        endGesture()
+        if let index = pairs.firstIndex(where: { $0.shape.id == id }), pairs[index].effect.name != value {
+            checkpoint()
+            pairs[index].effect.name = value
+        } else if let index = annotations.firstIndex(where: { $0.id == id }), annotations[index].name != value {
+            checkpoint()
+            annotations[index].name = value
+        } else { return }
+        refreshAfterEdit()
+    }
+
+    private func layerID(from sender: Any?) -> UUID? {
+        if let item = sender as? NSMenuItem { return item.representedObject as? UUID }
+        return (sender as? NSView)?.identifier.flatMap { UUID(uuidString: $0.rawValue) }
+    }
+
+    @objc private func toggleLayerVisibility(_ sender: Any?) {
+        guard let id = layerID(from: sender) else { return }
+        setLayerHidden(id, !layerState(id).hidden)
+    }
+
+    @objc private func toggleLayerLock(_ sender: Any?) {
+        guard let id = layerID(from: sender) else { return }
+        setLayerLocked(id, !layerState(id).locked)
+    }
+
+    @objc private func toggleVisibilityFromMenu(_ sender: NSMenuItem) { toggleLayerVisibility(sender) }
+    @objc private func toggleLockFromMenu(_ sender: NSMenuItem) { toggleLayerLock(sender) }
+
+    @objc private func renameFromMenu(_ sender: NSMenuItem) {
+        guard let id = layerID(from: sender) else { return }
+        promptRename(id)
+    }
+
+    @objc private func layerDoubleClicked() {
+        let rows = layerRows
+        let row = regionList.clickedRow
+        guard row >= 0, row < rows.count else { return }
+        promptRename(rows[row].id)
+    }
+
+    private func promptRename(_ id: UUID) {
+        let alert = NSAlert()
+        alert.messageText = "레이어 이름"
+        alert.informativeText = "비워 두면 자동 이름을 씁니다."
+        let field = NSTextField(string: layerName(of: id))
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "확인")
+        alert.addButton(withTitle: "취소")
+        alert.window.initialFirstResponder = field
+        // Leaving the shown (possibly automatic) name unchanged must not freeze it as a custom name.
+        guard alert.runModal() == .alertFirstButtonReturn, field.stringValue != layerName(of: id) else { return }
+        renameLayer(id, to: field.stringValue)
     }
 
     // MARK: - Stacking order
@@ -1851,30 +2209,101 @@ final class MainWindowController: NSWindowController {
         } catch { showError(error.localizedDescription) }
     }
 
-    @objc private func openProjectTapped() {
-        guard !isExporting else { return }
+    /// Asks for a `.bluraction` file and decodes it (validated). Returns the project and its URL.
+    private func chooseProject(message: String? = nil) -> (ProjectFile, URL)? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [ProjectFile.contentType]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let message { panel.message = message }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
             let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
             guard values.isRegularFile == true else { throw ProjectFile.ProjectError.invalidContent }
             guard (values.fileSize ?? 0) <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
-            let project = try ProjectFile.decode(Data(contentsOf: url))
-            var media = project.mediaURL(relativeTo: url)
-            if !VideoCanvasView.isSupportedDropFile(media) {
-                // The media moved or was renamed: let the person point to it.
-                let locate = NSOpenPanel()
-                locate.message = "프로젝트의 원본(\(media.lastPathComponent))을 찾을 수 없습니다. 원본 파일을 선택하세요."
-                locate.allowsMultipleSelection = false
-                locate.canChooseDirectories = false
-                guard locate.runModal() == .OK, let found = locate.url else { return }
-                media = found
+            return (try ProjectFile.decode(Data(contentsOf: url)), url)
+        } catch {
+            showError(error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func chooseMedia(message: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.message = message
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        var types: [UTType] = [.movie, .quickTimeMovie, .mpeg4Movie, .video, .image]
+        for identifier in ["public.heic", "public.heif", "org.webmproject.webp", "com.compuserve.gif"] {
+            if let type = UTType(identifier) { types.append(type) }
+        }
+        panel.allowedContentTypes = types
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url
+    }
+
+    @objc private func openProjectTapped() {
+        guard !isExporting, let (project, url) = chooseProject() else { return }
+        var media = project.mediaURL(relativeTo: url)
+        if !VideoCanvasView.isSupportedDropFile(media) {
+            // The media moved or was renamed: let the person point to it.
+            guard let found = chooseMedia(message: "프로젝트의 원본(\(media.lastPathComponent))을 찾을 수 없습니다. 원본 파일을 선택하세요.") else { return }
+            media = found
+        }
+        openProject(project, media: media)
+    }
+
+    /// Template use: the project's items (normalized positions, times, styles) on another video or image.
+    @objc private func applyProjectToOtherMediaTapped() {
+        guard !isExporting, let (project, _) = chooseProject(message: "적용할 프로젝트(템플릿)를 고르세요."),
+              let media = chooseMedia(message: "프로젝트 항목을 적용할 영상이나 이미지를 고르세요.") else { return }
+        openProject(project, media: media)
+    }
+
+    @objc private func importProjectItemsTapped() {
+        guard !isExporting, doc.mediaKind != .none,
+              let (project, _) = chooseProject(message: "현재 파일에 항목을 더할 프로젝트를 고르세요.") else { return }
+        importProjectItems(project)
+    }
+
+    /// Adds a project's items to the current session as new items (new IDs and group IDs, fitted to
+    /// the current canvas; times past the end are clipped). One undo step. Internal for tests.
+    func importProjectItems(_ project: ProjectFile) {
+        guard !isExporting, canvas.bounds.width > 0, canvas.bounds.height > 0 else { return }
+        endGesture()
+        let unit = CGSize(width: 1, height: 1), size = canvas.bounds.size
+        var groups: [UUID: UUID] = [:]
+        func newGroup(_ id: UUID?) -> UUID? { id.map { old in groups[old] ?? { let new = UUID(); groups[old] = new; return new }() } }
+        func clipped(_ range: ClosedRange<Double>) -> ClosedRange<Double> {
+            guard doc.hasVideo, !(range.lowerBound == 0 && range.upperBound == 0), range.upperBound > doc.duration else { return range }
+            return min(range.lowerBound, doc.duration)...doc.duration
+        }
+        let imported = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size).map { pair -> RegionEditing.Pair in
+            let id = UUID()
+            let shape: RegionShape
+            switch pair.shape {
+            case .rectangle(_, let o, let s): shape = .rectangle(id: id, origin: o, size: s)
+            case .ellipse(_, let o, let s): shape = .ellipse(id: id, origin: o, size: s)
+            case .polygon(_, let p): shape = .polygon(id: id, points: p)
             }
-            openProject(project, media: media)
-        } catch { showError(error.localizedDescription) }
+            var effect = pair.effect
+            effect.groupID = newGroup(effect.groupID)
+            effect.timeRange = clipped(effect.timeRange)
+            return (shape, effect)
+        }
+        let drawings = project.drawings.map { drawing -> DrawingAnnotation in
+            var copy = drawing.scaled(from: unit, to: size)
+            copy.id = UUID()
+            copy.groupID = newGroup(drawing.groupID)
+            copy.timeRange = clipped(copy.timeRange)
+            return copy
+        }
+        guard !imported.isEmpty || !drawings.isEmpty else { NSSound.beep(); return }
+        checkpoint()
+        pairs.append(contentsOf: imported)
+        annotations.append(contentsOf: drawings)
+        workflowHint.stringValue = "프로젝트에서 영역 \(imported.count)개 · 그림 \(drawings.count)개를 가져왔습니다."
+        refreshAfterEdit()
     }
 
     /// Loads `media`, then applies the project's items once the media is laid out. Internal for tests.
@@ -1906,6 +2335,61 @@ final class MainWindowController: NSWindowController {
         if let id = selectedID, let pair = pairs.first(where: { $0.shape.id == id }) { return pair.effect.keyframes }
         if let id = selectedDrawingID, let drawing = annotations.first(where: { $0.id == id }) { return drawing.keyframes }
         return []
+    }
+
+    private var selectedTiming: ClosedRange<Double>? {
+        if let id = selectedID, let pair = pairs.first(where: { $0.shape.id == id }) { return pair.effect.timeRange }
+        if let id = selectedDrawingID, let drawing = annotations.first(where: { $0.id == id }) { return drawing.timeRange }
+        return nil
+    }
+
+    @objc private func previousKeyframe() {
+        let now = canvas.currentVideoTime
+        guard doc.hasVideo, let time = selectedKeyframes.map(\.time).filter({ $0 < now - MotionTrack.sameTime }).max() else { NSSound.beep(); return }
+        stopPlayback()
+        seek(to: time)
+    }
+
+    @objc private func nextKeyframe() {
+        let now = canvas.currentVideoTime
+        guard doc.hasVideo, let time = selectedKeyframes.map(\.time).filter({ $0 > now + MotionTrack.sameTime }).min() else { NSSound.beep(); return }
+        stopPlayback()
+        seek(to: time)
+    }
+
+    /// Moves recorded position `index` of the selected item to `time`, kept between its neighbours.
+    /// Internal for tests (the timeline strip calls it after a drag).
+    func retimeKeyframe(_ index: Int, to time: Double) {
+        guard doc.hasVideo, !isExporting, time.isFinite else { return }
+        func retimed(_ frames: [RegionKeyframe]) -> [RegionKeyframe]? {
+            guard frames.indices.contains(index) else { return nil }
+            let low = index > 0 ? frames[index - 1].time + MotionTrack.sameTime * 2 : 0
+            let high = index < frames.count - 1 ? frames[index + 1].time - MotionTrack.sameTime * 2 : doc.duration
+            guard low <= high else { return nil }
+            var result = frames
+            result[index].time = min(high, max(low, time))
+            return result == frames ? nil : result
+        }
+        endGesture()
+        if let id = selectedID, let i = pairs.firstIndex(where: { $0.shape.id == id }), let frames = retimed(pairs[i].effect.keyframes) {
+            checkpoint()
+            pairs[i].effect.keyframes = frames
+        } else if let id = selectedDrawingID, let i = annotations.firstIndex(where: { $0.id == id }), let frames = retimed(annotations[i].keyframes) {
+            checkpoint()
+            annotations[i].keyframes = frames
+        } else { return }
+        refreshAfterEdit()
+    }
+
+    /// Drags of the timeline band's ends. Internal for tests.
+    func moveRangeEdge(start: Bool, to time: Double) {
+        guard doc.hasVideo, !isExporting, time.isFinite, let current = selectedTiming else { return }
+        let range = current.lowerBound == 0 && current.upperBound == 0 ? 0...doc.duration : current
+        let t = min(doc.duration, max(0, time))
+        let lower = start ? t : range.lowerBound, upper = start ? range.upperBound : t
+        guard upper - lower > MotionTrack.sameTime else { NSSound.beep(); return }
+        endGesture()
+        setSelectedTimeRange(lower == 0 && abs(upper - doc.duration) < MotionTrack.sameTime ? 0...0 : lower...upper)
     }
 
     private func selectedMotionPath() -> [CGPoint] {
@@ -1978,11 +2462,15 @@ final class MainWindowController: NSWindowController {
             control.isEnabled = canEditPosition
         }
         recordPositionButton.isEnabled = canEditRange && playheadTime != nil
+        autoTrackButton.isEnabled = doc.hasVideo && hasSelection && !isExporting
         let canStep = doc.hasVideo && !isExporting && doc.videoFPS > 0
         previousFrameButton.isEnabled = canStep
         nextFrameButton.isEnabled = canStep
         rangeHint.textColor = .secondaryLabelColor
         mainContainer.slider.markers = doc.hasVideo ? selectedKeyframes.map(\.time) : []
+        mainContainer.slider.rangeBand = doc.hasVideo ? selectedTiming.map { $0.lowerBound == 0 && $0.upperBound == 0 ? 0...doc.duration : $0 } : nil
+        previousKeyButton.isEnabled = doc.hasVideo && !isExporting && selectedKeyframes.contains { $0.time < canvas.currentVideoTime - MotionTrack.sameTime }
+        nextKeyButton.isEnabled = doc.hasVideo && !isExporting && selectedKeyframes.contains { $0.time > canvas.currentVideoTime + MotionTrack.sameTime }
         refreshCoverControls()
         canvas.refreshOverlay()
         let timing: (range: ClosedRange<Double>, entire: Bool)
@@ -2077,6 +2565,11 @@ final class MainWindowController: NSWindowController {
 
     private func deleteSelected() {
         guard !isExporting else { return }
+        if let id = currentSelectionID, layerState(id).locked {
+            NSSound.beep()
+            workflowHint.stringValue = "잠긴 레이어입니다. 레이어 목록에서 잠금을 풀면 지울 수 있습니다."
+            return
+        }
         if let id = selectedDrawingID {
             endGesture()
             eraseItems(regions: [], drawings: [id])
@@ -2149,6 +2642,8 @@ final class MainWindowController: NSWindowController {
         fitWindowToMedia(doc.appliedVideoSize)
         frameRow.isHidden = !doc.hasVideo
         recordPositionButton.isHidden = !doc.hasVideo
+        previousKeyButton.isHidden = !doc.hasVideo
+        nextKeyButton.isHidden = !doc.hasVideo
         workflowHint.stringValue = doc.hasVideo
             ? "① 영역 그리기  ② 블러·시간 조정  ③ 필요하면 위치 기록  ④ 내보내기"
             : "① 영역 그리기  ② 블러·경계 조정  ③ 화질 선택  ④ 내보내기"
@@ -2259,7 +2754,7 @@ final class MainWindowController: NSWindowController {
         refreshingList = true
         defer { refreshingList = false }
         regionList.reloadData()
-        if let id = selectedID, let row = pairs.firstIndex(where: { $0.shape.id == id }) {
+        if let id = currentSelectionID, let row = layerRows.firstIndex(where: { $0.id == id }) {
             regionList.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         } else { regionList.deselectAll(nil) }
         exportButton.isEnabled = !isExporting && doc.mediaKind != .none && hasEffectiveEffect
@@ -2280,11 +2775,10 @@ final class MainWindowController: NSWindowController {
         let menu = makeRegionContextMenu(for: id)
         if fromList {
             // 사이드바 행 우클릭: 행의 우측에 표시
-            if let view = regionList.window?.contentView, let scroll = regionList.enclosingScrollView {
-                let row = pairs.firstIndex(where: { $0.shape.id == id }) ?? -1
+            if let view = regionList.window?.contentView {
+                let row = layerRows.firstIndex(where: { $0.id == id }) ?? -1
                 if row >= 0 {
-                    let rectInScroll = regionList.rect(ofRow: row)
-                    let rectInWindow = scroll.convert(rectInScroll, to: nil)
+                    let rectInWindow = regionList.convert(regionList.rect(ofRow: row), to: nil)
                     let locationInView = view.convert(rectInWindow.origin, from: nil)
                     menu.popUp(positioning: nil, at: NSPoint(x: locationInView.x + 200, y: locationInView.y), in: view)
                 }
@@ -2331,6 +2825,16 @@ final class MainWindowController: NSWindowController {
         reset.target = self; reset.representedObject = id
         reset.isEnabled = !keyframes.isEmpty
         menu.addItem(reset)
+        let rename = NSMenuItem(title: "이름 바꾸기…", action: #selector(renameFromMenu(_:)), keyEquivalent: "")
+        rename.target = self; rename.representedObject = id
+        menu.addItem(rename)
+        let state = layerState(id)
+        let visibility = NSMenuItem(title: state.hidden ? "보이기" : "숨기기", action: #selector(toggleVisibilityFromMenu(_:)), keyEquivalent: "")
+        visibility.target = self; visibility.representedObject = id
+        menu.addItem(visibility)
+        let lockItem = NSMenuItem(title: state.locked ? "잠금 풀기" : "잠그기", action: #selector(toggleLockFromMenu(_:)), keyEquivalent: "")
+        lockItem.target = self; lockItem.representedObject = id
+        menu.addItem(lockItem)
         let duplicate = NSMenuItem(title: "복제", action: #selector(duplicateFromMenu(_:)), keyEquivalent: "")
         duplicate.target = self; duplicate.representedObject = id
         menu.addItem(duplicate)
@@ -2339,7 +2843,8 @@ final class MainWindowController: NSWindowController {
             item.target = self; item.representedObject = id; item.tag = index
             menu.addItem(item)
         }
-        if annotations.first(where: { $0.id == id })?.erasures.isEmpty == false {
+        if annotations.first(where: { $0.id == id })?.erasures.isEmpty == false
+            || pairs.first(where: { $0.shape.id == id })?.effect.erasures.isEmpty == false {
             let restore = NSMenuItem(title: "지운 부분 되살리기", action: #selector(restoreErasedFromMenu(_:)), keyEquivalent: "")
             restore.target = self; restore.representedObject = id
             menu.addItem(restore)
@@ -2389,7 +2894,11 @@ final class MainWindowController: NSWindowController {
         endGesture()
         if let index = pairs.firstIndex(where: { $0.shape.id == id }) {
             checkpoint()
-            pairs[index].shape = RegionEditing.displayed(pairs[index], at: editTime)
+            let frozen = RegionEditing.displayed(pairs[index], at: editTime)
+            pairs[index].effect.erasures = pairs[index].effect.erasures.map {
+                $0.mapped(from: pairs[index].shape.boundingRect, to: frozen.boundingRect)
+            }
+            pairs[index].shape = frozen
             pairs[index].effect.keyframes = []
         } else if let index = annotations.firstIndex(where: { $0.id == id }) {
             checkpoint()
@@ -2471,61 +2980,128 @@ extension MainWindowController: NSToolbarDelegate {
 }
 
 extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int { pairs.count }
+    /// Layer rows, top of the list = drawn on top: drawings (front first), then blur regions.
+    var layerRows: [(id: UUID, isDrawing: Bool)] {
+        annotations.reversed().map { ($0.id, true) } + pairs.reversed().map { ($0.shape.id, false) }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { layerRows.count }
+
+    /// Automatic layer name: kind plus number within its kind (or the text itself).
+    func layerName(of id: UUID) -> String {
+        if let index = pairs.firstIndex(where: { $0.shape.id == id }) {
+            if let name = pairs[index].effect.name, !name.isEmpty { return name }
+            let kind: String
+            switch pairs[index].shape {
+            case .rectangle: kind = "사각형"
+            case .ellipse: kind = "원"
+            case .polygon: kind = "자유형"
+            }
+            let cover = ["블러", "모자이크", "단색"][RegionEffect.CoverStyle.allCases.firstIndex(of: pairs[index].effect.style) ?? 0]
+            return "\(cover) \(kind) \(index + 1)"
+        }
+        guard let index = annotations.firstIndex(where: { $0.id == id }) else { return "" }
+        let drawing = annotations[index]
+        if let name = drawing.name, !name.isEmpty { return name }
+        switch drawing.kind {
+        case .text: return "글자 “\(drawing.text.replacingOccurrences(of: "\n", with: " ").prefix(16))”"
+        case .rectangle: return "사각형 그림 \(index + 1)"
+        case .ellipse: return "타원 그림 \(index + 1)"
+        case .line: return "선 \(index + 1)"
+        case .arrow: return "화살표 \(index + 1)"
+        case .freehand: return "펜 \(index + 1)"
+        }
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        // 매번 새 container 생성 (NSTableColumn이 있으므로 row가 그려짐)
+        let rows = layerRows
+        guard row >= 0, row < rows.count else { return nil }
+        let item = rows[row]
         let container = NSView()
         container.wantsLayer = true
         let image = NSImageView()
-        let text = NSTextField(labelWithString: "")
+        let text = NSTextField(labelWithString: layerName(of: item.id))
         text.lineBreakMode = .byTruncatingTail
-        container.addSubview(image)
-        container.addSubview(text)
-        image.translatesAutoresizingMaskIntoConstraints = false
-        text.translatesAutoresizingMaskIntoConstraints = false
+        text.font = .systemFont(ofSize: 12)
+        let detail = NSTextField(labelWithString: "")
+        detail.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        detail.textColor = .secondaryLabelColor
+        detail.lineBreakMode = .byTruncatingTail
+        let eye = NSButton(image: NSImage(), target: self, action: #selector(toggleLayerVisibility(_:)))
+        let lock = NSButton(image: NSImage(), target: self, action: #selector(toggleLayerLock(_:)))
+        for button in [eye, lock] {
+            button.isBordered = false
+            button.identifier = NSUserInterfaceItemIdentifier(item.id.uuidString)
+            button.imageScaling = .scaleProportionallyDown
+        }
+        let hidden: Bool, locked: Bool, timing: ClosedRange<Double>, motion: Bool, grouped: Bool, active: Bool
+        if item.isDrawing, let drawing = annotations.first(where: { $0.id == item.id }) {
+            hidden = drawing.hidden; locked = drawing.locked; timing = drawing.timeRange
+            motion = !drawing.keyframes.isEmpty; grouped = drawing.groupID != nil
+            active = drawing.isVisible(at: doc.hasVideo ? canvas.currentVideoTime : nil)
+            let symbol: String
+            switch drawing.kind {
+            case .text: symbol = "textformat"
+            case .arrow: symbol = "arrow.up.right"
+            case .line: symbol = "line.diagonal"
+            case .freehand: symbol = "scribble"
+            case .ellipse: symbol = "circle"
+            case .rectangle: symbol = "rectangle"
+            }
+            image.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "그림")
+            image.contentTintColor = drawing.color
+        } else if let pair = pairs.first(where: { $0.shape.id == item.id }) {
+            hidden = !pair.effect.enabled; locked = pair.effect.locked; timing = pair.effect.timeRange
+            motion = !pair.effect.keyframes.isEmpty; grouped = pair.effect.groupID != nil
+            active = pair.effect.isActive(at: doc.hasVideo ? canvas.currentVideoTime : nil)
+            let symbol: String
+            switch pair.shape {
+            case .rectangle: symbol = "rectangle.fill"
+            case .ellipse: symbol = "circle.fill"
+            case .polygon: symbol = "pentagon.fill"
+            }
+            image.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "블러 영역")
+            image.contentTintColor = active ? .systemBlue : .systemGray
+        } else { return nil }
+        var details: [String] = []
+        if doc.hasVideo { details.append(timing.lowerBound == 0 && timing.upperBound == 0 ? "전체" : "\(format(timing.lowerBound))~\(format(timing.upperBound))") }
+        if motion { details.append("이동") }
+        if grouped { details.append("그룹") }
+        detail.stringValue = details.joined(separator: " · ")
+        text.textColor = hidden ? .tertiaryLabelColor : .labelColor
+        eye.image = NSImage(systemSymbolName: hidden ? "eye.slash" : "eye", accessibilityDescription: hidden ? "숨김" : "보임")
+        eye.toolTip = hidden ? "보이기 (미리보기와 내보내기에 포함)" : "숨기기 (미리보기와 내보내기에서 빠짐)"
+        eye.setAccessibilityLabel(hidden ? "\(text.stringValue) 보이기" : "\(text.stringValue) 숨기기")
+        lock.image = NSImage(systemSymbolName: locked ? "lock.fill" : "lock.open", accessibilityDescription: locked ? "잠김" : "풀림")
+        lock.toolTip = locked ? "잠금 풀기" : "잠그기 (캔버스에서 선택·이동·지우기 막기)"
+        lock.setAccessibilityLabel(locked ? "\(text.stringValue) 잠금 풀기" : "\(text.stringValue) 잠그기")
+        lock.contentTintColor = locked ? .systemOrange : .tertiaryLabelColor
+        if currentSelectionID == item.id {
+            container.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.12).cgColor
+        } else if multiSelection.contains(item.id) {
+            container.layer?.backgroundColor = NSColor.systemPurple.withAlphaComponent(0.12).cgColor
+        }
+        for view in [image, text, detail, eye, lock] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(view)
+        }
         NSLayoutConstraint.activate([
             image.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
             image.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            image.widthAnchor.constraint(equalToConstant: 14),
-            image.heightAnchor.constraint(equalToConstant: 14),
+            image.widthAnchor.constraint(equalToConstant: 14), image.heightAnchor.constraint(equalToConstant: 14),
+            lock.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
+            lock.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            lock.widthAnchor.constraint(equalToConstant: 18), lock.heightAnchor.constraint(equalToConstant: 18),
+            eye.trailingAnchor.constraint(equalTo: lock.leadingAnchor, constant: -4),
+            eye.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            eye.widthAnchor.constraint(equalToConstant: 20), eye.heightAnchor.constraint(equalToConstant: 18),
             text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
-            text.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -4),
-            text.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+            text.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: eye.leadingAnchor, constant: -4),
+            detail.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            detail.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 0),
+            detail.trailingAnchor.constraint(lessThanOrEqualTo: eye.leadingAnchor, constant: -4)
         ])
-        let pair = pairs[row]
-        let isActive = isEffectActive(pair.effect, at: canvas.currentVideoTime)
-        let isSelected = selectedID == pair.shape.id
-        // 선택된 행은 연한 파란 배경
-        if isSelected {
-            container.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.10).cgColor
-        } else {
-            container.layer?.backgroundColor = nil
-        }
-        switch pair.shape {
-        case .rectangle:
-            text.stringValue = "사각형"
-            image.image = NSImage(systemSymbolName: "rectangle.fill", accessibilityDescription: "사각형")
-            image.contentTintColor = isActive ? .systemBlue : .systemGray
-        case .ellipse:
-            text.stringValue = "원/타원"
-            image.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "원형")
-            image.contentTintColor = isActive ? .systemTeal : .systemGray
-        case .polygon(_, let pts):
-            text.stringValue = "자유형 (\(pts.count)점)"
-            image.image = NSImage(systemSymbolName: "pentagon.fill", accessibilityDescription: "자유형")
-            image.contentTintColor = isActive ? .systemPurple : .systemGray
-        }
-        switch pair.effect.style {
-        case .blur: break
-        case .mosaic: text.stringValue += " · 모자이크"
-        case .solid: text.stringValue += " · 단색"
-        }
-        if !pair.effect.keyframes.isEmpty { text.stringValue += " · 이동" }
-        let r = pair.effect.timeRange
-        if r.lowerBound != 0 || r.upperBound != 0 {
-            text.stringValue = (text.stringValue) + "  [\(format(r.lowerBound))~\(format(r.upperBound))]"
-        }
         return container
     }
 
@@ -2535,38 +3111,27 @@ extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !refreshingList else { return }
+        let rows = layerRows
         let row = regionList.selectedRow
-        guard row >= 0, row < pairs.count else { return }
-        let id = pairs[row].shape.id
-        selectedID = id
-        canvas.selectRegion(id: id)
-        canvas.refreshOverlay()
+        guard row >= 0, row < rows.count else { return }
+        selectItem(rows[row].id)
         refreshSelectedEditor()
-        // 사이드바 선택이 캔버스 영역 외곽선도 강조
-        canvas.liveBlurRefreshCallback?()
         liveBlur.refresh()
     }
 
-    /// 사이드바 행 우클릭 — 영역 우클릭과 동일한 메뉴
+    /// 레이어 행 우클릭 — 캔버스 우클릭과 같은 메뉴(+ 이름 바꾸기·숨기기·잠금)
     func tableView(_ tableView: NSTableView, menuFor event: NSEvent) -> NSMenu? {
-        let pt = event.locationInWindow
-        // 행 찾기
-        let row = tableView.row(at: tableView.convert(pt, from: nil))
-        if row >= 0, row < pairs.count {
-            let id = pairs[row].shape.id
-            selectedID = id
-            canvas.selectRegion(id: id)
-            canvas.refreshOverlay()
-            refreshSelectedEditor()
-            tableView.reloadData()
-            // 동일 메뉴 표시 (우상단 점)
-            let dummyPt = NSPoint(x: 0, y: 0)
-            showRegionContextMenu(for: id, at: dummyPt, fromList: true)
-            return nil  // showRegionContextMenu가 popUp으로 처리
-        }
+        let rows = layerRows
+        let row = tableView.row(at: tableView.convert(event.locationInWindow, from: nil))
+        guard row >= 0, row < rows.count else { return nil }
+        let id = rows[row].id
+        selectItem(id)
+        refreshSelectedEditor()
+        showRegionContextMenu(for: id, at: .zero, fromList: true)
         return nil
     }
 }
+
 final class RegionTableView: NSTableView {
     var contextMenuHandler: ((NSEvent) -> Void)?
     override func menu(for event: NSEvent) -> NSMenu? {

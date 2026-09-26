@@ -31,6 +31,8 @@ final class VideoCanvasView: NSView {
     var textEditHandler: ((UUID) -> Void)?
     /// Shift-click adds or removes an item from the multi-selection (for grouping).
     var multiSelectToggle: ((UUID) -> Void)?
+    /// Locked layers are drawn but cannot be picked, moved or erased here.
+    var isLocked: ((UUID) -> Bool)?
     /// Outlines for multi-selected items and the selected item's group.
     var selectionDecorationsProvider: (() -> (multi: [CGRect], group: CGRect?))?
     var annotationSelectionChange: ((UUID?) -> Void)?
@@ -223,8 +225,11 @@ final class VideoCanvasView: NSView {
     }
 
     func deleteSelected() {
-        if liveAnnotationSelectionID != nil { deleteSelectedAnnotation(); refreshOverlay(); return }
-        guard let sel = selectedID else { return }
+        if let id = liveAnnotationSelectionID {
+            guard isLocked?(id) != true else { NSSound.beep(); return }
+            deleteSelectedAnnotation(); refreshOverlay(); return
+        }
+        guard let sel = selectedID, isLocked?(sel) != true else { return }
         var current = regionsBinding?() ?? []
         if let idx = current.firstIndex(where: { $0.id == sel }) {
             current.remove(at: idx)
@@ -721,7 +726,7 @@ final class VideoCanvasView: NSView {
             return
         }
         if mode.isDrawing {
-            let annotations = annotationsBinding?() ?? []
+            let annotations = (annotationsBinding?() ?? []).filter { isLocked?($0.id) != true }
             if let selected = liveAnnotationSelectionID, let current = annotations.first(where: { $0.id == selected }),
                let opposite = corners(of: current.bounds).enumerated().first(where: { dist($0.element, pt) < 10 }).map({
                    corners(of: current.bounds)[3 - $0.offset] }) {
@@ -1009,10 +1014,10 @@ final class VideoCanvasView: NSView {
     /// Shift-click target: blur regions in blur modes, drawings in drawing modes (topmost first).
     private func multiSelectTarget(at pt: NSPoint, mode: Mode) -> UUID? {
         if mode.isDrawing {
-            return (annotationsBinding?() ?? []).reversed().first { $0.hitTest(pt) }?.id
+            return (annotationsBinding?() ?? []).reversed().first { isLocked?($0.id) != true && $0.hitTest(pt) }?.id
         }
         guard mode != .erase else { return nil }
-        return (regionsBinding?() ?? []).reversed().first { $0.contains(point: pt, threshold: 0) }?.id
+        return (regionsBinding?() ?? []).reversed().first { isLocked?($0.id) != true && $0.contains(point: pt, threshold: 0) }?.id
     }
 
     /// Displayed geometry of the dragged drawing for a move (clamped to the media) or corner resize.
@@ -1043,11 +1048,12 @@ final class VideoCanvasView: NSView {
     private func eraseTargets(at pt: NSPoint) -> (regions: [UUID], drawings: [UUID]) {
         let now = currentTimeProvider?() ?? 0
         let timed = videoSizeBinding?() != .zero
+        let locked = isLocked ?? { _ in false }
         if let drawing = (annotationsBinding?() ?? []).reversed().first(where: {
-            (!timed || $0.isVisible(at: now)) && $0.hitTest(pt)
+            !locked($0.id) && (!timed || $0.isVisible(at: now)) && $0.hitTest(pt)
         }) { return ([], [drawing.id]) }
         if let region = (regionsBinding?() ?? []).reversed().first(where: {
-            (!timed || effectForID?($0.id)?.isActive(at: now) != false) && $0.contains(point: pt, threshold: 6)
+            !locked($0.id) && (!timed || effectForID?($0.id)?.isActive(at: now) != false) && $0.contains(point: pt, threshold: 6)
         }) { return ([region.id], []) }
         return ([], [])
     }
@@ -1141,7 +1147,7 @@ final class VideoCanvasView: NSView {
 
     /// 선택 영역을 화살표 키로 이동. ⇧=큰(10pt), ⌘=미세(0.1pt), 기본=1pt.
     private func moveSelectedByArrow(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        guard let sel = selectedID else { return }
+        guard let sel = selectedID, isLocked?(sel) != true else { return }
         let step: CGFloat = modifierFlags.contains(.shift) ? 10.0
                             : modifierFlags.contains(.command) ? 0.1
                             : 1.0
@@ -1227,8 +1233,9 @@ final class VideoCanvasView: NSView {
 
     private func hitTest(at pt: NSPoint) -> (regionIndex: Int, kind: DragKind, handle: HandlePos?)? {
         let regions = regionsBinding?() ?? []
+        let locked = isLocked ?? { _ in false }
         // 선택된 영역의 핸들 먼저
-        if let sel = selectedID, let idx = regions.firstIndex(where: { $0.id == sel }) {
+        if let sel = selectedID, !locked(sel), let idx = regions.firstIndex(where: { $0.id == sel }) {
             switch regions[idx] {
             case .rectangle(_, let o, let s):
                 let rect = NSRect(origin: o, size: s)
@@ -1252,7 +1259,7 @@ final class VideoCanvasView: NSView {
             }
         }
         // 다른 영역 (역순 — 위쪽 영역 우선)
-        for (i, r) in regions.enumerated().reversed() where r.contains(point: pt, threshold: 6) {
+        for (i, r) in regions.enumerated().reversed() where r.contains(point: pt, threshold: 6) && !locked(r.id) {
             selectedID = r.id
             selectionChange?(r.id)
             return (i, .move, nil)

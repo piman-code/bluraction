@@ -81,7 +81,8 @@ final class MainContainerViewController: NSViewController {
         slider.identifier = NSUserInterfaceItemIdentifier("videoTimeline")
         slider.setAccessibilityLabel("영상 재생 위치")
         slider.setAccessibilityHelp("드래그하거나 방향키로 영상의 재생 위치를 이동합니다. 단위는 초입니다.")
-        slider.toolTip = "영상 재생 위치 (초)"
+        slider.toolTip = "영상 재생 위치 (초). 아래 띠의 주황 점(기록 위치)과 파란 끝(적용 구간)은 끌어서 옮깁니다."
+        slider.heightAnchor.constraint(greaterThanOrEqualToConstant: 30).isActive = true
 
         let stack = NSStackView(views: [playPauseButton, timeLabel, slider])
         stack.orientation = .horizontal

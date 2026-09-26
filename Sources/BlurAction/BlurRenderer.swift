@@ -43,6 +43,19 @@ enum BlurRenderer {
             ctx.setFillColor(gray: 1, alpha: 1)
             ctx.addPath(shape.path())
             ctx.fillPath()
+            // Rubbed-out parts of the cover, carried from the base box to where it is shown now.
+            let holes = effect.erasures.filter { $0.isActive(at: time) }
+            if !holes.isEmpty {
+                ctx.setStrokeColor(gray: 0, alpha: 1)
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                for hole in holes {
+                    guard hole.isValid else { throw RenderError.invalidGeometry }
+                    ctx.addPath(EraseStroke.path(hole.mapped(from: base.boundingRect, to: shape.boundingRect).points))
+                    ctx.setLineWidth(hole.width)
+                    ctx.strokePath()
+                }
+            }
             guard let cg = ctx.makeImage() else { throw RenderError.maskAllocation }
             let hard = CIImage(cgImage: cg).transformed(by: .init(translationX: extent.minX, y: extent.minY)).cropped(to: extent)
             // Make feather the approximate 5–95% transition width in source pixels,

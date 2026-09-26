@@ -81,7 +81,9 @@ struct ProjectFile: Codable, Equatable {
             let effect = region.effect
             guard ok(region.shape.boundingRect), ok(effect.timeRange), ok(effect.keyframes), effect.color.isValid,
                   effect.blurRadius.isFinite, (0...500).contains(effect.blurRadius),
-                  effect.featherRadius.isFinite, (0...500).contains(effect.featherRadius) else { return false }
+                  effect.featherRadius.isFinite, (0...500).contains(effect.featherRadius),
+                  effect.erasures.count <= 10_000, effect.erasures.allSatisfy({ $0.isValid && $0.width <= 16 && $0.points.allSatisfy(ok) }),
+                  (effect.name?.count ?? 0) <= 200 else { return false }
             switch region.shape {
             case .rectangle(_, _, let size), .ellipse(_, _, let size):
                 guard size.width >= 0, size.height >= 0 else { return false }
@@ -94,10 +96,9 @@ struct ProjectFile: Codable, Equatable {
                   RGBAColor(red: drawing.red, green: drawing.green, blue: drawing.blue, alpha: drawing.alpha).isValid,
                   drawing.lineWidth.isFinite, drawing.lineWidth > 0, drawing.lineWidth <= 16,
                   drawing.erasures.count <= 10_000,
-                  drawing.erasures.allSatisfy({ e in
-                      e.points.count <= 100_000 && e.points.allSatisfy(ok) && e.width.isFinite && e.width > 0 && e.width <= 16
-                          && (e.from.map { $0.isFinite && $0 >= 0 } ?? true)
-                  }),
+                  drawing.erasures.allSatisfy({ $0.isValid && $0.width <= 16 && $0.points.allSatisfy(ok) }),
+                  (drawing.name?.count ?? 0) <= 200, (drawing.fontName?.count ?? 0) <= 200,
+                  drawing.textBackground?.isValid ?? true,
                   drawing.fillOpacity.isFinite, (0...1).contains(drawing.fillOpacity),
                   drawing.text.count <= 1_000 else { return false }
         }
