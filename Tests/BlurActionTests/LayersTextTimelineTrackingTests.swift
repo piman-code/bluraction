@@ -264,6 +264,28 @@ final class LayersTextTimelineTrackingTests {
         #expect(target.canvas.regionsBinding?().count == 1, "One import is one undo step")
     }
 
+    @Test
+    func testProjectsSavedBeforeNewFieldsStillOpen() throws {
+        var drawing = DrawingAnnotation(kind: .text, points: [.zero, CGPoint(x: 0.2, y: 0.1)], lineWidth: 0.01)
+        drawing.text = "옛 프로젝트"
+        let region = ProjectFile.Region(shape: .rectangle(id: UUID(), origin: CGPoint(x: 0.1, y: 0.1), size: CGSize(width: 0.3, height: 0.2)),
+                                        effect: RegionEffect(blurRadius: 25, featherRadius: 12))
+        let data = try ProjectFile(mediaPath: "old.mp4", regions: [region], drawings: [drawing]).encoded()
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let newKeys = ["erasures", "name", "locked", "hidden", "fontName", "bold", "textBackground"]
+        json["regions"] = (json["regions"] as? [[String: Any]])?.map { item in
+            var item = item
+            item["effect"] = (item["effect"] as? [String: Any])?.filter { !newKeys.contains($0.key) }
+            return item
+        }
+        json["drawings"] = (json["drawings"] as? [[String: Any]])?.map { $0.filter { !newKeys.contains($0.key) } }
+        let old = try JSONSerialization.data(withJSONObject: json)
+        #expect(!String(decoding: old, as: UTF8.self).contains("erasures"))
+        let project = try ProjectFile.decode(old)
+        #expect(project.drawings[0].text == "옛 프로젝트" && project.drawings[0].bold && !project.drawings[0].locked)
+        #expect(project.regions[0].effect.erasures.isEmpty && project.regions[0].effect.name == nil)
+    }
+
     // MARK: Automatic tracking
 
     @Test
