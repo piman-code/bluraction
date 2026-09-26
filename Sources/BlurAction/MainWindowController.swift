@@ -1776,7 +1776,8 @@ final class MainWindowController: NSWindowController {
                 let shown = drawings[index].displayed(at: time)
                 let reach = shown.lineWidth / 2 + 2
                 guard shown.bounds.insetBy(dx: -reach, dy: -reach).intersects(area) else { continue }
-                drawings[index].erasures.append(EraseStroke(points: points, width: width, from: from)
+                drawings[index].erasures.append(EraseStroke(points: Self.clamped(points, near: shown.bounds, width: width),
+                                                            width: width, from: from)
                     .mapped(from: shown.bounds, to: drawings[index].bounds))
                 touched += 1
             }
@@ -1785,7 +1786,8 @@ final class MainWindowController: NSWindowController {
             for index in regions.indices where regions[index].effect.isActive(at: time) && !regions[index].effect.locked {
                 let shown = RegionEditing.displayed(regions[index], at: time).boundingRect
                 guard shown.intersects(area) else { continue }
-                regions[index].effect.erasures.append(EraseStroke(points: points, width: width, from: from)
+                regions[index].effect.erasures.append(EraseStroke(points: Self.clamped(points, near: shown, width: width),
+                                                                  width: width, from: from)
                     .mapped(from: shown, to: regions[index].shape.boundingRect))
                 touched += 1
             }
@@ -1798,6 +1800,13 @@ final class MainWindowController: NSWindowController {
         annotations = drawings
         pairs = regions
         refreshAfterEdit()
+    }
+
+    /// Points far outside the item never touch it; keeping them near its box stops the mapping into
+    /// a much larger base box (a tiny recorded size) from producing huge coordinates.
+    static func clamped(_ points: [CGPoint], near box: CGRect, width: CGFloat) -> [CGPoint] {
+        let area = box.insetBy(dx: -width, dy: -width)
+        return points.map { CGPoint(x: min(max($0.x, area.minX), area.maxX), y: min(max($0.y, area.minY), area.maxY)) }
     }
 
     @objc private func restoreErasedFromMenu(_ sender: NSMenuItem) {
@@ -2057,7 +2066,11 @@ final class MainWindowController: NSWindowController {
         } else if let index = annotations.firstIndex(where: { $0.id == id }), annotations[index].hidden != hidden {
             checkpoint()
             annotations[index].hidden = hidden
-            if hidden, selectedDrawingID == id { canvas.clearAnnotationSelection() }
+            if hidden, selectedDrawingID == id {
+                // A hidden drawing is off the canvas; don't keep it as the target of Delete.
+                selectedDrawingID = nil
+                canvas.clearAnnotationSelection()
+            }
         } else { return }
         refreshAfterEdit()
     }
@@ -2318,8 +2331,21 @@ final class MainWindowController: NSWindowController {
             return
         }
         let unit = CGSize(width: 1, height: 1)
-        pairs = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size)
-        annotations = project.drawings.map { $0.scaled(from: unit, to: size) }
+        // A template applied to a shorter video: clip ranges that run past the end.
+        func clipped(_ range: ClosedRange<Double>) -> ClosedRange<Double> {
+            guard doc.hasVideo, !(range.lowerBound == 0 && range.upperBound == 0), range.upperBound > doc.duration else { return range }
+            return min(range.lowerBound, doc.duration)...doc.duration
+        }
+        pairs = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size).map { pair in
+            var effect = pair.effect
+            effect.timeRange = clipped(effect.timeRange)
+            return (pair.shape, effect)
+        }
+        annotations = project.drawings.map { drawing in
+            var scaled = drawing.scaled(from: unit, to: size)
+            scaled.timeRange = clipped(scaled.timeRange)
+            return scaled
+        }
         undoStack.removeAll()
         redoStack.removeAll()
         canvas.setRegionsFromExternal(pairs.map(\.shape))

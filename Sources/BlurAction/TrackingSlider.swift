@@ -23,6 +23,8 @@ final class TrackingSlider: NSSlider {
     private enum Grab: Equatable { case scrub, marker(Int), start, end }
     private var grab: Grab = .scrub
     private var dragTime: Double?
+    /// Where a tick/edge grab started; a click without a real drag changes nothing.
+    private var grabStartX: CGFloat = 0
 
     static let stripHeight: CGFloat = 9
 
@@ -87,7 +89,8 @@ final class TrackingSlider: NSSlider {
             }
         }
         if grab != .scrub {
-            dragTime = time(forX: point.x)
+            grabStartX = point.x
+            dragTime = nil
             NSCursor.resizeLeftRight.set()
             needsDisplay = true
             return
@@ -99,7 +102,8 @@ final class TrackingSlider: NSSlider {
 
     override func mouseDragged(with event: NSEvent) {
         if grab != .scrub {
-            dragTime = time(forX: convert(event.locationInWindow, from: nil).x)
+            let x = convert(event.locationInWindow, from: nil).x
+            dragTime = abs(x - grabStartX) > 3 ? time(forX: x) : nil
             needsDisplay = true
             return
         }
@@ -109,7 +113,8 @@ final class TrackingSlider: NSSlider {
 
     override func mouseUp(with event: NSEvent) {
         if grab != .scrub {
-            let time = self.time(forX: convert(event.locationInWindow, from: nil).x)
+            let x = convert(event.locationInWindow, from: nil).x
+            let time = abs(x - grabStartX) > 3 ? self.time(forX: x) : nil
             let finished = grab
             grab = .scrub
             dragTime = nil

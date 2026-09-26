@@ -98,8 +98,11 @@ final class LayersTextTimelineTrackingTests {
         controller.renameLayer(region.id, to: " ")
         #expect(controller.layerName(of: region.id) == "블러 사각형 1", "Blank names return to automatic")
 
+        canvas.selectAnnotation(id: drawing.id)
         controller.setLayerHidden(drawing.id, true)
         #expect(canvas.annotationsBinding?().isEmpty == true, "Hidden drawings leave the canvas")
+        controller.perform(NSSelectorFromString("deleteSelectedTapped"))
+        #expect(controller.layerRows.contains { $0.id == drawing.id }, "Delete does not reach a hidden drawing")
         controller.setLayerHidden(region.id, true)
         #expect(canvas.effectForID?(region.id)?.enabled == false)
         let export = try #require(session.descendants.compactMap { $0 as? NSButton }.first { $0.title == "내보내기" })
@@ -234,6 +237,9 @@ final class LayersTextTimelineTrackingTests {
             try #require(NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: y), modifierFlags: [], timestamp: 0,
                                             windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
         }
+        strip.mouseDown(with: try event(.leftMouseDown, x3 + 2))
+        strip.mouseUp(with: try event(.leftMouseUp, x3 + 2))
+        #expect(moved == nil, "A click without a drag changes nothing")
         strip.mouseDown(with: try event(.leftMouseDown, x3))
         strip.mouseDragged(with: try event(.leftMouseDragged, x4))
         strip.mouseUp(with: try event(.leftMouseUp, x4))
@@ -262,6 +268,23 @@ final class LayersTextTimelineTrackingTests {
         #expect(abs(regions[0].boundingRect.width - (source.canvas.regionsBinding?().first?.boundingRect.width ?? 0) * scale) < 0.5)
         target.controller.perform(NSSelectorFromString("undoTapped"))
         #expect(target.canvas.regionsBinding?().count == 1, "One import is one undo step")
+    }
+
+    @Test
+    func testHolesOnATinyRecordedRegionStaySmallAndReopen() async throws {
+        let session = try await VideoSession.open()
+        defer { session.close() }
+        let canvas = session.container.canvas
+        session.controller.perform(NSSelectorFromString("addRegionTapped"))
+        let region = try #require(canvas.regionsBinding?().first)
+        try await session.seek(2)
+        // Record a nearly collapsed size at 2 s, then rub across it with a wide brush.
+        let tiny = CGRect(x: region.boundingRect.midX, y: region.boundingRect.midY, width: 1.5, height: 1.5)
+        canvas.regionsUpdate?([region.replacing(rect: tiny)])
+        session.controller.applyEraserStroke([CGPoint(x: 0, y: tiny.midY), CGPoint(x: canvas.bounds.width, y: tiny.midY)], width: 40)
+        #expect(canvas.effectForID?(region.id)?.erasures.count == 1)
+        let project = try ProjectFile.decode(try session.controller.projectData())
+        #expect(project.regions[0].effect.erasures.count == 1, "The saved project reopens")
     }
 
     @Test
