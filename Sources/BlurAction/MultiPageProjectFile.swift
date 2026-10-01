@@ -79,7 +79,7 @@ struct MultiPageProjectFile: Codable {
         }
     }
 
-    func workspace(relativeTo projectURL: URL) throws -> PageWorkspace {
+    func workspace(relativeTo projectURL: URL, relinkedSources: [String: URL] = [:]) throws -> PageWorkspace {
         var pdfCache: [URL: PDFDocument] = [:]
         var checkedSources: Set<URL> = []
         var sourceDigests: [URL: String] = [:]
@@ -87,7 +87,10 @@ struct MultiPageProjectFile: Codable {
         var totalBytes = 0
         let resolved = try pages.map { page -> PageWorkspace.Page in
             let reference = ProjectFile(mediaPath: page.mediaPath, regions: [], drawings: [])
-            let url = reference.mediaURL(relativeTo: projectURL)
+            if reference.needsPlatformRelink && relinkedSources[page.mediaPath] == nil {
+                throw ProjectFile.ProjectError.sourceNeedsRelink
+            }
+            let url = relinkedSources[page.mediaPath] ?? reference.mediaURL(relativeTo: projectURL)
             guard url.isFileURL,
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
                   values.isRegularFile == true, values.isSymbolicLink != true,

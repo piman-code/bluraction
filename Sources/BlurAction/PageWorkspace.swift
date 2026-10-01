@@ -54,6 +54,8 @@ struct PageWorkspace {
     var title: String
     var sourceDigests: [URL: String] = [:]
     var sourceIdentities: [URL: URL] = [:]
+    /// Metadata captured with the opening baseline, used before returning cached PDF content.
+    var sourceFileStates: [URL: [Int64]] = [:]
     static let maximumPages = 200
     static let maximumPDFBytes = 512 * 1024 * 1024
     static let maximumImageBytes = 128 * 1024 * 1024
@@ -66,6 +68,7 @@ struct PageWorkspace {
         var pages: [Page] = []
         var sourceDigests: [URL: String] = [:]
         var sourceIdentities: [URL: URL] = [:]
+        var sourceFileStates: [URL: [Int64]] = [:]
         var sourceBytes = 0
         for url in urls {
             guard url.isFileURL,
@@ -80,6 +83,7 @@ struct PageWorkspace {
                 guard sourceBytes <= maximumSourceBytes - bytes else { throw WorkspaceError.resourceLimit }
                 sourceBytes += bytes
                 if sourceDigests[sourceKey] == nil {
+                    sourceFileStates[sourceKey] = try Self.fileState(of: url)
                     sourceDigests[sourceKey] = try Self.digest(of: url)
                     sourceIdentities[sourceKey] = canonical
                 }
@@ -93,6 +97,7 @@ struct PageWorkspace {
                 guard sourceBytes <= maximumSourceBytes - bytes else { throw WorkspaceError.resourceLimit }
                 sourceBytes += bytes
                 if sourceDigests[sourceKey] == nil {
+                    sourceFileStates[sourceKey] = try Self.fileState(of: url)
                     sourceDigests[sourceKey] = try Self.digest(of: url)
                     sourceIdentities[sourceKey] = canonical
                 }
@@ -103,7 +108,8 @@ struct PageWorkspace {
                                       title: urls.count == 1
                                           ? String(urls[0].lastPathComponent.prefix(MultiPageProjectFile.maximumTitleLength))
                                           : "이미지 \(urls.count)장",
-                                      sourceDigests: sourceDigests, sourceIdentities: sourceIdentities)
+                                      sourceDigests: sourceDigests, sourceIdentities: sourceIdentities,
+                                      sourceFileStates: sourceFileStates)
         try workspace.validateSourcesUnchanged()
         return workspace
     }
@@ -128,11 +134,34 @@ struct PageWorkspace {
 
     func validateSourcesUnchanged() throws {
         for (url, expected) in sourceDigests {
-            guard sourceIdentities[url] == url.resolvingSymlinksInPath().standardizedFileURL else {
-                throw WorkspaceError.sourceChanged
-            }
+            try validateSourceIdentity(url)
             guard try Self.digest(of: url) == expected else { throw WorkspaceError.sourceChanged }
         }
+    }
+
+    private static func fileState(of url: URL) throws -> [Int64] {
+        var status = stat()
+        guard lstat(url.path, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else {
+            throw WorkspaceError.sourceChanged
+        }
+        return [Int64(status.st_dev), Int64(status.st_ino), Int64(status.st_size),
+                Int64(status.st_mtimespec.tv_sec), Int64(status.st_mtimespec.tv_nsec),
+                Int64(status.st_ctimespec.tv_sec), Int64(status.st_ctimespec.tv_nsec)]
+    }
+
+    private func validateSourceIdentity(_ url: URL) throws {
+        let key = url.standardizedFileURL
+        let state = try Self.fileState(of: url)
+        guard sourceIdentities[key] == url.resolvingSymlinksInPath().standardizedFileURL,
+              sourceFileStates[key].map({ $0 == state }) ?? true else {
+            throw WorkspaceError.sourceChanged
+        }
+    }
+
+    private func validatePageSource(_ url: URL, hash: Bool) throws {
+        try validateSourceIdentity(url)
+        guard let expected = sourceDigests[url.standardizedFileURL] else { throw WorkspaceError.sourceChanged }
+        if hash, try Self.digest(of: url) != expected { throw WorkspaceError.sourceChanged }
     }
 
     func image(at index: Int) throws -> CGImage {
@@ -142,8 +171,13 @@ struct PageWorkspace {
 
     private func image(at index: Int, pdfCache: inout [URL: PDFDocument]) throws -> CGImage {
         guard pages.indices.contains(index) else { throw WorkspaceError.invalidInput }
+        let url = pages[index].source.url
+        // Projects constructed from saved references may lack metadata; hash those even on cache hits.
+        let hash = pdfCache[url] == nil || sourceFileStates[url.standardizedFileURL] == nil
+        try validatePageSource(url, hash: hash)
+        let result: CGImage
         switch pages[index].source {
-        case .image(let url): return try DocumentModel.decodeImage(url: url)
+        case .image(let url): result = try DocumentModel.decodeImage(url: url)
         case .pdf(let url, let pageIndex):
             if pdfCache[url] == nil { pdfCache[url] = PDFDocument(url: url) }
             guard let document = pdfCache[url], !document.isLocked,
@@ -172,8 +206,10 @@ struct PageWorkspace {
             // would shift the page twice and clip its edges.
             page.draw(with: .cropBox, to: context)
             guard let image = context.makeImage() else { throw WorkspaceError.unreadablePDF }
-            return image
+            result = image
         }
+        try validatePageSource(url, hash: hash)
+        return result
     }
 
     /// PDF box bounds are unrotated. PDFKit's display transform maps the selected
@@ -279,6 +315,7 @@ struct PageWorkspace {
               bytes <= Self.maximumOutputBytes else { throw WorkspaceError.resourceLimit }
         if isCancelled?() == true { throw WorkspaceError.cancelled }
         try validateSourcesUnchanged()
+        if isCancelled?() == true { throw WorkspaceError.cancelled }
         guard renamex_np(temporary.path, output.path, UInt32(RENAME_EXCL)) == 0 else {
             if errno == EEXIST { throw WorkspaceError.destinationExists }
             throw WorkspaceError.exportFailed
@@ -340,6 +377,7 @@ struct PageWorkspace {
             totalBytes += bytes
         }
         try validateSourcesUnchanged()
+        if isCancelled?() == true { throw WorkspaceError.cancelled }
         guard renamex_np(staging.path, folder.path, UInt32(RENAME_EXCL)) == 0 else {
             if errno == EEXIST { throw WorkspaceError.destinationExists }
             throw WorkspaceError.exportFailed

@@ -151,7 +151,8 @@ final class VideoSeekTests {
         moveSlider(to: 3)
         controller.load(url: shortInput)
         #expect(!container.slider.isEnabled)
-        #expect(container.slider.doubleValue == 0)
+        #expect(container.slider.doubleValue == 3,
+                "Keep the previous playhead until the new source is verified; failure must preserve it")
         try await waitFor { container.slider.isEnabled && player.currentItem?.status == .readyToPlay }
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(abs(container.slider.maxValue - 1) < 0.01)

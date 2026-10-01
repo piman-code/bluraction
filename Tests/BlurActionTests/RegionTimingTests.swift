@@ -34,6 +34,8 @@ struct RegionTimingTests {
         let atEOF = RegionEffect.created(at: 8, videoDuration: 8)
         #expect(atEOF.timeRange == 8...8)
         #expect(!atEOF.appliesToEntireVideo)
+        #expect(RegionEffect.created(at: 12, videoDuration: 12).timeRange == 12...12,
+                "The model retains an explicit EOF timestamp; controller editing uses the displayed last frame")
         let frameBeforeEOF = try BlurRenderer.render(image: source, pairs: [(shape, atEOF)], canvasSize: renderer.size, time: 1)
         #expect(renderer.pixels(frameBeforeEOF) == renderer.pixels(source))
         #expect(!RegionEffect.created(at: 0, videoDuration: 0).isActive(at: 0))
@@ -183,17 +185,20 @@ struct RegionTimingTests {
         #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == 11.75...12)
         try await fixture.seek(12)
         let atEnd = fixture.controller.makeRegionContextMenu(for: second.id).items.filter { $0.action == NSSelectorFromString("applyDurationPreset:") }
-        #expect(atEnd.count == 5 && atEnd.allSatisfy { !$0.isEnabled })
-        // An earlier menu remains anchored before EOF; a menu opened at EOF rejects the preset.
+        let lastDisplayedPTS = 143.0 / 12
+        #expect(atEnd.count == 5 && atEnd.allSatisfy { $0.isEnabled })
+        // At transport EOF the last decoded frame remains displayed and editable.
+        // An earlier menu still retains its own displayed-frame anchor.
         #expect(NSApp.sendAction(nearEndAction, to: nearEnd.target, from: nearEnd))
         #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == 11.75...12)
         let eofItem = try #require(atEnd.first)
         let eofAction = try #require(eofItem.action)
         #expect(NSApp.sendAction(eofAction, to: eofItem.target, from: eofItem))
-        #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == 11.75...12)
+        #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == lastDisplayedPTS...12)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
         let eofShape = try #require(fixture.container.canvas.regionsBinding?().last)
-        #expect(fixture.container.canvas.effectForID?(eofShape.id)?.timeRange == 12...12)
+        #expect(fixture.container.canvas.effectForID?(eofShape.id)?.timeRange == lastDisplayedPTS...12)
+        #expect(fixture.container.canvas.effectForID?(eofShape.id)?.isActive(at: lastDisplayedPTS) == true)
         #expect(fixture.container.canvas.effectForID?(eofShape.id)?.isActive(at: 1) == false)
     }
 
@@ -290,9 +295,19 @@ private struct TimingFixture {
     func seek(_ time: Double) async throws {
         container.slider.doubleValue = time
         #expect(container.slider.sendAction(container.slider.action, to: container.slider.target))
-        try await waitFor { abs(player.currentTime().seconds - time) < 0.001 }
-        // Allow the seek completion to reconcile the coordinator before starting playback.
-        try await Task.sleep(nanoseconds: 30_000_000)
+        // This fixture has exactly 144 frames at 12fps. A seek must settle its actual
+        // decoded frame and edit providers, not only the transport's requested clock.
+        let expectedPTS = min(floor(time * 12), 143) / 12
+        try await waitFor {
+            guard let pts = container.liveBlur.presentedFrameTime?.seconds,
+                  let contents = container.liveBlur.contents,
+                  CFGetTypeID(contents as CFTypeRef) == CGImage.typeID else { return false }
+            return abs(player.currentTime().seconds - time) < 0.001
+                && abs(pts - expectedPTS) < 0.000001
+                && container.canvas.currentVideoTime == pts
+                && container.canvas.currentTimeProvider?() == pts
+                && container.canvas.creationTimeProvider?() == pts
+        }
     }
 
     func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat) throws -> NSEvent {

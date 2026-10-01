@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -8,6 +9,130 @@ import UniformTypeIdentifiers
 
 @Suite(.serialized)
 struct WorkspaceBoundaryRegressionTests {
+    @MainActor private func controls(in view: NSView) -> [NSControl] {
+        let own = (view as? NSControl).map { [$0] } ?? []
+        return own + view.subviews.flatMap { controls(in: $0) }
+    }
+
+    @MainActor private func drawingSession(_ controller: MainWindowController) throws -> DrawingAnnotation {
+        let project = try ProjectFile.decode(controller.projectData())
+        return try #require(project.drawings.first)
+    }
+
+    @Test(arguments: [CGFloat(2.4), CGFloat(100.123456789)])
+    @MainActor
+    func colorActionsPreserveImportedWidthAndFillWithUndoAndSavedReopen(canvasWidth: CGFloat) throws {
+        _ = NSApplication.shared
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("source.png")
+        try image(at: source)
+        let originalBytes = try Data(contentsOf: source)
+        let controller = MainWindowController()
+        controller.window?.isReleasedWhenClosed = false
+        controller.showWindow(nil)
+        defer { controller.close() }
+        controller.load(url: source)
+        let container = try #require(controller.window?.contentViewController as? MainContainerViewController)
+        let scale = DrawingAnnotation.widthScale(sx: container.canvas.bounds.width, sy: container.canvas.bounds.height)
+        let drawing = DrawingAnnotation(kind: .rectangle,
+            points: [CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.5, y: 0.5)],
+            color: .systemYellow, lineWidth: canvasWidth / scale, fillOpacity: 0.612345678901)
+        controller.importProjectItems(ProjectFile(mediaPath: source.path, regions: [], drawings: [drawing]))
+        let baseline = try drawingSession(controller)
+        container.canvas.selectAnnotation(id: baseline.id)
+        let items = controls(in: try #require(controller.window?.contentView))
+        let action = NSSelectorFromString("annotationStyleChanged:")
+        let color = try #require(items.compactMap { $0 as? NSColorWell }.first { $0.action == action })
+        let preset = try #require(items.compactMap { $0 as? NSPopUpButton }
+            .first { $0.action == NSSelectorFromString("annotationPresetChosen:") })
+        let width = try #require(items.compactMap { $0 as? NSSlider }.first { $0.action == action })
+        #expect(width.maxValue < 100, "Large-width case exceeds the inspector's preset range")
+
+        // Exercise the actual well, preset, and committed eyedropper paths independently.
+        for path in 0..<3 {
+            if path == 0 {
+                color.color = .systemRed
+                controller.perform(action, with: color)
+            } else if path == 1 {
+                preset.selectItem(at: 2)
+                controller.perform(NSSelectorFromString("annotationPresetChosen:"), with: preset)
+            } else {
+                controller.applyPickedDrawingColor(.systemGreen)
+            }
+            let changed = try drawingSession(controller)
+            #expect(changed.lineWidth == baseline.lineWidth)
+            #expect(changed.fillOpacity == baseline.fillOpacity)
+            #expect(changed.color != baseline.color)
+            controller.perform(NSSelectorFromString("undoTapped"))
+            #expect(try drawingSession(controller) == baseline)
+            controller.perform(NSSelectorFromString("redoTapped"))
+            #expect(try drawingSession(controller) == changed)
+            controller.perform(NSSelectorFromString("undoTapped"))
+        }
+        controller.applyPickedDrawingColor(.systemGreen)
+        let saved = dir.appendingPathComponent("precision.bluraction")
+        let data = try controller.projectData(projectURL: saved)
+        try data.write(to: saved, options: .withoutOverwriting)
+        let decoded = try ProjectFile.decode(Data(contentsOf: saved))
+        let reopened = MainWindowController()
+        reopened.window?.isReleasedWhenClosed = false
+        reopened.showWindow(nil)
+        defer { reopened.close() }
+        reopened.openProject(decoded, media: source)
+        let restored = try drawingSession(reopened)
+        #expect(abs(restored.lineWidth - baseline.lineWidth) < 0.000000000001)
+        #expect(restored.fillOpacity == baseline.fillOpacity)
+        #expect(restored.color == decoded.drawings[0].color)
+        #expect(try Data(contentsOf: source) == originalBytes)
+        #expect(try Data(contentsOf: saved) == data)
+    }
+
+    @Test
+    @MainActor
+    func widthAndFillActionsPreserveTheOtherImportedField() throws {
+        _ = NSApplication.shared
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("source.png")
+        try image(at: source)
+        let controller = MainWindowController()
+        controller.window?.isReleasedWhenClosed = false
+        controller.showWindow(nil)
+        defer { controller.close() }
+        controller.load(url: source)
+        let container = try #require(controller.window?.contentViewController as? MainContainerViewController)
+        let scale = DrawingAnnotation.widthScale(sx: container.canvas.bounds.width, sy: container.canvas.bounds.height)
+        let drawing = DrawingAnnotation(kind: .rectangle,
+            points: [CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.5, y: 0.5)],
+            color: .systemBlue, lineWidth: 2.4 / scale, fillOpacity: 0.612345678901)
+        controller.importProjectItems(ProjectFile(mediaPath: source.path, regions: [], drawings: [drawing]))
+        let baseline = try drawingSession(controller)
+        container.canvas.selectAnnotation(id: baseline.id)
+        let items = controls(in: try #require(controller.window?.contentView))
+        let action = NSSelectorFromString("annotationStyleChanged:")
+        let width = try #require(items.compactMap { $0 as? NSSlider }.first { $0.action == action })
+        let fill = try #require(items.compactMap { $0 as? NSPopUpButton }.first { $0.action == action })
+        width.doubleValue = 8
+        controller.perform(action, with: width)
+        let widthChanged = try drawingSession(controller)
+        #expect(abs(widthChanged.lineWidth - 8 / scale) < 0.000000000001)
+        #expect(widthChanged.fillOpacity == baseline.fillOpacity)
+        #expect(widthChanged.color == baseline.color)
+        controller.perform(NSSelectorFromString("undoTapped"))
+        #expect(try drawingSession(controller) == baseline)
+        fill.selectItem(at: 2)
+        controller.perform(action, with: fill)
+        let fillChanged = try drawingSession(controller)
+        #expect(fillChanged.lineWidth == baseline.lineWidth)
+        #expect(fillChanged.fillOpacity == 1)
+        #expect(fillChanged.color == baseline.color)
+        controller.perform(NSSelectorFromString("undoTapped"))
+        #expect(try drawingSession(controller) == baseline)
+        controller.perform(NSSelectorFromString("redoTapped"))
+        #expect(try drawingSession(controller) == fillChanged)
+    }
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("blur-workspace-boundary-\(UUID().uuidString)", isDirectory: true)

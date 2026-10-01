@@ -21,7 +21,8 @@ enum BlurredImageExporter {
     static func export(source: CGImage,
                        pairs: [(shape: RegionShape, effect: RegionEffect)],
                        canvasSize: CGSize, inputURL: URL, outputURL: URL,
-                       type: UTType, quality: Double, annotations: [DrawingAnnotation] = []) throws {
+                       type: UTType, quality: Double, annotations: [DrawingAnnotation] = [],
+                       expectedSourceSHA256: String? = nil) throws {
         guard inputURL.isFileURL, outputURL.isFileURL,
               !inputURL.path.utf8.contains(0), !outputURL.path.utf8.contains(0),
               canvasSize.width.isFinite, canvasSize.height.isFinite,
@@ -40,6 +41,9 @@ enum BlurredImageExporter {
         var status = stat()
         guard lstat(output.path, &status) != 0 else { throw ExportError.destinationExists }
         guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        if let expectedSourceSHA256, try PageWorkspace.digest(of: inputURL) != expectedSourceSHA256 {
+            throw PageWorkspace.WorkspaceError.sourceChanged
+        }
 
         let image = try BlurRenderer.render(image: CIImage(cgImage: source), pairs: pairs,
                                             canvasSize: canvasSize, time: nil, annotations: annotations)
@@ -62,6 +66,9 @@ enum BlurredImageExporter {
             kCGImagePropertyOrientation: 1
         ] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw ExportError.encodeFailed }
+        if let expectedSourceSHA256, try PageWorkspace.digest(of: inputURL) != expectedSourceSHA256 {
+            throw PageWorkspace.WorkspaceError.sourceChanged
+        }
         // Atomic no-replace rename also closes the destination-existence race.
         guard renamex_np(temporary.path, output.path, UInt32(RENAME_EXCL)) == 0 else {
             if errno == EEXIST { throw ExportError.destinationExists }

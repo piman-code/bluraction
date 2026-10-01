@@ -81,6 +81,80 @@ struct PageWorkspaceTests {
     }
 
     @Test
+    func cancellationAfterLastPDFCheckCannotPublishAndPreservesExistingFiles() throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("source.png")
+        try image(at: source, color: .init(red: 1, green: 1, blue: 1, alpha: 1))
+        let sourceBytes = try Data(contentsOf: source)
+        let existing = dir.appendingPathComponent("existing.pdf")
+        let existingBytes = Data("existing output must remain unchanged".utf8)
+        try existingBytes.write(to: existing, options: .withoutOverwriting)
+        let namesBefore = Set(try FileManager.default.contentsOfDirectory(atPath: dir.path))
+        let workspace = try PageWorkspace.open([source])
+        let digest = try PageWorkspace.digest(of: source)
+        let output = dir.appendingPathComponent("cancelled.pdf")
+        var completed = 0, checks = 0
+        var cancelRequested = false, completedBeforeCancellation = false
+        // Capture a false snapshot, then request cancellation immediately after the
+        // final pre-validation observation. The next observation must see true.
+        #expect(throws: PageWorkspace.WorkspaceError.cancelled) {
+            try workspace.exportPDF(to: output, progress: { current, _ in completed = current }, isCancelled: {
+                let observed = cancelRequested
+                checks += 1
+                if checks == 2 {
+                    completedBeforeCancellation = completed == workspace.pages.count
+                    cancelRequested = true
+                }
+                return observed
+            })
+        }
+        #expect(cancelRequested && completedBeforeCancellation && checks > 2)
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)) == namesBefore,
+                "No published PDF or private staging file may remain")
+        #expect(try Data(contentsOf: existing) == existingBytes)
+        #expect(try Data(contentsOf: source) == sourceBytes)
+        #expect(try PageWorkspace.digest(of: source) == digest)
+    }
+
+    @Test
+    func cancellationAfterLastImageCheckCannotPublishAndPreservesExistingFolder() throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("source.png")
+        try image(at: source, color: .init(red: 1, green: 1, blue: 1, alpha: 1))
+        let sourceBytes = try Data(contentsOf: source)
+        let existingFolder = dir.appendingPathComponent("cancelled_images", isDirectory: true)
+        try FileManager.default.createDirectory(at: existingFolder, withIntermediateDirectories: false)
+        let existing = existingFolder.appendingPathComponent("existing.png")
+        let existingBytes = Data("existing PNG must remain unchanged".utf8)
+        try existingBytes.write(to: existing, options: .withoutOverwriting)
+        let namesBefore = Set(try FileManager.default.contentsOfDirectory(atPath: dir.path))
+        let workspace = try PageWorkspace.open([source])
+        let digest = try PageWorkspace.digest(of: source)
+        var checks = 0
+        var cancelRequested = false
+        // One image: this is its first and last processing observation. Cancel
+        // after its false snapshot, while encoding/final validation still follows.
+        #expect(throws: PageWorkspace.WorkspaceError.cancelled) {
+            try workspace.exportImageFiles(near: dir.appendingPathComponent("cancelled.pdf"), isCancelled: {
+                let observed = cancelRequested
+                checks += 1
+                if checks == 1 { cancelRequested = true }
+                return observed
+            })
+        }
+        #expect(cancelRequested && checks > 1)
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)) == namesBefore,
+                "No new image folder or private staging directory may remain")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: existingFolder.path) == ["existing.png"])
+        #expect(try Data(contentsOf: existing) == existingBytes)
+        #expect(try Data(contentsOf: source) == sourceBytes)
+        #expect(try PageWorkspace.digest(of: source) == digest)
+    }
+
+    @Test
     func changedSourceRequiresPageReviewBeforeExportOrProjectReopen() throws {
         let dir = try directory()
         let source = dir.appendingPathComponent("source.png")

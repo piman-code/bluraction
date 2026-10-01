@@ -39,6 +39,16 @@ final class BlurredVideoExporter: ObservableObject {
     @Published private(set) var wasCancelled = false
     private var cancelFlag = false
     private var cancellation = ExportCancellation()
+    typealias SourceFingerprinter = @MainActor (URL) async throws -> String
+    private let sourceFingerprinter: SourceFingerprinter
+
+    /// The injected fingerprinter lets tests suspend the final integrity check.
+    /// Production hashing still runs off-main and propagates all read failures.
+    init(sourceFingerprinter: @escaping SourceFingerprinter = { url in
+        try await Task.detached { try PageWorkspace.digest(of: url) }.value
+    }) {
+        self.sourceFingerprinter = sourceFingerprinter
+    }
 
     nonisolated static let maximumFramePixels = 134_217_728.0
     nonisolated static let maximumDimension = 32_768.0
@@ -69,6 +79,7 @@ final class BlurredVideoExporter: ObservableObject {
     func export(input: URL, pairs: [(shape: RegionShape, effect: RegionEffect)],
                 quality: QualityPreset, canvasBounds: CGSize,
                 annotations: [DrawingAnnotation] = [],
+                expectedSourceSHA256: String? = nil,
                 progressCallback: ((Double, String) -> Void)? = nil) async {
         guard !isExporting else { return }
         cancelFlag = false
@@ -84,12 +95,23 @@ final class BlurredVideoExporter: ObservableObject {
         defer { isExporting = false; try? FileManager.default.removeItem(at: temp) }
         do {
             try checkCancellation()
+            if let expectedSourceSHA256 {
+                let current = try await sourceFingerprinter(input)
+                guard current == expectedSourceSHA256 else { throw PageWorkspace.WorkspaceError.sourceChanged }
+            }
+            try checkCancellation()
             try await Self.runExport(input: input, output: temp, pairs: pairs, quality: quality,
                                      canvasBounds: canvasBounds, annotations: annotations, cancellation: cancellation) { p, text in
                 self.progress = p
                 self.statusText = text
                 progressCallback?(p, text)
             }
+            try checkCancellation()
+            if let expectedSourceSHA256 {
+                let current = try await sourceFingerprinter(input)
+                guard current == expectedSourceSHA256 else { throw PageWorkspace.WorkspaceError.sourceChanged }
+            }
+            // cancel() may run while the final hash is suspended; never publish after it.
             try checkCancellation()
             let output = try publish(temp, for: input)
             lastOutputURL = output
