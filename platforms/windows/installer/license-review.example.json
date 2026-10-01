@@ -1,0 +1,9 @@
+{
+  "status": "pending",
+  "version": "0.8.0-dev1",
+  "bundle_manifest_sha256": "",
+  "reviewed_by": "",
+  "reviewed_at": "",
+  "dependencies": [],
+  "notes": "Example only. Replace with evidence for the exact Windows bundle after inspecting Qt, PDFium, Pillow, NumPy, PyAV/FFmpeg, OpenCV and every codec/DLL. This file does not approve packaging, installation or publication."
+}

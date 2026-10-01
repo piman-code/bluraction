@@ -1,0 +1,743 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bluraction:project:v1-v2",
+  "title": "Existing Mac BlurAction JSON v1/v2 compatibility contract",
+  "$comment": "Structural schema only. Runtime checks additionally enforce bytes, finite numbers, currentIndex < pages.count, unique item UUIDs per page, polygon bounding spans, range ordering and native extended-grapheme limits. Unknown fields are retained and require host review, not silently interpreted. No source path is opened by validation.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/v1"
+    },
+    {
+      "$ref": "#/$defs/v2"
+    }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"
+    },
+    "point": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number",
+          "minimum": -16,
+          "maximum": 16
+        },
+        {
+          "type": "number",
+          "minimum": -16,
+          "maximum": 16
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "size": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 16
+        },
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 16
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "rect": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/point"
+        },
+        {
+          "$ref": "#/$defs/size"
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "timeRange": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "number",
+          "minimum": 0
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2,
+      "$comment": "lower <= upper is a runtime semantic constraint; [0,0] is whole-video sentinel."
+    },
+    "color": {
+      "type": "object",
+      "properties": {
+        "red": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "green": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blue": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "alpha": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "red",
+        "green",
+        "blue",
+        "alpha"
+      ],
+      "additionalProperties": true
+    },
+    "keyframe": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0
+        },
+        "rect": {
+          "$ref": "#/$defs/rect"
+        }
+      },
+      "required": [
+        "time",
+        "rect"
+      ],
+      "additionalProperties": true
+    },
+    "erasure": {
+      "type": "object",
+      "properties": {
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "maxItems": 100000
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 16
+        },
+        "from": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "points",
+        "width"
+      ],
+      "additionalProperties": true
+    },
+    "effect": {
+      "type": "object",
+      "properties": {
+        "blurRadius": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 500
+        },
+        "featherRadius": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 500
+        },
+        "timeRange": {
+          "$ref": "#/$defs/timeRange"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "keyframes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/keyframe"
+          },
+          "maxItems": 100000
+        },
+        "style": {
+          "anyOf": [
+            {
+              "enum": [
+                "blur",
+                "mosaic",
+                "solid"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groupID": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "erasures": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/erasure"
+              },
+              "maxItems": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "x-swift-graphemeLimit": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "blurRadius",
+        "featherRadius",
+        "timeRange",
+        "enabled",
+        "keyframes"
+      ],
+      "additionalProperties": true
+    },
+    "shape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "rectangle": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "origin": {
+                  "$ref": "#/$defs/point"
+                },
+                "size": {
+                  "$ref": "#/$defs/size"
+                }
+              },
+              "required": [
+                "id",
+                "origin",
+                "size"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "rectangle"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ellipse": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "origin": {
+                  "$ref": "#/$defs/point"
+                },
+                "size": {
+                  "$ref": "#/$defs/size"
+                }
+              },
+              "required": [
+                "id",
+                "origin",
+                "size"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "ellipse"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "polygon": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/point"
+                  },
+                  "maxItems": 100000
+                }
+              },
+              "required": [
+                "id",
+                "points"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "polygon"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "region": {
+      "type": "object",
+      "properties": {
+        "shape": {
+          "$ref": "#/$defs/shape"
+        },
+        "effect": {
+          "$ref": "#/$defs/effect"
+        }
+      },
+      "required": [
+        "shape",
+        "effect"
+      ],
+      "additionalProperties": true
+    },
+    "drawing": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "kind": {
+          "enum": [
+            "rectangle",
+            "ellipse",
+            "line",
+            "freehand",
+            "arrow",
+            "text"
+          ]
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "maxItems": 100000
+        },
+        "red": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "green": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blue": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "alpha": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "lineWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 16
+        },
+        "fillOpacity": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeRange": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keyframes": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/keyframe"
+              },
+              "maxItems": 100000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string",
+              "x-swift-graphemeLimit": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groupID": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "erasures": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/erasure"
+              },
+              "maxItems": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "x-swift-graphemeLimit": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hidden": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locked": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fontName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "x-swift-graphemeLimit": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bold": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "textBackground": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "points",
+        "red",
+        "green",
+        "blue",
+        "alpha",
+        "lineWidth"
+      ],
+      "additionalProperties": true
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "mediaPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]+$",
+          "x-swift-graphemeLimit": 4096
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/region"
+          },
+          "maxItems": 1000
+        },
+        "drawings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/drawing"
+          },
+          "maxItems": 5000
+        },
+        "pdfPageIndex": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 199
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pdfGeometryVersion": {
+          "anyOf": [
+            {
+              "const": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceSHA256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mediaPath",
+        "regions",
+        "drawings"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "pdfGeometryVersion"
+            ],
+            "properties": {
+              "pdfGeometryVersion": {
+                "const": 1
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "pdfPageIndex"
+            ],
+            "properties": {
+              "pdfPageIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 199
+              }
+            }
+          }
+        }
+      ]
+    },
+    "v1": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "mediaPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]+$",
+          "x-swift-graphemeLimit": 4096
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/region"
+          },
+          "maxItems": 1000
+        },
+        "drawings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/drawing"
+          },
+          "maxItems": 5000
+        },
+        "sourceSHA256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Optional backward-compatible single-media fingerprint extension. Older Mac ignores it; current adapters validate it before applying edits."
+        }
+      },
+      "required": [
+        "version",
+        "mediaPath",
+        "regions",
+        "drawings"
+      ],
+      "additionalProperties": true,
+      "x-maxUTF8Bytes": 20971520
+    },
+    "v2": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "title": {
+          "type": "string",
+          "x-swift-graphemeLimit": 255,
+          "minLength": 1
+        },
+        "currentIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 199
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/page"
+          },
+          "maxItems": 200,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "version",
+        "title",
+        "currentIndex",
+        "pages"
+      ],
+      "additionalProperties": true,
+      "x-maxUTF8Bytes": 52428800
+    }
+  }
+}

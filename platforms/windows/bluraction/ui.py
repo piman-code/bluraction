@@ -1,0 +1,1254 @@
+"""Korean native Qt window following the approved macOS editor layout.
+
+Canvas geometry is normalized in the persisted bottom-left coordinate system.
+This module does not decode media or implement the document renderer.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from pathlib import Path
+import threading
+
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontDatabase, QFontInfo, QImage, QKeySequence, QPainter, QPen, QTransform
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox,
+    QAbstractItemView, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter, QToolBar, QVBoxLayout, QWidget,
+)
+
+from . import renderer
+from .media import Cancelled, Page, export_documents, export_image, safe_stem
+
+
+TOOLS = (
+    ('select', '선택'), ('cover_rectangle', '사각 가리기'),
+    ('cover_ellipse', '타원 가리기'), ('cover_polygon', '자유형 가리기'),
+    ('line', '선'), ('freehand', '펜'), ('rectangle', '사각형'),
+    ('ellipse', '타원'), ('arrow', '화살표'), ('text', '글자'), ('eraser', '지우개'),
+)
+
+
+def item_identity(item, region):
+    return next(iter(item['shape'].values()))['id'] if region else item['id']
+
+
+def font_available(name, families=None):
+    """Accept explicit system/generic requests; detect missing named families.
+
+    QFontInfo also resolves real aliases omitted by QFontDatabase.families().
+    https://doc.qt.io/qt-6/qfontinfo.html#details
+    """
+    if not name:
+        return True
+    families = families if families is not None else {f.casefold() for f in QFontDatabase.families()}
+    if name.casefold() in families or name == QApplication.font().family():
+        return True
+    if name.casefold() in {'sans serif', 'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'system'}:
+        return bool(QFontInfo(QFont(name)).family())
+    return QFontInfo(QFont(name)).exactMatch()
+
+
+def fitted_rect(container: QRectF, size) -> QRectF:
+    """One aspect-fit rectangle for source, effects and mouse hit-testing."""
+    width, height = size.width(), size.height()
+    if width <= 0 or height <= 0 or container.width() <= 0 or container.height() <= 0:
+        return QRectF()
+    scale = min(container.width() / width, container.height() / height)
+    fitted = QRectF(0, 0, width * scale, height * scale)
+    fitted.moveCenter(container.center())
+    return fitted
+
+
+class EditorCanvas(QWidget):
+    created = Signal(str, object)
+    picked = Signal(object)
+    moved = Signal(float, float)
+    erased = Signal(object)
+    message = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(240, 180)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName('가리기·그리기 편집 캔버스')
+        self.image = QImage()
+        self.state = {'regions': [], 'drawings': []}
+        self.time = None
+        self.tool = 'select'
+        self.selection_ids = set()
+        self.busy = False
+        self._preview = QImage()
+        self._stroke = []
+        self._drag_start = None
+        self._drag_item = None
+
+    @property
+    def display_rect(self):
+        return fitted_rect(QRectF(self.rect()), self.image.size())
+
+    def normalized(self, position, clamp=False):
+        rect = self.display_rect
+        if rect.isEmpty() or (not clamp and not rect.contains(position)):
+            return None
+        x = (position.x() - rect.x()) / rect.width()
+        y = 1 - (position.y() - rect.y()) / rect.height()
+        return [max(0, min(1, x)), max(0, min(1, y))]
+
+    def display_point(self, point):
+        rect = self.display_rect
+        return QPointF(rect.x() + point[0] * rect.width(),
+                       rect.y() + (1 - point[1]) * rect.height())
+
+    def set_document(self, image, state, selection_ids=(), time=None):
+        self.image, self.state = image, deepcopy(state)
+        self.selection_ids, self.time = set(selection_ids), time
+        try:
+            self._preview = renderer.render(image, state, time) if not image.isNull() else QImage()
+        except (ValueError, RuntimeError) as error:
+            self._preview = QImage()
+            self.message.emit(str(error))
+        self.update()
+
+    def set_tool(self, tool):
+        self.tool = tool
+        self._stroke = []
+        self._drag_start = None
+        self.update()
+
+    def _items(self):
+        # Drawings are rendered above all covers in the existing project format.
+        for region, items in ((False, self.state.get('drawings', [])),
+                              (True, self.state.get('regions', []))):
+            for item in reversed(items):
+                properties = item['effect'] if region else item
+                if properties.get('hidden', False) or not properties.get('enabled', True):
+                    continue
+                if not renderer.active(properties.get('timeRange', [0, 0]), self.time):
+                    continue
+                yield renderer.positioned(item, region, self.time), region
+
+    def hit_test(self, position):
+        point = self.normalized(position)
+        if point is None:
+            return None
+        for item, region in self._items():
+            kind, points = renderer.shape_points(item) if region else (item['kind'], item['points'])
+            path = renderer.path_for(kind, points, self.display_rect.width(), self.display_rect.height())
+            local = QPointF(position.x() - self.display_rect.x(), position.y() - self.display_rect.y())
+            if path.contains(local):
+                return item_identity(item, region)
+            from PySide6.QtGui import QPainterPathStroker
+            stroker = QPainterPathStroker()
+            stroker.setWidth(12)
+            if stroker.createStroke(path).contains(local):
+                return item_identity(item, region)
+        return None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.GlobalColor.black)
+        if self._preview.isNull():
+            painter.setPen(Qt.GlobalColor.lightGray)
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             '파일을 열거나 여기로 끌어 놓으세요.')
+            return
+        painter.drawImage(self.display_rect, self._preview)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor('#4da3ff'), 1.5, Qt.PenStyle.DashLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for item, region in self._items():
+            if item_identity(item, region) not in self.selection_ids:
+                continue
+            points = renderer.shape_points(item)[1] if region else item['points']
+            if points:
+                x, y, width, height = renderer.bounds(points)
+                painter.drawRect(QRectF(self.display_point([x, y]),
+                                        self.display_point([x + width, y + height])).normalized())
+        if self._stroke:
+            if self.tool in ('freehand', 'eraser', 'cover_polygon'):
+                for a, b in zip(self._stroke, self._stroke[1:]):
+                    painter.drawLine(self.display_point(a), self.display_point(b))
+            elif len(self._stroke) > 1:
+                rect = QRectF(self.display_point(self._stroke[0]), self.display_point(self._stroke[-1])).normalized()
+                if self.tool.endswith('ellipse'):
+                    painter.drawEllipse(rect)
+                elif self.tool in ('line', 'arrow'):
+                    painter.drawLine(self.display_point(self._stroke[0]), self.display_point(self._stroke[-1]))
+                else:
+                    painter.drawRect(rect)
+
+    def mousePressEvent(self, event):
+        if self.busy or event.button() != Qt.MouseButton.LeftButton:
+            return
+        point = self.normalized(event.position())
+        if point is None:
+            return
+        self.setFocus()
+        if self.tool == 'select':
+            self._drag_item = self.hit_test(event.position())
+            self.picked.emit(self._drag_item)
+            self._drag_start = point if self._drag_item else None
+        else:
+            self._stroke = [point]
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        if self.busy or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        point = self.normalized(event.position(), clamp=True)
+        if point is None or not self._stroke:
+            return
+        if self.tool in ('freehand', 'eraser', 'cover_polygon'):
+            if point != self._stroke[-1]:
+                self._stroke.append(point)
+        else:
+            self._stroke = [self._stroke[0], point]
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if self.busy or event.button() != Qt.MouseButton.LeftButton:
+            return
+        end = self.normalized(event.position(), clamp=True)
+        if self.tool == 'select' and self._drag_start and end:
+            dx, dy = end[0] - self._drag_start[0], end[1] - self._drag_start[1]
+            if dx or dy:
+                self.moved.emit(dx, dy)
+        elif self._stroke and end:
+            stroke = self._stroke[:]
+            if self.tool == 'eraser':
+                if end != stroke[-1]:
+                    stroke.append(end)
+                self.erased.emit(stroke)
+            elif self.tool in ('freehand', 'cover_polygon'):
+                if end != stroke[-1]:
+                    stroke.append(end)
+                if len(stroke) >= (3 if self.tool == 'cover_polygon' else 2):
+                    self.created.emit(self.tool, stroke)
+            elif stroke[0] != end:
+                self.created.emit(self.tool, [stroke[0], end])
+        self._stroke, self._drag_start, self._drag_item = [], None, None
+        self.update()
+
+
+class ExportWorker(QObject):
+    progress = Signal(float)
+    finished = Signal(object)
+
+    def __init__(self, task):
+        super().__init__()
+        self.task = task
+        self.cancelled = threading.Event()
+
+    def run(self):
+        try:
+            result = self.task(self.cancelled.is_set, self.progress.emit)
+            self.finished.emit((result, None))
+        except Exception as error:
+            self.finished.emit((None, error))
+
+
+class BlurActionWindow(QMainWindow):
+    def __init__(self, workspace=None):
+        super().__init__()
+        if workspace is None:
+            from .editor import Workspace
+            workspace = Workspace()
+        self.workspace = workspace
+        self._refreshing = False
+        self._text_editor_baseline = None
+        self._thread = None
+        self._worker = None
+        self._outcome = None
+        self._after_operation = None
+        self._operation_error_handler = None
+        self._discard_cancelled_result = False
+        self._operation_cancelled = None
+        self._project_path = None
+        self._video_source_path = None
+        self._video_source = None
+        self._video_generation = 0
+        self._video_image = QImage()
+        self._video_image_source = None
+        self._operation_label = '새 파일 저장'
+        self.audio = QAudioOutput(self)
+        self._create_video_player()
+        self.cover_color = QColor('black')
+        self.drawing_color = QColor('red')
+        self.setWindowTitle('BlurAction')
+        self.resize(1220, 820)
+        self.setAcceptDrops(True)
+        self.canvas = EditorCanvas()
+        self.canvas.created.connect(self.create_item)
+        self.canvas.picked.connect(self.pick_item)
+        self.canvas.moved.connect(lambda dx, dy: self.perform(lambda: self.workspace.move_selected(dx, dy, self.workspace.time)))
+        self.canvas.erased.connect(self.erase_points)
+        self.canvas.message.connect(lambda text: self.statusBar().showMessage(text))
+        self.actions = {}
+        self._make_actions()
+        self._make_layout()
+        self.refresh()
+
+    def _action(self, name, text, callback, shortcut=None):
+        action = QAction(text, self)
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
+        action.triggered.connect(callback)
+        self.actions[name] = action
+        return action
+
+    def _make_actions(self):
+        file_menu = self.menuBar().addMenu('파일(&F)')
+        edit_menu = self.menuBar().addMenu('편집(&E)')
+        toolbar = QToolBar('작업', self)
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        for name, label, handler, key in (
+            ('open', '파일 열기…', self.open_dialog, 'Ctrl+O'),
+            ('open_project', '프로젝트 열기…', self.open_project_dialog, 'Ctrl+Shift+O'),
+            ('save', '프로젝트 저장…', self.save_dialog, 'Ctrl+S'),
+            ('export', '내보내기…', self.export_dialog, 'Ctrl+E'),
+            ('relink', '원본 다시 연결…', self.relink_dialog, None),
+            ('import_items', '프로젝트 항목 가져오기…', self.import_items_dialog, 'Ctrl+Shift+I'),
+            ('template', '다른 미디어에 프로젝트 적용…', self.template_dialog, None),
+        ):
+            action = self._action(name, label, handler, key)
+            file_menu.addAction(action)
+            if name in ('open', 'save', 'export'):
+                toolbar.addAction(action)
+        for name, label, handler, key in (
+            ('undo', '실행취소', lambda: self.perform(self.workspace.undo), 'Ctrl+Z'),
+            ('redo', '다시실행', lambda: self.perform(self.workspace.redo), 'Ctrl+Shift+Z'),
+            ('delete', '선택 항목 삭제', lambda: self.perform(self.workspace.delete_selected), 'Delete'),
+            ('duplicate', '선택 항목·그룹 복제', lambda: self.perform(self.workspace.duplicate_selected), 'Ctrl+D'),
+        ):
+            action = self._action(name, label, handler, key)
+            edit_menu.addAction(action)
+            if name in ('undo', 'redo'):
+                toolbar.addAction(action)
+        for name, label, callback in (
+            ('front', '한 단계 앞으로', lambda: self.perform(lambda: self.workspace.reorder_selected(1))),
+            ('back', '한 단계 뒤로', lambda: self.perform(lambda: self.workspace.reorder_selected(-1))),
+            ('to_front', '맨 앞으로', lambda: self.perform(lambda: self.workspace.reorder_selected(len(self.workspace.items())))),
+            ('to_back', '맨 뒤로', lambda: self.perform(lambda: self.workspace.reorder_selected(-len(self.workspace.items())))),
+            ('group', '선택 항목 그룹', lambda: self.perform(self.workspace.group_selected)),
+            ('ungroup', '그룹 풀기', lambda: self.perform(self.workspace.ungroup_selected)),
+        ):
+            edit_menu.addAction(self._action(name, label, callback))
+        toolbar.addSeparator()
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for tool, label in TOOLS:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(tool == 'select')
+            action.triggered.connect(lambda checked, name=tool: self.canvas.set_tool(name))
+            group.addAction(action)
+            toolbar.addAction(action)
+            self.actions['tool_' + tool] = action
+
+    def _make_layout(self):
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.addWidget(self.canvas, 1)
+        self.pager = QWidget()
+        pager_layout = QHBoxLayout(self.pager)
+        self.previous = QPushButton('◀ 이전')
+        self.next = QPushButton('다음 ▶')
+        self.page_label = QLabel('0 / 0')
+        self.previous.clicked.connect(lambda: self.change_page(-1))
+        self.next.clicked.connect(lambda: self.change_page(1))
+        pager_layout.addWidget(self.previous)
+        pager_layout.addWidget(self.page_label)
+        pager_layout.addWidget(self.next)
+        pager_layout.addStretch()
+        center_layout.addWidget(self.pager)
+        self.video_controls = QWidget()
+        transport = QHBoxLayout(self.video_controls)
+        self.play_button = QPushButton('▶ 재생')
+        self.play_button.clicked.connect(self.toggle_playback)
+        self.scrubber = QSlider(Qt.Orientation.Horizontal)
+        self.scrubber.setRange(0, 0)
+        self.scrubber.sliderReleased.connect(lambda: self.seek_video(self.scrubber.value() / 1000))
+        self.time_label = QLabel('00:00.00 / 00:00.00')
+        transport.addWidget(self.play_button)
+        transport.addWidget(self.scrubber, 1)
+        transport.addWidget(self.time_label)
+        center_layout.addWidget(self.video_controls)
+        inspector = QWidget()
+        form = QFormLayout(inspector)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setContentsMargins(12, 12, 12, 12)
+        self.source_label = QLabel('파일을 열면 원본 정보가 표시됩니다.')
+        self.source_label.setWordWrap(True)
+        form.addRow(self.source_label)
+        self.style = QComboBox()
+        for label, value in (('블러', 'blur'), ('모자이크', 'mosaic'), ('단색', 'solid')):
+            self.style.addItem(label, value)
+        self.radius = QDoubleSpinBox()
+        self.radius.setDecimals(6)
+        self.radius.setRange(0, 500)
+        self.radius.setValue(25)
+        self.feather = QDoubleSpinBox()
+        self.feather.setDecimals(6)
+        self.feather.setRange(0, 500)
+        self.feather.setValue(12)
+        self.width = QDoubleSpinBox()
+        self.width.setDecimals(6)
+        self.width.setRange(.000001, 16000)
+        self.width.setValue(4)
+        self.fill = QDoubleSpinBox()
+        self.fill.setDecimals(6)
+        self.fill.setRange(0, 1)
+        self.fill.setSingleStep(.1)
+        self.eraser_width = QSpinBox()
+        self.eraser_width.setRange(1, 200)
+        self.eraser_width.setValue(24)
+        form.addRow('가리기 방식', self.style)
+        form.addRow('강도 / 칸 크기', self.radius)
+        form.addRow('경계 부드럽게', self.feather)
+        cover_color = QPushButton('가리기 색…')
+        cover_color.clicked.connect(lambda: self.choose_color(True))
+        form.addRow(cover_color)
+        drawing_color = QPushButton('그림·글자 색…')
+        drawing_color.clicked.connect(lambda: self.choose_color(False))
+        form.addRow(drawing_color)
+        form.addRow('선 굵기', self.width)
+        form.addRow('채우기', self.fill)
+        self.eraser_mode = QComboBox()
+        self.eraser_mode.addItem('부분 지우기', 'partial')
+        self.eraser_mode.addItem('닿은 항목 삭제', 'item')
+        self.eraser_mode.currentIndexChanged.connect(lambda: self.refresh() if not self._refreshing else None)
+        self.eraser_target = QComboBox()
+        for label, target in (('영역·그림 모두', 'all'), ('가리기 영역만', 'regions'), ('그림·글자만', 'drawings')):
+            self.eraser_target.addItem(label, target)
+        form.addRow('지우개 방식', self.eraser_mode)
+        form.addRow('지우개 대상', self.eraser_target)
+        form.addRow('지우개 크기', self.eraser_width)
+        self.erase_from_now = QCheckBox('영상: 지금 시점부터 지우기')
+        form.addRow(self.erase_from_now)
+        self.text = QPlainTextEdit()
+        self.text.setPlaceholderText('여러 줄 글자')
+        self.text.setMaximumHeight(100)
+        form.addRow('글자', self.text)
+        self.font = QComboBox()
+        self.font.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.font.setMinimumContentsLength(12)
+        self.font.addItems(QFontDatabase.families())
+        default_family = QApplication.font().family()
+        if self.font.findText(default_family) < 0:
+            self.font.addItem(default_family)
+        self.font.setCurrentText(default_family)
+        form.addRow('글꼴', self.font)
+        self.font_warning = QLabel()
+        self.font_warning.setWordWrap(True)
+        form.addRow(self.font_warning)
+        self.bold = QCheckBox('굵게')
+        self.bold.setChecked(True)
+        form.addRow(self.bold)
+        self.text_apply = QPushButton('선택 글자 내용·글꼴 적용')
+        self.text_apply.clicked.connect(lambda: self.update_selection(text=self.text.toPlainText(),
+            fontName=self.font.currentText(), bold=self.bold.isChecked()))
+        form.addRow(self.text_apply)
+        self.layers = QListWidget()
+        self.layers.setAccessibleName('레이어 목록 — 위가 앞')
+        self.layers.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.layers.itemSelectionChanged.connect(self.layers_changed)
+        form.addRow('레이어 (위가 앞)', self.layers)
+        self.layer_name = QLineEdit()
+        self.layer_name.editingFinished.connect(lambda: self.update_selection(name=self.layer_name.text()))
+        self.hidden = QCheckBox('숨기기')
+        self.locked = QCheckBox('잠금')
+        self.hidden.toggled.connect(lambda value: self.update_selection(hidden=value))
+        self.locked.toggled.connect(lambda value: self.update_selection(locked=value))
+        form.addRow('이름', self.layer_name)
+        form.addRow(self.hidden, self.locked)
+        self.position_controls = QWidget()
+        position_form = QFormLayout(self.position_controls)
+        position_form.setContentsMargins(0, 0, 0, 0)
+        self.coordinates = []
+        for label in ('X', 'Y', '너비', '높이'):
+            value = QDoubleSpinBox()
+            value.setDecimals(4)
+            value.setRange(-16, 16)
+            value.setSingleStep(.01)
+            self.coordinates.append(value)
+            position_form.addRow(label, value)
+        position_apply = QPushButton('좌표·크기 적용')
+        position_apply.clicked.connect(lambda: self.perform(lambda: self.workspace.resize_selected(
+            [control.value() for control in self.coordinates], self.workspace.time)))
+        position_form.addRow(position_apply)
+        form.addRow(self.position_controls)
+        self.time_controls = QWidget()
+        time_form = QFormLayout(self.time_controls)
+        time_form.setContentsMargins(0, 0, 0, 0)
+        self.range_start, self.range_end = QDoubleSpinBox(), QDoubleSpinBox()
+        for control in (self.range_start, self.range_end):
+            control.setDecimals(3)
+            control.setRange(0, 1_000_000)
+        time_form.addRow('시작(초)', self.range_start)
+        time_form.addRow('끝(초)', self.range_end)
+        range_apply = QPushButton('구간 적용')
+        range_apply.clicked.connect(self.apply_time_range)
+        time_form.addRow(range_apply)
+        self.record_motion = QCheckBox('움직임 기록')
+        self.record_motion.toggled.connect(lambda enabled: setattr(self.workspace, 'record_motion', enabled))
+        time_form.addRow(self.record_motion)
+        record = QPushButton('현재 위치 기록')
+        record.clicked.connect(self.record_position)
+        time_form.addRow(record)
+        self.keyframes = QListWidget()
+        self.keyframes.setMaximumHeight(130)
+        self.keyframes.itemActivated.connect(lambda item: self.seek_video(item.data(Qt.ItemDataRole.UserRole)))
+        self.keyframes.currentItemChanged.connect(self.keyframe_selected)
+        time_form.addRow('위치 기록', self.keyframes)
+        self.keyframe_time = QDoubleSpinBox()
+        self.keyframe_time.setDecimals(3)
+        self.keyframe_time.setRange(0, 1_000_000)
+        time_form.addRow('선택 기록 시각(초)', self.keyframe_time)
+        self.retime_button = QPushButton('기록 시각 적용')
+        self.retime_button.clicked.connect(self.retime_keyframe)
+        time_form.addRow(self.retime_button)
+        remove_key = QPushButton('선택 기록 삭제')
+        remove_key.clicked.connect(self.remove_keyframe)
+        time_form.addRow(remove_key)
+        self.track_button = QPushButton('선택 항목 자동 추적')
+        self.track_button.clicked.connect(self.auto_track)
+        time_form.addRow(self.track_button)
+        form.addRow(self.time_controls)
+        self.copy_all_button = QPushButton('현재 페이지 작업을 모든 페이지에 적용…')
+        self.copy_all_button.clicked.connect(self.copy_all)
+        form.addRow(self.copy_all_button)
+        self.export_button = QPushButton('내보내기…')
+        self.export_button.clicked.connect(self.export_dialog)
+        self.cancel_button = QPushButton('취소')
+        self.cancel_button.clicked.connect(self.cancel_operation)
+        self.cancel_button.setEnabled(False)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        form.addRow(self.export_button, self.cancel_button)
+        form.addRow(self.progress)
+        self.inspector = inspector
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(inspector)
+        scroll.setMinimumWidth(280)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.addWidget(center)
+        split.addWidget(scroll)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 0)
+        split.setSizes([900, 300])
+        self.setCentralWidget(split)
+        for control, field in ((self.style, 'style'), (self.radius, 'blurRadius'),
+                               (self.feather, 'featherRadius'), (self.width, 'lineWidth'),
+                               (self.fill, 'fillOpacity')):
+            signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
+            signal.connect(lambda value, key=field: self.style_changed(key))
+
+    def perform(self, task):
+        if self.workspace.busy:
+            return
+        try:
+            task()
+            self.refresh()
+        except Exception as error:
+            self.show_error(error)
+
+    def show_error(self, error):
+        QMessageBox.warning(self, 'BlurAction', str(error))
+
+    def _color_dict(self, color):
+        return dict(zip(('red', 'green', 'blue', 'alpha'), color.getRgbF()))
+
+    def create_item(self, tool, points):
+        def create():
+            if tool.startswith('cover_'):
+                kind = tool.removeprefix('cover_')
+                self.workspace.add_cover(kind, points, self.style.currentData(), self.radius.value(),
+                                         self.feather.value(), self._color_dict(self.cover_color))
+            else:
+                self.workspace.add_drawing(tool, points, self._color_dict(self.drawing_color),
+                                           self.width.value() / 1000, self.fill.value(),
+                                           self.text.toPlainText(), self.font.currentText(), bold=self.bold.isChecked())
+        self.perform(create)
+
+    def erase_points(self, points):
+        self.perform(lambda: self.workspace.erase(points, self.eraser_width.value() / 1000,
+            self.workspace.time, from_now=self.erase_from_now.isChecked(),
+            mode=self.eraser_mode.currentData(), target=self.eraser_target.currentData()))
+
+    def missing_fonts(self):
+        families = {family.casefold() for family in QFontDatabase.families()}
+        return [(index + 1, item['fontName']) for index, page in enumerate(self.workspace.pages)
+                for item in page.state['drawings']
+                if item['kind'] == 'text' and not item.get('hidden', False)
+                and not font_available(item.get('fontName'), families)]
+
+    def pick_item(self, identity):
+        self.workspace.selectionID = identity
+        self.refresh()
+
+    def layers_changed(self):
+        if self._refreshing or self.workspace.busy:
+            return
+        selected = self.layers.selectedItems()
+        self.workspace.selection_ids = {item.data(Qt.ItemDataRole.UserRole) for item in selected}
+        self.canvas.selection_ids = set(self.workspace.selection_ids)
+        self.refresh()
+
+    def update_selection(self, **properties):
+        if not self._refreshing and self.workspace.selectionID:
+            self.perform(lambda: self.workspace.update_selected(**properties))
+
+    def style_changed(self, field):
+        if self._refreshing:
+            return
+        chosen = self.workspace.selected()
+        if not chosen:
+            return
+        controls = {'style': self.style, 'blurRadius': self.radius,
+                    'featherRadius': self.feather, 'lineWidth': self.width,
+                    'fillOpacity': self.fill}
+        region_fields = {'style', 'blurRadius', 'featherRadius'}
+        if chosen[1] != (field in region_fields):
+            return
+        control = controls[field]
+        value = control.currentData() if field == 'style' else control.value()
+        if field == 'lineWidth':
+            value /= 1000
+        # A rounded inspector display must never rewrite untouched project data.
+        self.update_selection(**{field: value})
+
+    def choose_color(self, cover):
+        value = QColorDialog.getColor(self.cover_color if cover else self.drawing_color,
+                                      self, '가리기 색' if cover else '그림·글자 색',
+                                      QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        if value.isValid():
+            if cover:
+                self.cover_color = value
+            else:
+                self.drawing_color = value
+            chosen = self.workspace.selected()
+            if chosen and chosen[1] == cover:
+                self.update_selection(**({'color': self._color_dict(value)} if cover else self._color_dict(value)))
+
+    def _create_video_player(self):
+        self.player = QMediaPlayer(self)
+        self.player.setAudioOutput(self.audio)
+        self.video_sink = QVideoSink(self)
+        self.player.setVideoSink(self.video_sink)
+        generation = self._video_generation
+        self.video_sink.videoFrameChanged.connect(
+            lambda frame: self.video_frame_changed(frame, generation))
+        self.player.positionChanged.connect(
+            lambda milliseconds: self.playback_position_changed(milliseconds, generation))
+        self.player.errorOccurred.connect(lambda error, text:
+            self.statusBar().showMessage('영상 재생 오류: ' + text)
+            if generation == self._video_generation else None)
+
+    def _sync_video_source(self, page):
+        video = self.workspace.video
+        path = str(page.source) if video and page else None
+        if self._video_source is video and self._video_source_path == path:
+            return
+        # A committed engine source, even at the same path, starts a separate
+        # playback pipeline. Queued old sink/player callbacks cannot paint it.
+        self._video_generation += 1
+        self._video_source = video
+        self._video_source_path = path
+        self._video_image = QImage()
+        self._video_image_source = None
+        old_player, old_sink = self.player, self.video_sink
+        old_player.stop()
+        old_player.setSource(QUrl())
+        old_player.deleteLater()
+        old_sink.deleteLater()
+        self._create_video_player()
+        self.play_button.setText('▶ 재생')
+        if path is not None:
+            self.player.setSource(QUrl.fromLocalFile(path))
+
+    def refresh(self):
+        self._refreshing = True
+        page = self.workspace.page
+        selected = self.workspace.selectionID
+        self._sync_video_source(page)
+        try:
+            if self.workspace.video and self._video_image_source is self.workspace.video and not self._video_image.isNull():
+                image = self._video_image
+            elif self.workspace.busy and page and self.canvas.state is page.state and not self.canvas.image.isNull():
+                image = self.canvas.image  # An IO worker must not cause a GUI cache-miss decode.
+            else:
+                image = page.image if page else QImage()
+        except (ValueError, RuntimeError, OSError) as error:
+            image = QImage()
+            self.statusBar().showMessage(str(error))
+        self.canvas.set_document(image, page.state if page else {}, self.workspace.selection_ids, self.workspace.time)
+        count = len(self.workspace.pages)
+        self.page_label.setText(f'{self.workspace.index + 1 if count else 0} / {count}')
+        self.previous.setEnabled(bool(count and self.workspace.index > 0 and not self.workspace.busy))
+        self.next.setEnabled(bool(count and self.workspace.index + 1 < count and not self.workspace.busy))
+        self.copy_all_button.setEnabled(count > 1 and not self.workspace.busy)
+        self.source_label.setText(str(page.source.name) if page else '파일을 열면 원본 정보가 표시됩니다.')
+        self.layers.clear()
+        chosen = None
+        if page:
+            for is_region, items in ((False, page.state['drawings']), (True, page.state['regions'])):
+                for item in reversed(items):
+                    properties = item['effect'] if is_region else item
+                    identity = item_identity(item, is_region)
+                    label = properties.get('name') or ('가리기 영역' if is_region else item['kind'])
+                    if properties.get('hidden') or not properties.get('enabled', True):
+                        label += ' · 숨김'
+                    if properties.get('locked'):
+                        label += ' · 잠금'
+                    row = QListWidgetItem(label)
+                    row.setData(Qt.ItemDataRole.UserRole, identity)
+                    self.layers.addItem(row)
+                    if identity in self.workspace.selection_ids:
+                        row.setSelected(True)
+                    if identity == selected:
+                        chosen = properties
+        self.layer_name.setText(chosen.get('name', '') if chosen else '')
+        self.hidden.setChecked(bool(chosen and (chosen.get('hidden') or not chosen.get('enabled', True))))
+        self.locked.setChecked(bool(chosen and chosen.get('locked')))
+        self.layer_name.setEnabled(chosen is not None)
+        self.hidden.setEnabled(chosen is not None)
+        self.locked.setEnabled(chosen is not None)
+        current = self.workspace.selected()
+        if current:
+            item, region = current
+            shown = renderer.positioned(item, region, self.workspace.time)
+            points = renderer.shape_points(shown)[1] if region else shown['points']
+            for control, value in zip(self.coordinates, renderer.bounds(points)):
+                control.setValue(value)
+            if region:
+                self.style.setCurrentIndex(max(0, self.style.findData(chosen.get('style', 'blur'))))
+                self.radius.setValue(chosen.get('blurRadius', 25))
+                self.feather.setValue(chosen.get('featherRadius', 12))
+            else:
+                self.width.setValue(chosen.get('lineWidth', .004) * 1000)
+                self.fill.setValue(chosen.get('fillOpacity', 0))
+                if item['kind'] == 'text':
+                    family = chosen.get('fontName') or QApplication.font().family()
+                    baseline = (selected, chosen.get('text', ''), family, chosen.get('bold', True))
+                    # Keep explicit, unapplied inspector choices through an
+                    # unrelated refresh. Selection/model changes (incl. undo)
+                    # load the saved fields, preserving unavailable family names.
+                    if self._text_editor_baseline != baseline:
+                        self.text.setPlainText(baseline[1])
+                        if self.font.findText(family) < 0:
+                            self.font.addItem(family)
+                        self.font.setCurrentText(family)
+                        self.bold.setChecked(baseline[3])
+                        self._text_editor_baseline = baseline
+                else:
+                    self._text_editor_baseline = None
+            interval = chosen.get('timeRange', [0, 0])
+            self.range_start.setValue(interval[0])
+            self.range_end.setValue(interval[1])
+            if region:
+                self._text_editor_baseline = None
+        else:
+            self._text_editor_baseline = None
+        self.position_controls.setEnabled(current is not None and not self.workspace.busy)
+        prior_keyframe = self.keyframes.currentItem()
+        prior_time = prior_keyframe.data(Qt.ItemDataRole.UserRole) if prior_keyframe else None
+        self.keyframes.clear()
+        for frame in chosen.get('keyframes', []) if chosen else []:
+            row = QListWidgetItem(f"{frame['time']:.3f} 초")
+            row.setData(Qt.ItemDataRole.UserRole, frame['time'])
+            self.keyframes.addItem(row)
+            if frame['time'] == prior_time:
+                self.keyframes.setCurrentItem(row)
+        if self.keyframes.count() and self.keyframes.currentItem() is None:
+            self.keyframes.setCurrentRow(0)
+        video = self.workspace.video
+        self.keyframe_time.setMaximum(video.duration if video else 1_000_000)
+        self.keyframe_time.setEnabled(bool(video and self.keyframes.currentItem() and not self.workspace.busy))
+        self.retime_button.setEnabled(self.keyframe_time.isEnabled())
+        self.video_controls.setVisible(video is not None)
+        self.time_controls.setVisible(video is not None)
+        self.pager.setVisible(video is None)
+        self.erase_from_now.setVisible(video is not None)
+        self.erase_from_now.setEnabled(bool(video and not self.workspace.busy))
+        self.track_button.setEnabled(bool(video and selected and not self.workspace.busy))
+        if video:
+            self.scrubber.setRange(0, round(video.duration * 1000))
+            self.time_label.setText(f'{self.workspace.time or 0:.2f} / {video.duration:.2f} 초')
+        for name, action in self.actions.items():
+            action.setEnabled(not self.workspace.busy and (bool(page) if name not in ('open', 'open_project', 'template') else True))
+        self.export_button.setEnabled(bool(page) and not self.workspace.busy)
+        self.actions['delete'].setEnabled(bool(selected) and not self.workspace.busy)
+        self.actions['duplicate'].setEnabled(bool(selected) and not self.workspace.busy)
+        self.actions['undo'].setEnabled(self.workspace.can_undo)
+        self.actions['redo'].setEnabled(self.workspace.can_redo)
+        self.canvas.busy = self.workspace.busy
+        missing = self.missing_fonts()
+        self.font_warning.setText('이 PC에 없는 글꼴: ' + ', '.join(sorted({name for _, name in missing}))
+            + '\n미리보기의 대체 글꼴은 배치를 바꿀 수 있습니다. 설치된 글꼴을 선택하고 적용한 뒤 출력하세요.' if missing else '')
+        self.font_warning.setVisible(bool(missing))
+        self.setWindowTitle((self.workspace.title + ' — ' if page else '') + 'BlurAction')
+        self._refreshing = False
+
+    def change_page(self, offset):
+        def change():
+            self.workspace.set_page(max(0, min(len(self.workspace.pages) - 1, self.workspace.index + offset)))
+        self.perform(change)
+
+    def open_paths(self, paths):
+        if self.workspace.busy:
+            self.statusBar().showMessage('작업이 끝나거나 취소한 뒤 파일을 열어 주세요.')
+            return
+        if not self.confirm_discard():
+            return
+        paths = [Path(path) for path in paths]
+        self._prepare_workspace(lambda candidate, cancel: candidate.load(paths, cancel=cancel), None)
+
+    def _prepare_workspace(self, prepare, project_path, on_error=None):
+        from .editor import Workspace
+        from .media import check_cancel, page_image, validate_source_identities
+        if self.workspace.busy:
+            return
+
+        def task(cancel, progress):
+            candidate = Workspace()
+            prepare(candidate, cancel)
+            check_cancel(cancel)
+            # Keep only the displayed page alive across worker/cache handoff.
+            # GUI refresh must not perform a lazy decode or full hash itself.
+            if candidate.page:
+                candidate.page._image = page_image(candidate.page, cancel)
+            check_cancel(cancel)
+            return candidate
+
+        def commit(candidate):
+            validate_source_identities(candidate.pages)  # Cheap metadata-only GUI guard.
+            self.workspace.adopt(candidate)
+            self._project_path = Path(project_path) if project_path is not None else None
+            self.refresh()  # Invalidate the old player before any nested review dialog.
+            if candidate.review_required:
+                QMessageBox.warning(self, '이전 PDF 편집 확인 필요',
+                    '이전 PDF 좌표 방식의 편집은 확인이 필요합니다.\n'
+                    + '\n'.join(map(str, candidate.review_required)))
+
+        self._after_operation = commit
+        self._operation_error_handler = on_error
+        self._discard_cancelled_result = True
+        self._operation_label = '원본과 프로젝트 준비'
+        self.start_export(task)
+
+    def open_dialog(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, 'PDF·이미지·영상 열기', '', '미디어 파일 (*)')
+        if paths:
+            self.open_paths(paths)
+
+    def open_project_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(self, '프로젝트 열기', '', 'BlurAction 프로젝트 (*.bluraction)')
+        if path:
+            self.open_project(Path(path))
+
+    def save_dialog(self):
+        if self.workspace.busy or not self.workspace.page:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, '프로젝트를 새 파일로 저장',
+                                             safe_stem(self.workspace.title, '.bluraction'),
+                                             'BlurAction 프로젝트 (*.bluraction)')
+        if path:
+            try:
+                snapshot = self.workspace.clone_for_io()
+            except Exception as error:
+                self.show_error(error)
+                return
+
+            def save(cancel, progress):
+                snapshot.save_project(Path(path), cancel=cancel)
+                return snapshot
+
+            def saved(candidate):
+                from .media import validate_source_identities
+                try:
+                    validate_source_identities(candidate.pages)
+                except Exception as error:
+                    error.completed_outputs = [Path(path)]
+                    raise
+                self.workspace._project_tree = deepcopy(candidate._project_tree)
+                self.workspace.dirty = False
+                self._project_path = Path(path)
+
+            self._after_operation = saved
+            self._operation_label = '프로젝트 저장'
+            self.start_export(save)
+
+    def relink_dialog(self):
+        if self._project_path:
+            self.open_project(self._project_path)
+        else:
+            self.open_project_dialog()
+
+    def choose_item_project(self):
+        path, _ = QFileDialog.getOpenFileName(self, '항목을 가져올 프로젝트 선택', '',
+                                            'BlurAction 프로젝트 (*.bluraction)')
+        if not path:
+            return None
+        # Use the same bounded decoder/review gate as the actual engine action.
+        project = self.workspace._read_project(Path(path))
+        tree = project.to_dict()
+        index = 0
+        if project.version == 2 and len(tree['pages']) > 1:
+            number, accepted = QInputDialog.getInt(self, '프로젝트 페이지 선택',
+                f"가져올 페이지 (1–{len(tree['pages'])})", int(tree.get('currentIndex', 0)) + 1,
+                1, len(tree['pages']), 1)
+            if not accepted:
+                return None
+            index = number - 1
+        return Path(path), index
+
+    def import_items_dialog(self):
+        if self.workspace.busy or not self.workspace.page:
+            return
+        def load():
+            chosen = self.choose_item_project()
+            if chosen:
+                self.workspace.import_project_items(chosen[0], chosen[1])
+        self.perform(load)
+
+    def template_dialog(self):
+        if self.workspace.busy or not self.confirm_discard():
+            return
+        path, _ = QFileDialog.getOpenFileName(self, '항목을 가져올 프로젝트 선택', '',
+                                            'BlurAction 프로젝트 (*.bluraction)')
+        if not path:
+            return
+        project_path = Path(path)
+
+        def inspect(cancel, progress):
+            from .media import check_cancel
+            check_cancel(cancel)
+            tree = self.workspace._read_project(project_path, cancel=cancel).to_dict()
+            check_cancel(cancel)
+            return tree
+
+        def choose(tree):
+            index = 0
+            if tree['version'] == 2 and len(tree['pages']) > 1:
+                number, accepted = QInputDialog.getInt(self, '프로젝트 페이지 선택',
+                    f"가져올 페이지 (1–{len(tree['pages'])})", int(tree.get('currentIndex', 0)) + 1,
+                    1, len(tree['pages']), 1)
+                if not accepted:
+                    return
+                index = number - 1
+            paths, _ = QFileDialog.getOpenFileNames(self, '프로젝트 항목을 적용할 새 미디어', '', '미디어 파일 (*)')
+            if not paths:
+                return
+            media_paths = tuple(Path(media_path) for media_path in paths)
+            self._prepare_workspace(lambda candidate, cancel, project_path=project_path,
+                media_paths=media_paths, page_index=index: candidate.apply_project_template(
+                    project_path, media_paths, page_index, cancel=cancel), None)
+
+        self._after_operation = choose
+        self._discard_cancelled_result = True
+        self._operation_label = '템플릿 확인'
+        self.start_export(inspect)
+
+    def open_project(self, path):
+        if self.workspace.busy or not self.confirm_discard():
+            return
+        self._prepare_project(Path(path), {}, set())
+
+    def _prepare_project(self, path, relinks, acknowledged):
+        from .editor import MissingSources, UnverifiedSources
+
+        def failed(error):
+            # This runs only on the GUI thread after the worker has stopped.
+            if isinstance(error, MissingSources):
+                for reference in error.references:
+                    replacement, _ = QFileDialog.getOpenFileName(self, '원본 다시 연결: ' + reference, '', '원본 파일 (*)')
+                    if not replacement:
+                        return True
+                    relinks[reference] = replacement
+            elif isinstance(error, UnverifiedSources):
+                reply = QMessageBox.question(self, '원본 지문이 없는 이전 프로젝트',
+                    '이 프로젝트에는 원본 SHA-256 지문이 없어 선택한 파일이 같은 원본인지 증명할 수 없습니다.\n'
+                    + '\n'.join(error.references)
+                    + '\n원본 내용과 가림 위치를 직접 확인해야 합니다. 이 조건을 알고 편집을 불러올까요?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No)
+                if reply != QMessageBox.StandardButton.Yes:
+                    return True
+                acknowledged.update(error.references)
+            else:
+                return False
+            self._prepare_project(path, relinks, acknowledged)
+            return True
+
+        self._prepare_workspace(lambda candidate, cancel: candidate.load_project(
+            path, dict(relinks), acknowledged_unverified=set(acknowledged), cancel=cancel), path, failed)
+
+    def copy_all(self):
+        reply = QMessageBox.question(self, '전체 페이지에 적용',
+                                     '다른 페이지의 기존 편집을 현재 페이지 편집으로 바꿉니다. 적용할까요?',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.perform(self.workspace.copy_all)
+
+    def export_dialog(self):
+        if self.workspace.busy or not self.workspace.page:
+            return
+        missing = self.missing_fonts()
+        if missing:
+            self.show_error('출력 전에 없는 글꼴을 확인하세요. 원래 글꼴 이름은 보존되어 있습니다.\n'
+                + '\n'.join(f'{page}페이지: {name}' for page, name in sorted(set(missing)))
+                + '\n설치된 글꼴을 선택하고 「선택 글자 내용·글꼴 적용」을 눌러 주세요.')
+            return
+        if self.workspace.video:
+            path, _ = QFileDialog.getSaveFileName(self, '영상 새 파일로 내보내기',
+                                                  safe_stem(self.workspace.title, '_blurred.mp4'),
+                                                  'MP4 영상 (*.mp4);;MOV 영상 (*.mov)')
+            if path:
+                from .video import export_video
+                source, state = self.workspace.video, deepcopy(self.workspace.page.state)
+                self.start_export(lambda cancel, progress: export_video(source, state, Path(path), cancel, progress))
+            return
+        pdf = len(self.workspace.pages) > 1 or self.workspace.page.pdf_index is not None
+        filters = '평탄화 PDF (*.pdf)' if pdf else 'PNG 이미지 (*.png);;JPEG 이미지 (*.jpg);;HEIC 이미지 (*.heic);;TIFF 이미지 (*.tiff)'
+        ending = '.pdf' if pdf else '.png'
+        path, selected = QFileDialog.getSaveFileName(self, '새 파일로 내보내기',
+                                                    safe_stem(self.workspace.title, '_blurred' + ending), filters)
+        if not path:
+            return
+        # Freeze edits, not hundreds of decoded pages. Workers lazily decode
+        # immutable, hash-checked source metadata through the bounded cache.
+        pages = [Page(page.source, page.source_sha256, None, page.pdf_index,
+                      page.point_size, deepcopy(page.state), source_identity=page.source_identity)
+                 for page in self.workspace.pages]
+        if pdf:
+            task = lambda cancel, progress: export_documents(pages, Path(path), cancel, progress)
+        else:
+            kind = ('jpeg' if selected.startswith('JPEG') else 'heic' if selected.startswith('HEIC')
+                    else 'tiff' if selected.startswith('TIFF') else 'png')
+            task = lambda cancel, progress: export_image(pages[0], Path(path), kind, 95, cancel)
+        self.start_export(task)
+
+    def start_export(self, task):
+        if self.workspace.busy:
+            return
+        self.workspace.busy = True
+        self._outcome = None
+        self.progress.setRange(0, 0 if self._discard_cancelled_result else 100)
+        self.progress.setValue(0)
+        self.cancel_button.setEnabled(True)
+        self.player.pause()
+        self._set_editing_enabled(False)
+        self.refresh()
+        self._thread = QThread(self)
+        self._worker = ExportWorker(task)
+        self._operation_cancelled = self._worker.cancelled
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(lambda value: self.progress.setValue(round(value * 100)))
+        self._worker.finished.connect(self.export_finished)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.finished.connect(self._thread.quit)
+        self._thread.finished.connect(self.operation_stopped)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
+
+    def cancel_operation(self):
+        if self._operation_cancelled is not None:
+            self._operation_cancelled.set()
+            self.statusBar().showMessage('취소하는 중…')
+
+    def export_finished(self, outcome):
+        self._outcome = outcome
+
+    def operation_stopped(self):
+        result, error = self._outcome or (None, RuntimeError('작업 결과를 받지 못했습니다.'))
+        if self._discard_cancelled_result and self._operation_cancelled is not None and self._operation_cancelled.is_set():
+            result, error = None, Cancelled('원본 준비를 취소했습니다.')
+        self.workspace.busy = False
+        self._set_editing_enabled(True)
+        self.cancel_button.setEnabled(False)
+        self._worker = None
+        self._thread = None
+        after = self._after_operation
+        self._after_operation = None
+        error_handler = self._operation_error_handler
+        self._operation_error_handler = None
+        self._discard_cancelled_result = False
+        self._operation_cancelled = None
+        label = self._operation_label
+        self._operation_label = '새 파일 저장'
+        self.progress.setRange(0, 100)
+        if after and error is None:
+            try:
+                after(result)
+            except Exception as exception:
+                error = exception
+        if self.workspace.busy:
+            return  # A GUI continuation started the next preparation worker.
+        self.refresh()
+        if error_handler and error and not isinstance(error, Cancelled):
+            try:
+                if error_handler(error):
+                    return
+            except Exception as exception:
+                error = exception
+        completed = getattr(error, 'completed_outputs', []) if error else []
+        if isinstance(error, Cancelled):
+            self.statusBar().showMessage('작업을 취소했습니다.' + (f' 저장된 결과 {len(completed)}개는 유지됩니다.' if completed else ''))
+            if completed:
+                QMessageBox.information(self, '일부 결과 저장됨',
+                    '취소하기 전에 저장된 파일은 유지됩니다.\n' + '\n'.join(map(str, completed)))
+        elif error:
+            self.show_error(str(error) + ('\n저장된 결과는 유지됩니다:\n' + '\n'.join(map(str, completed)) if completed else ''))
+        else:
+            self.progress.setValue(100)
+            detail = f' ({len(result)}개 결과)' if isinstance(result, list) and label == '새 파일 저장' else ''
+            self.statusBar().showMessage(label + '을 마쳤습니다.' + detail)
+
+    def _set_editing_enabled(self, enabled):
+        for widget in self.inspector.findChildren(QWidget):
+            if widget not in (self.cancel_button, self.progress):
+                widget.setEnabled(enabled)
+        self.play_button.setEnabled(enabled)
+        self.scrubber.setEnabled(enabled)
+        self.cancel_button.setEnabled(not enabled)
+
+    def toggle_playback(self):
+        if self.workspace.busy or not self.workspace.video:
+            return
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+            self.play_button.setText('▶ 재생')
+        else:
+            self.player.play()
+            self.play_button.setText('⏸ 일시정지')
+
+    def playback_position_changed(self, milliseconds, generation=None):
+        if generation is not None and generation != self._video_generation:
+            return
+        if not self.workspace.video or self.workspace.busy:
+            return
+        self.workspace.time = milliseconds / 1000
+        if not self.scrubber.isSliderDown():
+            self.scrubber.setValue(milliseconds)
+        self.time_label.setText(f'{milliseconds / 1000:.2f} / {self.workspace.video.duration:.2f} 초')
+
+    def video_frame_changed(self, frame, generation=None):
+        if generation is not None and generation != self._video_generation:
+            return
+        if not frame.isValid() or not self.workspace.video or self.workspace.busy:
+            return
+        image = frame.toImage()
+        if image.isNull():
+            return
+        rotation = frame.rotation().value if hasattr(frame, 'rotation') else 0
+        if rotation:
+            image = image.transformed(QTransform().rotate(rotation))
+        if frame.mirrored():
+            image = image.mirrored(True, False)
+        self._video_image = image
+        self._video_image_source = self.workspace.video
+        if frame.startTime() >= 0:
+            self.workspace.time = frame.startTime() / 1_000_000
+        self.canvas.set_document(image, self.workspace.page.state,
+                                 self.workspace.selection_ids, self.workspace.time)
+
+    def seek_video(self, seconds):
+        if self.workspace.busy or not self.workspace.video:
+            return
+        seconds = max(0, min(self.workspace.video.duration, seconds))
+        self.player.pause()
+        self.player.setPosition(round(seconds * 1000))
+        self.workspace.time = seconds
+        try:
+            self._video_image = self.workspace.video.frame_at(seconds)
+            self._video_image_source = self.workspace.video
+            self.refresh()
+        except Exception as error:
+            self.show_error(error)
+
+    def apply_time_range(self):
+        if self.range_end.value() < self.range_start.value():
+            self.show_error(ValueError('끝 시각은 시작 시각 이후로 지정하세요.'))
+            return
+        self.update_selection(timeRange=[self.range_start.value(), self.range_end.value()])
+
+    def record_position(self):
+        if not self.workspace.selected() or not self.workspace.video:
+            return
+        prior = self.workspace.record_motion
+        self.workspace.record_motion = True
+        try:
+            self.perform(lambda: self.workspace.resize_selected([control.value() for control in self.coordinates], self.workspace.time))
+        finally:
+            self.workspace.record_motion = prior
+
+    def remove_keyframe(self):
+        selected = self.workspace.selected()
+        row = self.keyframes.currentItem()
+        if selected and row:
+            properties = selected[0]['effect'] if selected[1] else selected[0]
+            time = row.data(Qt.ItemDataRole.UserRole)
+            self.update_selection(keyframes=[frame for frame in properties.get('keyframes', [])
+                                             if frame['time'] != time])
+
+    def keyframe_selected(self, row, previous=None):
+        if row:
+            self.keyframe_time.setValue(row.data(Qt.ItemDataRole.UserRole))
+
+    def retime_keyframe(self):
+        row = self.keyframes.currentItem()
+        if row and self.workspace.video:
+            self.perform(lambda: self.workspace.retime_keyframe(
+                row.data(Qt.ItemDataRole.UserRole), self.keyframe_time.value()))
+
+    def auto_track(self):
+        chosen = self.workspace.selected()
+        if not chosen or not self.workspace.video or self.workspace.busy:
+            return
+        from .video import track
+        item, region = chosen
+        properties = item['effect'] if region else item
+        source, start = self.workspace.video, self.workspace.time or 0
+        interval = properties.get('timeRange', [0, 0])
+        end = source.duration if interval == [0, 0] else min(source.duration, interval[1])
+        self._after_operation = lambda frames: self.workspace.update_selected(keyframes=frames)
+        self._operation_label = '자동 추적'
+        self.start_export(lambda cancel, progress: track(source, deepcopy(item), region, start, end, cancel, progress))
+
+    def confirm_discard(self):
+        if not self.workspace.dirty:
+            return True
+        response = QMessageBox.question(self, '저장하지 않은 편집',
+            '저장하지 않은 편집이 있습니다. 현재 편집을 버리고 계속할까요?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return response == QMessageBox.StandardButton.Yes
+
+    def dragEnterEvent(self, event):
+        if not self.workspace.busy and event.mimeData().hasUrls() and all(url.isLocalFile() for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        if self.workspace.busy:
+            event.ignore()
+            return
+        if event.mimeData().hasUrls() and all(url.isLocalFile() for url in event.mimeData().urls()):
+            self.open_paths([url.toLocalFile() for url in event.mimeData().urls()])
+            event.acceptProposedAction()
+
+    def closeEvent(self, event):
+        if self.workspace.busy:
+            self.cancel_operation()
+            self.statusBar().showMessage('작업 취소가 끝난 뒤 창을 닫아 주세요.')
+            event.ignore()
+            return
+        event.accept() if self.confirm_discard() else event.ignore()
