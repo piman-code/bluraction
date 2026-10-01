@@ -92,7 +92,7 @@ final class DocumentModel: ObservableObject {
         currentCGImage.map { NSImage(cgImage: $0, size: imageSize) }
     }
     var asset: AVURLAsset? { url.map { VideoAssetPolicy.asset(url: $0) } }
-    static let imageExtensions: Set<String> = [
+    nonisolated static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "tif", "bmp", "gif"
     ]
     /// Common AVFoundation movie suffixes remain recognizable when LaunchServices
@@ -100,11 +100,11 @@ final class DocumentModel: ObservableObject {
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v"]
     // A single image passes through decode, orientation, preview and export buffers.
     // Keep the source below roughly 96 MiB RGBA to leave room for those copies.
-    private static let maxImageSide = 16_384
-    private static let maxImagePixels = 24_000_000
+    nonisolated private static let maxImageSide = 16_384
+    nonisolated private static let maxImagePixels = 24_000_000
     nonisolated private static let maxVideoSide: CGFloat = 16_384
     nonisolated private static let maxVideoPixels: CGFloat = 33_177_600
-    static func isImage(url: URL) -> Bool {
+    nonisolated static func isImage(url: URL) -> Bool {
         imageExtensions.contains(url.pathExtension.lowercased())
     }
 
@@ -166,8 +166,31 @@ final class DocumentModel: ObservableObject {
         }
     }
 
+    /// Shows one rendered page of a multi-page workspace using the existing still-image editor.
+    func load(pageImage image: CGImage, sourceURL: URL, name: String) {
+        loadTask?.cancel()
+        loadTask = nil
+        requestID = UUID()
+        url = sourceURL
+        displayName = name
+        hasVideo = false
+        hasImage = true
+        videoSize = .zero
+        imageSize = CGSize(width: image.width, height: image.height)
+        duration = 0
+        videoFPS = 0
+        videoBitRate = 0
+        videoCodec = "—"
+        hasAudio = false
+        sourceBytes = (try? sourceURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        preferredTransform = .identity
+        currentCGImage = image
+        errorMessage = nil
+        onLoad?()
+    }
+
     /// Decode frame zero and bake all eight EXIF orientations into the pixels.
-    static func decodeImage(url: URL) throws -> CGImage {
+    nonisolated static func decodeImage(url: URL) throws -> CGImage {
         let headerOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL,
                 headerOptions),
@@ -194,7 +217,7 @@ final class DocumentModel: ObservableObject {
         return result
     }
 
-    static func validateImageDimensions(width: Int, height: Int) throws {
+    nonisolated static func validateImageDimensions(width: Int, height: Int) throws {
         guard width > 0, height > 0 else { throw LoadError.imageDecode }
         guard width <= maxImageSide, height <= maxImageSide,
               height <= maxImagePixels / width else { throw LoadError.imageTooLarge }
