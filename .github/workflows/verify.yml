@@ -35,12 +35,13 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.14'
-      - name: Verify actual Swift-encoded fixture contract without opening media references
+      - name: Verify Swift-encoded portable contracts and metadata preflight
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           python -m unittest discover -s Tests/PortableProjectTests -v
           python -m unittest discover -s Tests/VerificationRunnerTests -v
+          python -m unittest discover -s Tests/PackagingTests -v
 
   mac-native:
     runs-on: macos-14
@@ -95,13 +96,13 @@ jobs:
       - name: Check required native media capabilities
         shell: pwsh
         run: |
+          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
           & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
-          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
       - name: Verify model and Qt/media controllers with bounded subprocesses
         shell: pwsh
         run: |
-          & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/WindowsAppTests','-v'],check=True,timeout=900)"
+          & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/WindowsAppTests','-v'],check=True,timeout=900)"
           if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
       - name: Prepare onedir candidate only
         if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate

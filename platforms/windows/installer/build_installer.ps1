@@ -82,7 +82,7 @@ foreach ($Dependency in $Inventory.dependencies) {
 foreach ($Id in @("python", "pyside6", "qt", "pdfium", "pyav", "ffmpeg", "opencv", "pillow", "numpy", "pyinstaller", "pypdf", "pillow-heif", "libheif", "heif-codecs")) {
     if (-not $Ids.Contains($Id)) { throw "Missing actual bundled dependency evidence: $Id" }
 }
-foreach ($Pin in (@{ "pypdf" = "6.19.0"; "pillow-heif" = "1.8.0" }).GetEnumerator()) {
+foreach ($Pin in (@{ "pypdf" = "6.19.0"; "pillow-heif" = "1.8.0"; "pillow" = "12.3.0" }).GetEnumerator()) {
     $Actual = @($Inventory.dependencies | Where-Object { $_.id -ieq $Pin.Key })[0]
     if ($Actual.version -cne $Pin.Value) { throw "Dependency evidence does not match the required runtime pin: $($Pin.Key)" }
 }

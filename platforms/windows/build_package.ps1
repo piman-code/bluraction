@@ -16,7 +16,20 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 if (-not $Destination) { $Destination = Join-Path $RepoRoot ".build/windows-packages/$Version" }
 if (-not $VerifyRuntimeOnly -and -not $PrepareForReview -and -not $LicenseReview) { throw "ZIP creation requires an exact reviewed license record. Use PrepareForReview for a private review candidate." }
 
+function Assert-DeclaredDependencyPins([switch]$IncludePackaging) {
+    $PinArguments = @("--requirements", (Join-Path $PSScriptRoot "requirements-dev.txt"))
+    if ($IncludePackaging) {
+        $PinArguments += @("--requirements", (Join-Path $PSScriptRoot "installer/requirements-packaging.txt"))
+    }
+    # Read installed distribution metadata only. This check never installs or
+    # imports codec DLLs and is not actual runtime/redistribution verification.
+    & $Python -c "import subprocess,sys; subprocess.run([sys.executable,sys.argv[1],*sys.argv[2:]],check=True,timeout=30)" `
+        (Join-Path $PSScriptRoot "verify_dependency_pins.py") @PinArguments
+    if ($LASTEXITCODE -ne 0) { throw "Declared dependency pins do not match this interpreter. Install only in an approved isolated environment." }
+}
+
 function Assert-PinnedMediaRuntime {
+    Assert-DeclaredDependencyPins
     $RuntimeCheck = @'
 import pypdf, pillow_heif, _pillow_heif
 if pypdf.__version__ != '6.19.0' or pillow_heif.__version__ != '1.8.0':
@@ -118,7 +131,7 @@ function Assert-LicenseMaterials([string]$Directory) {
     foreach ($Id in @("python", "pyside6", "qt", "pdfium", "pyav", "ffmpeg", "opencv", "pillow", "numpy", "pyinstaller", "pypdf", "pillow-heif", "libheif", "heif-codecs")) {
         if (-not $Ids.Contains($Id)) { throw "Missing actual bundled dependency evidence: $Id" }
     }
-    foreach ($Pin in (@{ "pypdf" = "6.19.0"; "pillow-heif" = "1.8.0" }).GetEnumerator()) {
+    foreach ($Pin in (@{ "pypdf" = "6.19.0"; "pillow-heif" = "1.8.0"; "pillow" = "12.3.0" }).GetEnumerator()) {
         $Actual = @($Inventory.dependencies | Where-Object { $_.id -ieq $Pin.Key })[0]
         if ($Actual.version -cne $Pin.Value) { throw "Dependency evidence does not match the required runtime pin: $($Pin.Key)" }
     }
@@ -175,6 +188,7 @@ if ($FinalizeReviewedBundle) {
         $DestinationFullPath.StartsWith($MaterialsPath.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw "Candidate output must be outside source license materials."
     }
+    Assert-DeclaredDependencyPins -IncludePackaging
     & $Python -c "import PySide6, PIL, numpy, av, cv2, PyInstaller; assert hasattr(cv2,'TrackerCSRT_create')"
     if ($LASTEXITCODE -ne 0) { throw "Required dependencies are missing. Install only in an approved isolated environment." }
     New-Item -ItemType Directory -Path $Destination | Out-Null
