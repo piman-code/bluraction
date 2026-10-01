@@ -8,8 +8,10 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import threading
+import math
+import weakref
 
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QUrl, Signal, Slot, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontDatabase, QFontInfo, QImage, QKeySequence, QPainter, QPen, QTransform
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtWidgets import (
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from . import renderer
 from .media import Cancelled, Page, export_documents, export_image, safe_stem
+from .preview_worker import PreviewQueue, PreviewRequest
 
 
 TOOLS = (
@@ -68,6 +71,7 @@ class EditorCanvas(QWidget):
     moved = Signal(float, float)
     erased = Signal(object)
     message = Signal(str)
+    presented = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,6 +85,15 @@ class EditorCanvas(QWidget):
         self.selection_ids = set()
         self.busy = False
         self._preview = QImage()
+        self._preview_source_key = 0
+        self.preview_context = None
+        self._accepted_context = None
+        self._desired = None
+        self.preview_queue = PreviewQueue(self)
+        self.preview_queue.completed.connect(self._preview_completed)
+        self.preview_queue.idle.connect(self._preview_idle)
+        self._closing = False
+        self.accept_guard = None
         self._stroke = []
         self._drag_start = None
         self._drag_item = None
@@ -103,14 +116,114 @@ class EditorCanvas(QWidget):
                        rect.y() + (1 - point[1]) * rect.height())
 
     def set_document(self, image, state, selection_ids=(), time=None):
-        self.image, self.state = image, deepcopy(state)
-        self.selection_ids, self.time = set(selection_ids), time
-        try:
-            self._preview = renderer.render(image, state, time) if not image.isNull() else QImage()
-        except (ValueError, RuntimeError) as error:
-            self._preview = QImage()
-            self.message.emit(str(error))
+        # Selection, inspector and busy-state refreshes do not change pixels.
+        # Keep the full-resolution result rather than recomputing a large effect
+        # on every such update. QImage.cacheKey also changes on pixel mutation.
+        self.selection_ids = set(selection_ids)
+        request = PreviewRequest(self.preview_context, QImage(image), deepcopy(state), time)
+        accepted = (self._accepted_context == request.context and image.cacheKey() == self._preview_source_key
+                    and state == self.state and time == self.time)
+        # A selection refresh of the displayed frame must not replace a newer
+        # video frame already in the bounded queue.
+        if accepted:
+            self.busy = self.preview_pending
+            self.update()
+            return
+        previous = self._desired
+        self._desired = request
+        if image.isNull():
+            self.preview_queue.discard_pending(cancel_active=True)
+            self.image, self.state, self.time = QImage(), deepcopy(state), time
+            self._preview, self._preview_source_key = QImage(), -1
+            self._accepted_context = self.preview_context
+        else:
+            duplicate = (previous is not None and previous.context == request.context
+                         and previous.image.cacheKey() == image.cacheKey()
+                         and previous.state == state and previous.time == time)
+            if not duplicate or not self.preview_queue.busy:
+                if previous is not None and (previous.context != request.context or previous.state != state):
+                    self.preview_queue.discard_pending(cancel_active=True)
+                self.preview_queue.submit(request)
+        self.busy = self.preview_pending
+        if self.busy:
+            self._stroke, self._drag_start, self._drag_item = [], None, None
         self.update()
+
+    @property
+    def preview_pending(self):
+        return self._desired is not None and (self._preview.isNull()
+            or self._accepted_context != self._desired.context or self.state != self._desired.state)
+
+    def request_video_seek(self, source, seconds, state, selection_ids=()):
+        self.selection_ids = set(selection_ids)
+        previous = self._desired
+        if (previous is not None and previous.decode is not None and previous.context == self.preview_context
+                and previous.time == seconds and previous.state == state and self.preview_queue.busy):
+            self.busy = True
+            self.update()
+            return
+        request = PreviewRequest(self.preview_context, QImage(), deepcopy(state), seconds,
+            decode=lambda cancel: source.frame_at_timed(seconds, cancel=cancel))
+        self._desired = request
+        self.preview_queue.discard_pending(cancel_active=True)
+        self.preview_queue.submit(request)
+        self.busy = True
+        self._stroke, self._drag_start, self._drag_item = [], None, None
+        self.update()
+
+    def accept_prepared(self, image, state, pixels, time, context):
+        self.preview_queue.discard_pending(cancel_active=True)
+        self.preview_context = self._accepted_context = context
+        self.image, self.state, self.time = QImage(image), deepcopy(state), time
+        self._preview, self._preview_source_key = QImage(pixels), image.cacheKey()
+        self._desired = PreviewRequest(context, QImage(image), deepcopy(state), time)
+        self.busy = False
+        self.update()
+
+    @Slot(object)
+    def _preview_completed(self, result):
+        request, image, time, pixels, error = result
+        desired = self._desired
+        if desired is None or request.context != desired.context or request.state != desired.state:
+            return
+        if error is not None:
+            if (request.image.cacheKey() != desired.image.cacheKey() or request.time != desired.time
+                    or isinstance(error, Cancelled)):
+                return
+            self._preview, self._preview_source_key = QImage(), -1
+            self.message.emit(str(error))
+        else:
+            try:
+                if self.accept_guard is not None:
+                    self.accept_guard(request)
+            except (ValueError, OSError) as error:
+                self._preview, self._preview_source_key = QImage(), -1
+                self.busy = True
+                self.message.emit(str(error))
+                self.update()
+                return
+            # Source pixels, state and actual PTS become one displayed snapshot.
+            self.image, self.state, self.time = QImage(image), request.state, time
+            self._preview, self._preview_source_key = QImage(pixels), image.cacheKey()
+            self._accepted_context = request.context
+        self.busy = self.preview_pending
+        self.update()
+        if error is None:
+            # The window can add its IO/export busy gate after this local update.
+            self.presented.emit((image, time, request.context))
+
+    @Slot()
+    def _preview_idle(self):
+        if self._closing:
+            self.close()
+
+    def closeEvent(self, event):
+        self.preview_queue.shutdown()
+        if self.preview_queue.busy:
+            self._closing = True
+            event.ignore()
+        else:
+            event.accept()
 
     def set_tool(self, tool):
         self.tool = tool
@@ -250,6 +363,31 @@ class ExportWorker(QObject):
             self.finished.emit((None, error))
 
 
+class _OperationReceiver(QObject):
+    """Unique GUI slots receive queued data before calling window overrides."""
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = weakref.ref(window)
+
+    @Slot(object)
+    def receive_outcome(self, outcome):
+        window = self.window()
+        if window is not None:
+            window.export_finished(outcome)
+
+    @Slot(float)
+    def receive_progress(self, value):
+        window = self.window()
+        if window is not None:
+            window.operation_progress(value)
+
+    @Slot()
+    def receive_stopped(self):
+        window = self.window()
+        if window is not None:
+            window.operation_stopped()
+
+
 class BlurActionWindow(QMainWindow):
     def __init__(self, workspace=None):
         super().__init__()
@@ -261,6 +399,7 @@ class BlurActionWindow(QMainWindow):
         self._text_editor_baseline = None
         self._thread = None
         self._worker = None
+        self._operation_receiver = _OperationReceiver(self)
         self._outcome = None
         self._after_operation = None
         self._operation_error_handler = None
@@ -272,6 +411,18 @@ class BlurActionWindow(QMainWindow):
         self._video_generation = 0
         self._video_image = QImage()
         self._video_image_source = None
+        self._seek_epoch = 0
+        self._paused_seek = False
+        self._seek_target = None
+        self._play_after_seek = False
+        self._transport_time = 0.0
+        self._video_pts = None
+        self._last_sink_pts_us = None
+        self._native_loaded = False
+        self._native_seek_ms = None
+        self._native_seek_sent = False
+        self._deferred_operation = None
+        self._closing = False
         self._operation_label = '새 파일 저장'
         self.audio = QAudioOutput(self)
         self._create_video_player()
@@ -283,9 +434,12 @@ class BlurActionWindow(QMainWindow):
         self.canvas = EditorCanvas()
         self.canvas.created.connect(self.create_item)
         self.canvas.picked.connect(self.pick_item)
-        self.canvas.moved.connect(lambda dx, dy: self.perform(lambda: self.workspace.move_selected(dx, dy, self.workspace.time)))
+        self.canvas.moved.connect(self.move_items)
         self.canvas.erased.connect(self.erase_points)
         self.canvas.message.connect(lambda text: self.statusBar().showMessage(text))
+        self.canvas.presented.connect(self.preview_presented)
+        self.canvas.accept_guard = self.validate_preview_source
+        self.canvas.preview_queue.idle.connect(self.preview_idle)
         self.actions = {}
         self._make_actions()
         self._make_layout()
@@ -478,8 +632,7 @@ class BlurActionWindow(QMainWindow):
             self.coordinates.append(value)
             position_form.addRow(label, value)
         position_apply = QPushButton('좌표·크기 적용')
-        position_apply.clicked.connect(lambda: self.perform(lambda: self.workspace.resize_selected(
-            [control.value() for control in self.coordinates], self.workspace.time)))
+        position_apply.clicked.connect(self.apply_position)
         position_form.addRow(position_apply)
         form.addRow(self.position_controls)
         self.time_controls = QWidget()
@@ -566,6 +719,8 @@ class BlurActionWindow(QMainWindow):
         return dict(zip(('red', 'green', 'blue', 'alpha'), color.getRgbF()))
 
     def create_item(self, tool, points):
+        if self.canvas.preview_pending:
+            return
         def create():
             if tool.startswith('cover_'):
                 kind = tool.removeprefix('cover_')
@@ -578,9 +733,20 @@ class BlurActionWindow(QMainWindow):
         self.perform(create)
 
     def erase_points(self, points):
+        if self.canvas.preview_pending:
+            return
         self.perform(lambda: self.workspace.erase(points, self.eraser_width.value() / 1000,
             self.workspace.time, from_now=self.erase_from_now.isChecked(),
             mode=self.eraser_mode.currentData(), target=self.eraser_target.currentData()))
+
+    def move_items(self, dx, dy):
+        if not self.canvas.preview_pending:
+            self.perform(lambda: self.workspace.move_selected(dx, dy, self.workspace.time))
+
+    def apply_position(self):
+        if not self.canvas.preview_pending:
+            self.perform(lambda: self.workspace.resize_selected(
+                [control.value() for control in self.coordinates], self.workspace.time))
 
     def missing_fonts(self):
         families = {family.casefold() for family in QFontDatabase.families()}
@@ -647,6 +813,10 @@ class BlurActionWindow(QMainWindow):
             lambda frame: self.video_frame_changed(frame, generation))
         self.player.positionChanged.connect(
             lambda milliseconds: self.playback_position_changed(milliseconds, generation))
+        self.player.mediaStatusChanged.connect(
+            lambda status: self.playback_media_status_changed(status, generation))
+        self.player.seekableChanged.connect(
+            lambda available: self._apply_native_seek(generation))
         self.player.errorOccurred.connect(lambda error, text:
             self.statusBar().showMessage('영상 재생 오류: ' + text)
             if generation == self._video_generation else None)
@@ -658,11 +828,27 @@ class BlurActionWindow(QMainWindow):
             return
         # A committed engine source, even at the same path, starts a separate
         # playback pipeline. Queued old sink/player callbacks cannot paint it.
-        self._video_generation += 1
         self._video_source = video
         self._video_source_path = path
         self._video_image = QImage()
         self._video_image_source = None
+        self._video_pts = None
+        self._transport_time = 0.0
+        self._seek_epoch += 1
+        self._paused_seek = False
+        self._seek_target = None
+        self._play_after_seek = False
+        self._replace_video_player(path)
+
+    def _replace_video_player(self, path):
+        # A backwards seek makes timestamp-only rejection ambiguous. A fresh
+        # sink also invalidates queued callbacks from the old same-source item.
+        self._video_generation += 1
+        self._last_sink_pts_us = None
+        self._native_loaded = False
+        self._native_seek_ms = 0 if path is not None else None
+        self._native_seek_sent = False
+        self._play_after_seek = False
         old_player, old_sink = self.player, self.video_sink
         old_player.stop()
         old_player.setSource(QUrl())
@@ -672,6 +858,52 @@ class BlurActionWindow(QMainWindow):
         self.play_button.setText('▶ 재생')
         if path is not None:
             self.player.setSource(QUrl.fromLocalFile(path))
+
+    def _request_native_seek(self, seconds):
+        self._native_seek_ms = round(seconds * 1000)
+        self._native_seek_sent = False
+        self._apply_native_seek(self._video_generation)
+
+    def playback_media_status_changed(self, status, generation):
+        if generation != self._video_generation or self._closing:
+            return
+        self._native_loaded = status in (QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferingMedia, QMediaPlayer.MediaStatus.BufferedMedia)
+        if status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self._play_after_seek = False
+            self._native_seek_ms = None
+            self._native_seek_sent = False
+            self.play_button.setText('▶ 재생')
+            return
+        self._apply_native_seek(generation)
+
+    def _apply_native_seek(self, generation):
+        if generation != self._video_generation or self._closing or not self._native_loaded:
+            return
+        if self._native_seek_ms is None:
+            self._try_start_playback()
+            return
+        if not self.player.isSeekable():
+            return  # A later seekableChanged signal retries; no sleep or guessed delay.
+        target = self._native_seek_ms
+        if not self._native_seek_sent:
+            self._native_seek_sent = True  # setPosition can synchronously emit positionChanged.
+            self.player.setPosition(target)
+        if self._native_seek_ms == target and self.player.position() == target:
+            self._native_seek_ms = None
+            self._native_seek_sent = False
+        self._try_start_playback()
+
+    def _try_start_playback(self):
+        if (not self._play_after_seek or self._closing or self.workspace.busy
+                or not self.workspace.video or not self._native_loaded
+                or self._native_seek_ms is not None or self._seek_target is not None
+                or self.canvas.preview_pending):
+            return
+        self._play_after_seek = False
+        self._paused_seek = False
+        self.player.play()
+        self.play_button.setText('⏸ 일시정지')
 
     def refresh(self):
         self._refreshing = True
@@ -688,7 +920,13 @@ class BlurActionWindow(QMainWindow):
         except (ValueError, RuntimeError, OSError) as error:
             image = QImage()
             self.statusBar().showMessage(str(error))
-        self.canvas.set_document(image, page.state if page else {}, self.workspace.selection_ids, self.workspace.time)
+        self.canvas.preview_context = (self._video_generation, id(page), self._seek_epoch)
+        shown_time = self._video_pts if self.workspace.video and self._video_pts is not None else self.workspace.time
+        if self.workspace.video and self._seek_target is not None:
+            self.canvas.request_video_seek(self.workspace.video, self._seek_target,
+                                          page.state, self.workspace.selection_ids)
+        else:
+            self.canvas.set_document(image, page.state if page else {}, self.workspace.selection_ids, shown_time)
         count = len(self.workspace.pages)
         self.page_label.setText(f'{self.workspace.index + 1 if count else 0} / {count}')
         self.previous.setEnabled(bool(count and self.workspace.index > 0 and not self.workspace.busy))
@@ -702,7 +940,7 @@ class BlurActionWindow(QMainWindow):
                 for item in reversed(items):
                     properties = item['effect'] if is_region else item
                     identity = item_identity(item, is_region)
-                    label = properties.get('name') or ('가리기 영역' if is_region else item['kind'])
+                    label = properties.get('name') or ('가리기 영역' if is_region else dict(TOOLS).get(item['kind'], '그림'))
                     if properties.get('hidden') or not properties.get('enabled', True):
                         label += ' · 숨김'
                     if properties.get('locked'):
@@ -780,7 +1018,7 @@ class BlurActionWindow(QMainWindow):
         self.track_button.setEnabled(bool(video and selected and not self.workspace.busy))
         if video:
             self.scrubber.setRange(0, round(video.duration * 1000))
-            self.time_label.setText(f'{self.workspace.time or 0:.2f} / {video.duration:.2f} 초')
+            self.time_label.setText(f'{self._transport_time:.2f} / {video.duration:.2f} 초')
         for name, action in self.actions.items():
             action.setEnabled(not self.workspace.busy and (bool(page) if name not in ('open', 'open_project', 'template') else True))
         self.export_button.setEnabled(bool(page) and not self.workspace.busy)
@@ -788,7 +1026,7 @@ class BlurActionWindow(QMainWindow):
         self.actions['duplicate'].setEnabled(bool(selected) and not self.workspace.busy)
         self.actions['undo'].setEnabled(self.workspace.can_undo)
         self.actions['redo'].setEnabled(self.workspace.can_redo)
-        self.canvas.busy = self.workspace.busy
+        self.canvas.busy = self.workspace.busy or self.canvas.preview_pending
         missing = self.missing_fonts()
         self.font_warning.setText('이 PC에 없는 글꼴: ' + ', '.join(sorted({name for _, name in missing}))
             + '\n미리보기의 대체 글꼴은 배치를 바꿀 수 있습니다. 설치된 글꼴을 선택하고 적용한 뒤 출력하세요.' if missing else '')
@@ -797,9 +1035,19 @@ class BlurActionWindow(QMainWindow):
         self._refreshing = False
 
     def change_page(self, offset):
-        def change():
-            self.workspace.set_page(max(0, min(len(self.workspace.pages) - 1, self.workspace.index + offset)))
-        self.perform(change)
+        if self.workspace.busy or not self.workspace.pages:
+            return
+        snapshot = self.workspace.clone_for_io()
+        snapshot._undo, snapshot._redo = deepcopy(self.workspace._undo), deepcopy(self.workspace._redo)
+        snapshot.selection_ids = set(self.workspace.selection_ids)
+        snapshot.record_motion = self.workspace.record_motion
+        index = max(0, min(len(snapshot.pages) - 1, snapshot.index + offset))
+        if index == snapshot.index:
+            return
+        def change(candidate, cancel):
+            candidate.__dict__.update(snapshot.__dict__)
+            candidate.set_page(index)
+        self._prepare_workspace(change, self._project_path)
 
     def open_paths(self, paths):
         if self.workspace.busy:
@@ -824,13 +1072,34 @@ class BlurActionWindow(QMainWindow):
             # GUI refresh must not perform a lazy decode or full hash itself.
             if candidate.page:
                 candidate.page._image = page_image(candidate.page, cancel)
+                image = candidate.page._image
+                time = float(candidate.video.first_frame_time) if candidate.video else None
+                if time is not None and (not math.isfinite(time) or not 0 <= time < candidate.video.duration):
+                    raise ValueError('첫 프레임의 실제 PTS가 올바르지 않습니다.')
+                pixels = renderer.render(image, candidate.page.state, time)
+                check_cancel(cancel)
+                validate_source_identities(candidate.pages)
+                if candidate.video:
+                    candidate.video.validate(cancel)
+            else:
+                raise ValueError('표시할 첫 페이지가 없습니다.')
             check_cancel(cancel)
-            return candidate
+            return candidate, image, pixels, time
 
-        def commit(candidate):
+        def commit(prepared):
+            candidate, image, pixels, time = prepared
             validate_source_identities(candidate.pages)  # Cheap metadata-only GUI guard.
             self.workspace.adopt(candidate)
+            self.workspace.time = time
+            self._seek_target = None
             self._project_path = Path(project_path) if project_path is not None else None
+            self._sync_video_source(candidate.page)
+            self._video_pts = time
+            self._transport_time = time or 0.0
+            if candidate.video:
+                self._request_native_seek(self._transport_time)
+            context = (self._video_generation, id(candidate.page), self._seek_epoch)
+            self.canvas.accept_prepared(image, candidate.page.state, pixels, time, context)
             self.refresh()  # Invalidate the old player before any nested review dialog.
             if candidate.review_required:
                 QMessageBox.warning(self, '이전 PDF 편집 확인 필요',
@@ -1047,27 +1316,85 @@ class BlurActionWindow(QMainWindow):
         self.player.pause()
         self._set_editing_enabled(False)
         self.refresh()
+        # Do not run a second full-resolution renderer/decode alongside preview.
+        self.canvas.preview_queue.discard_pending(cancel_active=True)
+        if self.canvas.preview_queue.busy:
+            self._deferred_operation = task
+            self._operation_cancelled = threading.Event()
+            return
+        self._begin_operation(task)
+
+    def _begin_operation(self, task):
         self._thread = QThread(self)
         self._worker = ExportWorker(task)
         self._operation_cancelled = self._worker.cancelled
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(lambda value: self.progress.setValue(round(value * 100)))
-        self._worker.finished.connect(self.export_finished)
+        self._worker.progress.connect(self._operation_receiver.receive_progress, Qt.ConnectionType.QueuedConnection)
+        self._worker.finished.connect(self._operation_receiver.receive_outcome, Qt.ConnectionType.QueuedConnection)
         self._worker.finished.connect(self._worker.deleteLater)
         self._worker.finished.connect(self._thread.quit)
-        self._thread.finished.connect(self.operation_stopped)
+        self._thread.finished.connect(self._operation_receiver.receive_stopped, Qt.ConnectionType.QueuedConnection)
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
+
+    @Slot()
+    def preview_idle(self):
+        if self._deferred_operation is not None:
+            task, self._deferred_operation = self._deferred_operation, None
+            if self._operation_cancelled is not None and self._operation_cancelled.is_set():
+                self._outcome = (None, Cancelled('원본 준비를 취소했습니다.'))
+                self.operation_stopped()
+            else:
+                self._begin_operation(task)
+        if self._closing and not self.workspace.busy and not self.canvas.preview_queue.busy:
+            QTimer.singleShot(0, self.close)
+
+    @Slot(object)
+    def preview_presented(self, result):
+        image, time, context = result
+        if context != (self._video_generation, id(self.workspace.page), self._seek_epoch):
+            return
+        if self.workspace.video:
+            if time is None or not math.isfinite(time) or not 0 <= time <= self.workspace.video.duration:
+                return
+            self.workspace.time = time
+            self._seek_target = None
+            self._video_pts = time
+            self._video_image, self._video_image_source = QImage(image), self.workspace.video
+            current = self.workspace.selected()
+            if current and not any(control.hasFocus() for control in self.coordinates):
+                item, region = current
+                shown = renderer.positioned(item, region, time)
+                points = renderer.shape_points(shown)[1] if region else shown['points']
+                for control, value in zip(self.coordinates, renderer.bounds(points)):
+                    blocked = control.blockSignals(True)
+                    control.setValue(value)
+                    control.blockSignals(blocked)
+        self.canvas.busy = self.workspace.busy or self.canvas.preview_pending
+        self._try_start_playback()
+
+    def validate_preview_source(self, request):
+        from .media import validate_source_identities
+        if request.context != (self._video_generation, id(self.workspace.page), self._seek_epoch):
+            raise ValueError('이전 원본의 미리보기 결과입니다.')
+        if self.workspace.page:
+            validate_source_identities([self.workspace.page])
 
     def cancel_operation(self):
         if self._operation_cancelled is not None:
             self._operation_cancelled.set()
             self.statusBar().showMessage('취소하는 중…')
 
+    @Slot(float)
+    def operation_progress(self, value):
+        self.progress.setValue(round(value * 100))
+
+    @Slot(object)
     def export_finished(self, outcome):
         self._outcome = outcome
 
+    @Slot()
     def operation_stopped(self):
         result, error = self._outcome or (None, RuntimeError('작업 결과를 받지 못했습니다.'))
         if self._discard_cancelled_result and self._operation_cancelled is not None and self._operation_cancelled.is_set():
@@ -1112,6 +1439,8 @@ class BlurActionWindow(QMainWindow):
             self.progress.setValue(100)
             detail = f' ({len(result)}개 결과)' if isinstance(result, list) and label == '새 파일 저장' else ''
             self.statusBar().showMessage(label + '을 마쳤습니다.' + detail)
+        if self._closing:
+            self.preview_idle()
 
     def _set_editing_enabled(self, enabled):
         for widget in self.inspector.findChildren(QWidget):
@@ -1125,27 +1454,59 @@ class BlurActionWindow(QMainWindow):
         if self.workspace.busy or not self.workspace.video:
             return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._play_after_seek = False
             self.player.pause()
             self.play_button.setText('▶ 재생')
+        elif self._play_after_seek:
+            self._play_after_seek = False  # A second click cancels a pending load/seek resume.
+            self.play_button.setText('▶ 재생')
         else:
-            self.player.play()
-            self.play_button.setText('⏸ 일시정지')
+            if self.canvas.preview_pending:
+                return  # A new play still requires a coherent displayed frame.
+            if self._transport_time >= self.workspace.video.duration:
+                self.seek_video(0, resume=True)
+                return
+            self._play_after_seek = True
+            self.play_button.setText('재생 준비 중…')
+            self._apply_native_seek(self._video_generation)
 
     def playback_position_changed(self, milliseconds, generation=None):
         if generation is not None and generation != self._video_generation:
             return
-        if not self.workspace.video or self.workspace.busy:
+        if not self.workspace.video or self.workspace.busy or self._closing:
             return
-        self.workspace.time = milliseconds / 1000
+        if self._native_seek_ms is not None:
+            if not self._native_seek_sent or milliseconds != self._native_seek_ms:
+                return  # Loading/reset clocks must not overwrite the explicit transport target.
+            self._native_seek_ms = None
+            self._native_seek_sent = False
+        self._transport_time = milliseconds / 1000
         if not self.scrubber.isSliderDown():
             self.scrubber.setValue(milliseconds)
         self.time_label.setText(f'{milliseconds / 1000:.2f} / {self.workspace.video.duration:.2f} 초')
+        self._try_start_playback()
 
     def video_frame_changed(self, frame, generation=None):
         if generation is not None and generation != self._video_generation:
             return
-        if not frame.isValid() or not self.workspace.video or self.workspace.busy:
+        if not frame.isValid() or not self.workspace.video or self.workspace.busy or self._closing:
             return
+        # The paused seek's PyAV result is authoritative. An already queued Qt
+        # sink frame cannot replace it with pixels from before the seek.
+        if self._paused_seek:
+            return
+        if frame.startTime() < 0:
+            self.statusBar().showMessage('프레임의 실제 PTS가 없어 표시하지 않습니다.')
+            return
+        stamp = frame.startTime()
+        time = stamp / 1_000_000
+        if not math.isfinite(time) or not 0 <= time <= self.workspace.video.duration:
+            return
+        floor_us = math.floor(self._video_pts * 1_000_000) if self._video_pts is not None else 0
+        if stamp < max(floor_us, self._last_sink_pts_us or 0):
+            return
+        # Native frame callbacks can precede positionChanged. Their real PTS
+        # is authoritative; transport is not an upper bound for a valid frame.
         image = frame.toImage()
         if image.isNull():
             return
@@ -1154,26 +1515,28 @@ class BlurActionWindow(QMainWindow):
             image = image.transformed(QTransform().rotate(rotation))
         if frame.mirrored():
             image = image.mirrored(True, False)
-        self._video_image = image
-        self._video_image_source = self.workspace.video
-        if frame.startTime() >= 0:
-            self.workspace.time = frame.startTime() / 1_000_000
+        self._last_sink_pts_us = stamp
+        self.canvas.preview_context = (self._video_generation, id(self.workspace.page), self._seek_epoch)
         self.canvas.set_document(image, self.workspace.page.state,
-                                 self.workspace.selection_ids, self.workspace.time)
+                                 self.workspace.selection_ids, time)
 
-    def seek_video(self, seconds):
+    def seek_video(self, seconds, resume=False):
         if self.workspace.busy or not self.workspace.video:
+            return
+        if not math.isfinite(seconds):
             return
         seconds = max(0, min(self.workspace.video.duration, seconds))
         self.player.pause()
-        self.player.setPosition(round(seconds * 1000))
-        self.workspace.time = seconds
-        try:
-            self._video_image = self.workspace.video.frame_at(seconds)
-            self._video_image_source = self.workspace.video
-            self.refresh()
-        except Exception as error:
-            self.show_error(error)
+        self._seek_epoch += 1
+        self._replace_video_player(self._video_source_path)
+        self._play_after_seek = resume
+        self._paused_seek = True
+        self._transport_time = seconds
+        self._seek_target = seconds
+        self._request_native_seek(seconds)
+        self.canvas.preview_context = (self._video_generation, id(self.workspace.page), self._seek_epoch)
+        self.canvas.request_video_seek(self.workspace.video, seconds, self.workspace.page.state,
+                                       self.workspace.selection_ids)
 
     def apply_time_range(self):
         if self.range_end.value() < self.range_start.value():
@@ -1182,7 +1545,7 @@ class BlurActionWindow(QMainWindow):
         self.update_selection(timeRange=[self.range_start.value(), self.range_end.value()])
 
     def record_position(self):
-        if not self.workspace.selected() or not self.workspace.video:
+        if not self.workspace.selected() or not self.workspace.video or self.canvas.preview_pending:
             return
         prior = self.workspace.record_motion
         self.workspace.record_motion = True
@@ -1212,7 +1575,7 @@ class BlurActionWindow(QMainWindow):
 
     def auto_track(self):
         chosen = self.workspace.selected()
-        if not chosen or not self.workspace.video or self.workspace.busy:
+        if not chosen or not self.workspace.video or self.workspace.busy or self.canvas.preview_pending:
             return
         from .video import track
         item, region = chosen
@@ -1246,9 +1609,27 @@ class BlurActionWindow(QMainWindow):
             event.acceptProposedAction()
 
     def closeEvent(self, event):
+        if self._closing:
+            if self.workspace.busy or self.canvas.preview_queue.busy:
+                event.ignore()
+            else:
+                event.accept()
+            return
         if self.workspace.busy:
             self.cancel_operation()
             self.statusBar().showMessage('작업 취소가 끝난 뒤 창을 닫아 주세요.')
             event.ignore()
             return
-        event.accept() if self.confirm_discard() else event.ignore()
+        if not self.confirm_discard():
+            event.ignore()
+            return
+        self._closing = True
+        self._video_generation += 1
+        self._native_seek_ms = None
+        self._play_after_seek = False
+        self.player.stop()
+        self.canvas.preview_queue.shutdown()
+        if self.canvas.preview_queue.busy:
+            event.ignore()
+        else:
+            event.accept()

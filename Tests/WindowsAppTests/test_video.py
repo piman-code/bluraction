@@ -94,13 +94,25 @@ class VideoTests(unittest.TestCase):
         for index in range(len(times) - 1):
             middle = (times[index] + times[index + 1]) / 2
             image = self.source.frame_at(middle)
+            timed = self.source.frame_at_timed(middle)
             expected = frames[index].image
             self.assertEqual(bytes(image.constBits()), bytes(expected.constBits()), 'Seek must hold preceding presentation frame')
+            self.assertEqual(timed.time, frames[index].time, 'Actual chosen PTS must accompany its pixels')
+            self.assertEqual(bytes(timed.image.constBits()), bytes(image.constBits()))
         effect = self.cover_state([times[2], times[3]])
         before = render(self.source.frame_at(times[1]), effect, time=times[1])
         active = render(self.source.frame_at(times[2]), effect, time=times[2])
         self.assertGreater(before.pixelColor(75, 45).red(), 240)
         self.assertLess(active.pixelColor(75, 45).red(), 5)
+
+    def test_timed_seek_cancellation_and_eof_preserve_actual_frame_identity(self):
+        frames = list(self.source.iter_frames())
+        with self.assertRaises(Cancelled):
+            self.source.frame_at_timed(self.source.duration, cancel=lambda: True)
+        eof = self.source.frame_at_timed(self.source.duration)
+        self.assertEqual(eof.time, frames[-1].time)
+        self.assertEqual(bytes(eof.image.constBits()), bytes(frames[-1].image.constBits()))
+        self.assertEqual(self.source.first_frame_time, frames[0].time)
 
     def test_actual_container_rotation_is_applied_once_to_decoded_pixels(self):
         rotated = self.folder / 'rotated.mov'

@@ -13,7 +13,7 @@ from shiboken6 import isValid
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QThread, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QImage
-from PySide6.QtMultimedia import QVideoFrame, QtVideo
+from PySide6.QtMultimedia import QMediaPlayer, QVideoFrame, QtVideo
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -28,15 +28,28 @@ if not isinstance(APP, QApplication):
 
 
 class CanvasTests(unittest.TestCase):
+    def present(self, *args, **kwargs):
+        self.canvas.set_document(*args, **kwargs)
+        deadline = time.monotonic() + 5
+        while self.canvas.preview_queue.busy and time.monotonic() < deadline:
+            APP.processEvents()
+            time.sleep(.005)
+        self.assertFalse(self.canvas.preview_queue.busy)
+
     def setUp(self):
         self.canvas = EditorCanvas()
         self.canvas.resize(400, 400)
         image = QImage(200, 100, QImage.Format.Format_RGBA8888)
         image.fill(QColor('white'))
-        self.canvas.set_document(image, {'regions': [], 'drawings': []})
+        self.present(image, {'regions': [], 'drawings': []})
 
     def tearDown(self):
         self.canvas.close()
+        deadline = time.monotonic() + 5
+        while self.canvas.preview_queue.busy and time.monotonic() < deadline:
+            APP.processEvents()
+            time.sleep(.005)
+        self.assertFalse(self.canvas.preview_queue.busy)
 
     def test_aspect_fit_bottom_left_round_trip_and_letterbox_rejection(self):
         self.assertEqual(self.canvas.display_rect, QRectF(0, 100, 400, 200))
@@ -48,6 +61,51 @@ class CanvasTests(unittest.TestCase):
             self.assertAlmostEqual(actual[1], point[1])
         self.assertIsNone(self.canvas.normalized(QPointF(200, 50)))
         self.assertTrue(fitted_rect(QRectF(0, 0, 10, 10), QSize()).isEmpty())
+
+    def test_selection_refresh_reuses_pixels_but_image_effect_and_time_changes_repaint(self):
+        from platforms.windows.bluraction import renderer
+        region = {'shape': {'rectangle': {'id': 'REGION', 'origin': [.1, .1], 'size': [.8, .8]}},
+                  'effect': {'style': 'solid', 'blurRadius': 25, 'featherRadius': 0,
+                             'enabled': True, 'timeRange': [.5, 1]}}
+        image = self.canvas.image
+        state = {'regions': [region], 'drawings': []}
+        with patch('platforms.windows.bluraction.ui.renderer.render', wraps=renderer.render) as draw:
+            self.present(image, state, time=.75)
+            self.assertEqual(self.canvas._preview.pixelColor(100, 50), QColor('black'))
+            initial = bytes(self.canvas._preview.constBits())
+            self.present(image, deepcopy(state), ['REGION'], time=.75)
+            self.present(image, deepcopy(state), [], time=.75)
+            self.assertEqual(draw.call_count, 1)
+            self.assertEqual(bytes(self.canvas._preview.constBits()), initial)
+            self.assertEqual(self.canvas.selection_ids, set())
+            self.present(image, state, time=1.01)
+            self.assertEqual(self.canvas._preview.pixelColor(100, 50), QColor('white'))
+            image.setPixelColor(0, 0, QColor('red'))
+            self.present(image, state, time=1.01)
+            self.assertEqual(self.canvas._preview.pixelColor(0, 0), QColor('red'))
+            region['effect']['color'] = {'red': 1, 'green': 0, 'blue': 0}
+            self.present(image, state, time=.75)
+            self.assertEqual(self.canvas._preview.pixelColor(100, 50), QColor('red'))
+            self.assertEqual(draw.call_count, 4)
+
+    def test_failed_preview_stays_blank_and_same_document_can_retry(self):
+        from platforms.windows.bluraction import renderer
+        image = self.canvas.image.copy()
+        image.fill(QColor('red'))
+        state = {'regions': [], 'drawings': []}
+        calls = []
+        actual_render = renderer.render
+        def transient_failure(*args, **kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise RuntimeError('synthetic transient render failure')
+            return actual_render(*args, **kwargs)
+        with patch('platforms.windows.bluraction.ui.renderer.render', side_effect=transient_failure):
+            self.present(image, state)
+            self.assertTrue(self.canvas._preview.isNull())
+            self.present(image, state)
+            self.assertEqual(self.canvas._preview.pixelColor(10, 10), QColor('red'))
+            self.assertEqual(len(calls), 2)
 
     def test_mouse_creation_uses_source_display_rect_and_ignores_letterbox(self):
         output = []
@@ -68,10 +126,10 @@ class CanvasTests(unittest.TestCase):
         region = {'shape': {'rectangle': {'id': 'REGION', 'origin': [.1, .1], 'size': [.8, .8]}},
                   'effect': {'style': 'solid', 'blurRadius': 25, 'featherRadius': 0,
                              'enabled': True, 'timeRange': [0, 0]}}
-        self.canvas.set_document(self.canvas.image, {'regions': [region], 'drawings': []})
+        self.present(self.canvas.image, {'regions': [region], 'drawings': []})
         self.assertEqual(self.canvas.hit_test(QPointF(200, 200)), 'REGION')
         region['effect']['enabled'] = False
-        self.canvas.set_document(self.canvas.image, {'regions': [region], 'drawings': []})
+        self.present(self.canvas.image, {'regions': [region], 'drawings': []})
         self.assertIsNone(self.canvas.hit_test(QPointF(200, 200)))
 
     def test_busy_mouse_input_cannot_create_a_shape(self):
@@ -122,6 +180,7 @@ class WindowTests(unittest.TestCase):
         self.workspace = Workspace()
         self.workspace.load([self.source])
         self.window = BlurActionWindow(self.workspace)
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
 
     def tearDown(self):
         # Never delete a source folder or destroy its parent window while its
@@ -145,6 +204,7 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(self.workspace.busy)
         self.workspace.dirty = False
         self.window.close()
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
         self.assertEqual(self.source.read_bytes(), self.original)
         self.temp.cleanup()
         self.assertEqual(self.warning.call_count, 0, f'Unexpected UI errors: {self.warning.call_args_list}')
@@ -232,11 +292,297 @@ class WindowTests(unittest.TestCase):
         frame.setRotation(QtVideo.Rotation.Clockwise90)
         frame.setMirrored(True)
         frame.setStartTime(500_000)
+        self.window.playback_position_changed(500)
         self.window.video_frame_changed(frame)
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
         self.assertEqual(self.window.canvas.image.size(), QSize(10, 20))
         self.assertEqual(self.window.canvas.image.pixelColor(0, 0), QColor('red'))
         self.assertEqual(self.workspace.time, .5)
         self.workspace.video = None
+
+    def test_worker_seek_actual_pts_drives_creation_eraser_and_save_while_transport_differs(self):
+        from fractions import Fraction
+        from platforms.windows.bluraction.video import TimedImage
+        calls = []
+        entered, release = threading.Event(), threading.Event()
+        class TimedSource:
+            duration = 2
+            def frame_at_timed(self, seconds, cancel=None):
+                calls.append((seconds, QThread.currentThread()))
+                entered.set()
+                release.wait(3)
+                image = QImage(160, 100, QImage.Format.Format_RGBA8888)
+                image.fill(QColor('white'))
+                return TimedImage(Fraction(1, 10), image)
+        self.workspace.video = TimedSource()
+        self.workspace.time = 0
+        with patch('platforms.windows.bluraction.ui.QMediaPlayer.setSource'):
+            self.window.refresh()
+            self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
+            self.window.seek_video(.13)
+            self.assertTrue(self.window.canvas.busy)
+            self.spin_until(entered.is_set)
+            active = self.window.canvas.preview_queue.active
+            try:
+                self.window.refresh()  # Selection/inspector refresh cannot substitute old pixels for the seek.
+                self.assertIs(self.window.canvas.preview_queue.active, active)
+                self.assertFalse(active.cancel.is_set())
+                self.assertIsNone(self.window.canvas.preview_queue.pending)
+            finally:
+                release.set()
+            self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
+        self.assertEqual(calls[0][0], .13)
+        self.assertIsNot(calls[0][1], APP.thread())
+        self.assertEqual(self.workspace.time, .1)
+        self.assertEqual(self.window.canvas.time, .1)
+        self.window.playback_position_changed(130)
+        self.assertEqual(self.window._transport_time, .13)
+        self.assertEqual(self.workspace.time, .1)
+        self.window.style.setCurrentIndex(self.window.style.findData('solid'))
+        self.window.feather.setValue(0)
+        self.window.create_item('cover_rectangle', [[.1, .1], [.9, .9]])
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
+        region = self.workspace.page.state['regions'][0]
+        self.assertEqual(region['effect']['timeRange'][0], .1)
+        self.assertEqual(self.window.canvas._preview.pixelColor(80, 50), QColor('black'))
+        self.window.erase_from_now.setChecked(True)
+        self.window.erase_points([[.4, .5], [.6, .5]])
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
+        self.assertEqual(region['effect']['erasures'][0]['from'], .1)
+        saved = Path(self.temp.name) / 'actual-displayed-pts.bluraction'
+        self.workspace.save_project(saved)
+        tree = json.loads(saved.read_text())
+        self.assertEqual(tree['regions'][0]['effect']['timeRange'][0], .1)
+        self.assertEqual(tree['regions'][0]['effect']['erasures'][0]['from'], .1)
+        self.workspace.video = None
+
+    def test_candidate_first_render_failure_preserves_old_dirty_session(self):
+        self.workspace.add_drawing('line', [[.1, .1], [.9, .9]])
+        self.window.refresh()
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
+        prior = (deepcopy(self.workspace.page.state), deepcopy(self.workspace._undo),
+                 self.workspace.selectionID, bytes(self.window.canvas._preview.constBits()))
+        target = Path(self.temp.name) / 'new-source.png'
+        self.assertTrue(self.window.canvas.image.save(str(target)))
+        with patch.object(self.window, 'confirm_discard', return_value=True), \
+             patch('platforms.windows.bluraction.ui.renderer.render', side_effect=ValueError('first render failed')):
+            self.window.open_paths([target])
+            self.wait_for_operation()
+        self.assertEqual(self.workspace.page.source, self.source)
+        self.assertEqual(self.workspace.page.state, prior[0])
+        self.assertEqual(self.workspace._undo, prior[1])
+        self.assertEqual(self.workspace.selectionID, prior[2])
+        self.assertEqual(bytes(self.window.canvas._preview.constBits()), prior[3])
+        self.assertTrue(self.workspace.dirty)
+        self.assertEqual(self.warning.call_count, 1)
+        self.warning.reset_mock()
+
+    def test_same_source_seek_resume_rejects_stale_frames_but_allows_advance_backseek_and_restart(self):
+        from fractions import Fraction
+        from platforms.windows.bluraction.video import TimedImage
+        (source, _), base = self.fake_video_sources()
+        class SeekSource(base):
+            def frame_at_timed(self, seconds, cancel=None):
+                result = QImage(160, 100, QImage.Format.Format_RGBA8888)
+                result.fill(QColor('green'))
+                return TimedImage(Fraction(str(seconds)), result)
+        def frame(time_, color):
+            result = QImage(160, 100, QImage.Format.Format_RGBA8888)
+            result.fill(QColor(color))
+            sample = QVideoFrame(result)
+            sample.setStartTime(round(time_ * 1_000_000))
+            return sample
+        def center():
+            return self.window.canvas._preview.pixelColor(80, 50)
+        with patch('platforms.windows.bluraction.video.VideoSource', SeekSource), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.setSource'), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.play') as play:
+            self.window.open_paths([source])
+            self.wait_for_operation()
+            self.window.seek_video(1.5)
+            self.wait_for_presented_state()
+            self.complete_injected_native_seek()
+            accepted = bytes(self.window.canvas._preview.constBits())
+            generation = self.window._video_generation
+            self.window.toggle_playback()
+            self.assertTrue(play.called)
+            # Actual registered callback, same source/current pipeline as the probe.
+            self.window.video_sink.videoFrameChanged.emit(frame(.1, 'red'))
+            self.wait_for_presented_state()
+            self.assertEqual(self.workspace.time, 1.5)
+            self.assertEqual(bytes(self.window.canvas._preview.constBits()), accepted)
+            self.window.seek_video(.2)
+            self.wait_for_presented_state()
+            self.complete_injected_native_seek()
+            self.assertGreater(self.window._video_generation, generation)
+            self.window.toggle_playback()
+            # Pre-backwards-seek queued callback has the old pipeline identity.
+            self.window.video_frame_changed(frame(1.7, 'red'), generation)
+            self.wait_for_presented_state()
+            self.assertEqual(self.workspace.time, .2)
+            self.assertEqual(center(), QColor('green'))
+            # Real Qt can emit the next valid frame BEFORE positionChanged.
+            # Current-generation real PTS, not transport, is the display clock.
+            self.window.video_sink.videoFrameChanged.emit(frame(.4, 'blue'))
+            self.wait_for_presented_state()
+            self.assertEqual(self.workspace.time, .4)
+            self.assertEqual(center(), QColor('blue'))
+            self.window.player.positionChanged.emit(400)
+            self.window.video_sink.videoFrameChanged.emit(frame(.3, 'red'))
+            self.wait_for_presented_state()
+            self.assertEqual(self.workspace.time, .4)
+            generation = self.window._video_generation
+            self.window.player.positionChanged.emit(2000)
+            self.window.toggle_playback()  # EOF restart is an explicit timed seek0.
+            self.wait_for_presented_state()
+            self.complete_injected_native_seek()
+            self.assertGreater(self.window._video_generation, generation)
+            self.assertEqual(self.workspace.time, 0)
+            self.assertFalse(self.window._paused_seek)
+            self.window.video_frame_changed(frame(.4, 'red'), generation)
+            self.window.player.positionChanged.emit(40)
+            self.window.video_sink.videoFrameChanged.emit(frame(.04, 'blue'))
+            self.wait_for_presented_state()
+            self.assertEqual(self.workspace.time, .04)
+            self.assertEqual(center(), QColor('blue'))
+        self.assertFalse(self.workspace.dirty)
+        self.assertEqual(self.workspace.page.state, {'regions': [], 'drawings': []})
+
+    def complete_injected_native_seek(self):
+        """Explicit synthetic status/ack; this is not native media-load proof."""
+        target = self.window._native_seek_ms
+        with patch('platforms.windows.bluraction.ui.QMediaPlayer.isSeekable', return_value=True):
+            self.window.player.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+            if self.window._native_seek_ms is not None:
+                self.window.player.positionChanged.emit(target)
+        self.assertIsNone(self.window._native_seek_ms)
+
+    def test_native_seek_waits_for_loaded_seekable_and_ack_before_pending_play(self):
+        from fractions import Fraction
+        from platforms.windows.bluraction.video import TimedImage
+        (source, _), base = self.fake_video_sources()
+        class Source(base):
+            def frame_at_timed(self, seconds, cancel=None):
+                return TimedImage(Fraction(str(seconds)), self.frame_at(seconds))
+        with patch('platforms.windows.bluraction.video.VideoSource', Source), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.setSource'), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.setPosition') as position, \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.isSeekable', return_value=False) as seekable, \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.play') as play:
+            self.window.open_paths([source])
+            self.wait_for_operation()
+            position.reset_mock()
+            self.window.seek_video(1.5, resume=True)
+            self.wait_for_presented_state()
+            self.window.player.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadingMedia)
+            self.window.player.positionChanged.emit(0)
+            self.assertEqual(self.window._transport_time, 1.5)
+            position.assert_not_called()
+            play.assert_not_called()
+            self.window.player.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+            position.assert_not_called()  # Loaded alone is insufficient when not seekable.
+            self.window.toggle_playback()  # Cancel a pending play without losing seek target.
+            self.assertFalse(self.window._play_after_seek)
+            self.assertEqual(self.window._native_seek_ms, 1500)
+            self.window.toggle_playback()
+            self.assertTrue(self.window._play_after_seek)
+            play.assert_not_called()
+            seekable.return_value = True
+            self.window.player.seekableChanged.emit(True)
+            position.assert_called_once_with(1500)
+            self.assertTrue(self.window._native_seek_sent)
+            play.assert_not_called()  # Real position acknowledgement is still pending.
+            self.window.player.positionChanged.emit(1500)
+            play.assert_called_once()
+            self.assertIsNone(self.window._native_seek_ms)
+            self.assertFalse(self.window._paused_seek)
+            self.assertEqual(self.workspace.time, 1.5)
+            self.assertEqual(self.window.canvas.time, 1.5)
+            self.assertFalse(self.workspace.dirty)
+
+    def test_play_button_cancels_pending_resume_during_slow_seek_without_autoplay(self):
+        from fractions import Fraction
+        from platforms.windows.bluraction.video import TimedImage
+        entered, release = threading.Event(), threading.Event()
+        (source, _), base = self.fake_video_sources()
+        class SlowSource(base):
+            def frame_at_timed(self, seconds, cancel=None):
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError('Controlled seek was not released')
+                return TimedImage(Fraction(str(seconds)), self.frame_at(seconds))
+        with patch('platforms.windows.bluraction.video.VideoSource', SlowSource), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.setSource'), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.play') as play:
+            self.window.open_paths([source])
+            self.wait_for_operation()
+            try:
+                self.window.seek_video(1.5, resume=True)
+                self.spin_until(entered.is_set)
+                self.assertTrue(self.window.canvas.preview_pending)
+                self.assertTrue(self.window._play_after_seek)
+                self.assertTrue(self.window.play_button.isEnabled())
+                QTest.mouseClick(self.window.play_button, Qt.MouseButton.LeftButton)
+                self.assertFalse(self.window._play_after_seek)
+                self.assertTrue(self.window.canvas.preview_pending)
+                # A new play during incoherent pixels remains forbidden.
+                QTest.mouseClick(self.window.play_button, Qt.MouseButton.LeftButton)
+                self.assertFalse(self.window._play_after_seek)
+                play.assert_not_called()
+            finally:
+                release.set()
+            self.wait_for_presented_state()
+            self.complete_injected_native_seek()
+            play.assert_not_called()
+            self.assertFalse(self.window._play_after_seek)
+            self.assertTrue(self.window._paused_seek)
+            self.assertEqual(self.workspace.time, 1.5)
+            self.assertEqual(self.window.canvas.time, 1.5)
+            self.assertFalse(self.workspace.dirty)
+
+    def test_native_seek_supersede_close_and_synchronous_ack_do_not_resume_old_request(self):
+        from fractions import Fraction
+        from platforms.windows.bluraction.video import TimedImage
+        (source, _), base = self.fake_video_sources()
+        class Source(base):
+            def frame_at_timed(self, seconds, cancel=None):
+                return TimedImage(Fraction(str(seconds)), self.frame_at(seconds))
+        with patch('platforms.windows.bluraction.video.VideoSource', Source), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.setSource'), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.isSeekable', return_value=True), \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.setPosition') as position, \
+             patch('platforms.windows.bluraction.ui.QMediaPlayer.play') as play:
+            self.window.open_paths([source])
+            self.wait_for_operation()
+            self.window.seek_video(1.5, resume=True)
+            old_player = self.window.player
+            self.window.seek_video(.5, resume=True)
+            old_player.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+            old_player.positionChanged.emit(1500)
+            self.wait_for_presented_state()
+            position.assert_not_called()
+            play.assert_not_called()
+            self.assertEqual(self.window._transport_time, .5)
+            self.assertEqual(self.workspace.time, .5)
+            # setPosition's synchronous real signal sees fully initialized pending state.
+            position.side_effect = lambda target: self.window.player.positionChanged.emit(target)
+            self.window.player.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+            position.assert_called_once_with(500)
+            play.assert_called_once()
+            self.assertIsNone(self.window._native_seek_ms)
+            play.reset_mock()
+            self.window.seek_video(.25, resume=True)
+            self.wait_for_presented_state()
+            current_player = self.window.player
+            close = QCloseEvent()
+            self.window.closeEvent(close)
+            self.assertTrue(close.isAccepted())
+            current_player.mediaStatusChanged.emit(QMediaPlayer.MediaStatus.LoadedMedia)
+            current_player.positionChanged.emit(250)
+            play.assert_not_called()
+            self.assertFalse(self.window._play_after_seek)
+            self.assertIsNone(self.window._native_seek_ms)
+            self.assertEqual(self.workspace.time, .25)
 
     def fake_video_sources(self):
         """Regular local sources with synthetic frames, no decoder/encoder claim."""
@@ -248,6 +594,7 @@ class WindowTests(unittest.TestCase):
 
         class FakeVideoSource:
             duration = 2
+            first_frame_time = 0
 
             def __init__(self, path, cancel=None):
                 self.source = Path(path)
@@ -260,6 +607,9 @@ class WindowTests(unittest.TestCase):
             def page(self, cancel=None):
                 return Page(self.source, fingerprint(self.source), self.frame_at(0))
 
+            def validate(self, cancel=None):
+                fingerprint(self.source, cancel=cancel)
+
         return list(sources), FakeVideoSource
 
     def cache_green_video_frame(self):
@@ -267,7 +617,9 @@ class WindowTests(unittest.TestCase):
         image.fill(QColor('green'))
         frame = QVideoFrame(image)
         frame.setStartTime(400_000)
+        self.window.player.positionChanged.emit(400)
         self.window.video_sink.videoFrameChanged.emit(frame)
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
         self.assertEqual(self.window.canvas.image.pixelColor(80, 50), QColor('green'))
         self.assertEqual(self.workspace.time, .4)
         return frame
@@ -425,6 +777,7 @@ class WindowTests(unittest.TestCase):
             time.sleep(.005)
         self.assertFalse(self.workspace.busy, 'Synthetic export worker did not stop')
         self.assertIsNone(self.window._thread)
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy)
 
     def spin_until(self, predicate):
         deadline = time.monotonic() + 3
@@ -432,6 +785,12 @@ class WindowTests(unittest.TestCase):
             APP.processEvents()
             time.sleep(.005)
         self.assertTrue(predicate(), 'Synthetic worker gate did not advance')
+
+    def wait_for_presented_state(self):
+        self.spin_until(lambda: not self.window.canvas.preview_queue.busy
+                        and not self.window.canvas.preview_pending
+                        and self.window.canvas.state == self.workspace.page.state
+                        and self.window.canvas.time == self.workspace.time)
 
     def dirty_video_session(self):
         from copy import deepcopy
@@ -518,7 +877,9 @@ class WindowTests(unittest.TestCase):
             def late_cancel(outcome):
                 self.assertIs(QThread.currentThread(), APP.thread())
                 self.assertIsNone(outcome[1])
-                received.append(outcome[0].page.source)
+                candidate, image, pixels, actual_time = outcome[0]
+                self.assertFalse(image.isNull() or pixels.isNull())
+                received.append(candidate.page.source)
                 self.window.cancel_operation()
 
             self.window.completion_observer = late_cancel
@@ -544,7 +905,9 @@ class WindowTests(unittest.TestCase):
             def changed(outcome):
                 self.assertIs(QThread.currentThread(), APP.thread())
                 self.assertIsNone(outcome[1])
-                received.append(outcome[0].page.source)
+                candidate, image, pixels, actual_time = outcome[0]
+                self.assertFalse(image.isNull() or pixels.isNull())
+                received.append(candidate.page.source)
                 replacement.write_bytes(b'changed after worker success')
 
             self.window.completion_observer = changed
@@ -675,6 +1038,8 @@ class WindowTests(unittest.TestCase):
         self.window._video_source_path = str(self.source)
         self.window._video_source = self.workspace.video
         self.window.erase_from_now.setChecked(False)
+        self.window.refresh()
+        self.wait_for_presented_state()
         with patch.object(self.workspace, 'erase', wraps=self.workspace.erase) as erase:
             self.window.canvas.erased.emit([[.55, .35]])
             erase.assert_called_once_with([[.55, .35]], .024, 1, from_now=False,
@@ -683,6 +1048,7 @@ class WindowTests(unittest.TestCase):
         self.assertNotIn('from', stroke)
         self.assertAlmostEqual(stroke['points'][0][0], .15)
         self.assertAlmostEqual(stroke['points'][0][1], .15)
+        self.wait_for_presented_state()
         self.window.erase_from_now.setChecked(True)
         self.window.canvas.erased.emit([[.55, .35]])
         self.assertEqual(self.workspace.page.state['drawings'][0]['erasures'][1]['from'], 1)
@@ -735,6 +1101,8 @@ class WindowTests(unittest.TestCase):
         self.workspace.selection_ids.clear()
         self.window.eraser_mode.setCurrentIndex(self.window.eraser_mode.findData('item'))
         self.window.eraser_target.setCurrentIndex(self.window.eraser_target.findData('regions'))
+        self.window.refresh()
+        self.wait_for_presented_state()
         self.window.canvas.erased.emit([[.3, .3]])
         self.assertEqual(len(self.workspace.page.state['regions']), 0)
         self.assertEqual(len(self.workspace.page.state['drawings']), 2)
@@ -785,6 +1153,8 @@ class WindowTests(unittest.TestCase):
         self.workspace.time = 1
         self.window.eraser_mode.setCurrentIndex(self.window.eraser_mode.findData('item'))
         self.window.erase_from_now.setChecked(True)
+        self.window.refresh()
+        self.wait_for_presented_state()
         self.window.canvas.erased.emit([[.3, .3]])
         regions = self.workspace.page.state['regions']
         self.assertEqual(len(regions), 1)

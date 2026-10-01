@@ -24,6 +24,129 @@ APP = QApplication.instance() or QApplication([])
 
 
 class EngineTests(unittest.TestCase):
+    def test_partial_black_mask_composites_in_linear_light(self):
+        white = QImage(8, 4, QImage.Format.Format_RGBA8888)
+        white.fill(QColor('white'))
+        # Pixel2 is half covered: physical half-light encodes to sRGB188,
+        # rather than multiplying the encoded white byte to128. QPainter's
+        # half coverage may be127 or128; both yield188 (within one byte).
+        self.workspace.add_cover('rectangle', [[.3125, 0], [.6875, 1]], 'solid', 0, 0)
+        state = deepcopy(self.workspace.page.state)
+        before = bytes(white.constBits())
+        result = render(white, state)
+        half = result.pixelColor(2, 2)
+        self.assertIn(half.red(), (187, 188))
+        self.assertEqual((half.red(), half.green(), half.blue(), half.alpha()),
+                         (half.red(), half.red(), half.red(), 255))
+        self.assertEqual(result.pixelColor(3, 2), QColor('black'))
+        self.assertEqual(result.pixelColor(0, 2), QColor('white'))
+        self.assertEqual(bytes(white.constBits()), before)
+        self.assertEqual(state, self.workspace.page.state)
+
+    def test_mosaic_black_white_centers_use_linear_light_and_keep_tiles(self):
+        from platforms.windows.bluraction.renderer import mosaic, to_qimage
+        import numpy as np
+        values = np.zeros((3, 8, 4), dtype=np.uint8)
+        values[:, 1::2, :3] = 255
+        values[:, :, 3] = 255
+        # Each2px tile samples exactly halfway between black and white.
+        # Half linear light is sRGB188; an encoded-byte average would128.
+        expected = np.full((3, 8, 4), 188, dtype=np.uint8)
+        expected[:, :, 3] = 255
+        self.assertTrue(np.array_equal(np.asarray(mosaic(Image.fromarray(values), 2)), expected))
+        self.workspace.add_cover('rectangle', [[0, 0], [1, 1]], 'mosaic', 2, 0)
+        actual = render(to_qimage(Image.fromarray(values)), self.workspace.page.state)
+        self.assertTrue(np.array_equal(np.asarray(Image.frombytes('RGBA', (8, 3), bytes(actual.constBits()))), expected))
+        # Nonuniform tiles: transitions must remain at x2/4/6, not resize
+        # to a shifted grid when a last partial tile is present.
+        values = np.zeros((3, 9, 4), dtype=np.uint8)
+        values[:, :, 3] = 255
+        for index, color_value in enumerate((0, 255, 64, 192, 32)):
+            values[:, index * 2:index * 2 + 2, :3] = color_value
+        actual = np.asarray(mosaic(Image.fromarray(values), 2))
+        self.assertTrue(np.array_equal(actual, values))
+
+    def test_blur_and_mosaic_premultiply_transparent_color_before_filtering(self):
+        from platforms.windows.bluraction.renderer import to_qimage
+        import numpy as np
+        for style in ('blur', 'mosaic'):
+            results = []
+            for hidden in ((255, 0, 0), (0, 0, 0)):
+                values = np.zeros((5, 8, 4), dtype=np.uint8)
+                values[:, :4, :3] = hidden
+                values[:, 4:, 2:] = 255
+                image = to_qimage(Image.fromarray(values))
+                before = bytes(image.constBits())
+                workspace = Workspace()
+                workspace.load([self.source])
+                workspace.add_cover('rectangle', [[0, 0], [1, 1]], style, 4 if style == 'blur' else 8, 0)
+                result = render(image, workspace.page.state)
+                pixels = np.asarray(Image.frombytes('RGBA', (8, 5), bytes(result.constBits())))
+                self.assertTrue(np.all(pixels[:, :, 0] == 0))
+                self.assertTrue(np.all(pixels[:, :, 1] == 0))
+                self.assertTrue(np.all(pixels[:, :, 2][pixels[:, :, 3] > 0] == 255))
+                self.assertTrue(np.any((pixels[:, :, 3] > 0) & (pixels[:, :, 3] < 255)))
+                self.assertEqual(bytes(image.constBits()), before)
+                results.append(pixels)
+            self.assertTrue(np.array_equal(results[0], results[1]), style)
+
+    def test_effect_float_filter_prefix_is_tiled_finite_and_clamped(self):
+        from platforms.windows.bluraction import renderer
+        import numpy as np
+        sizes = []
+        original_cumsum = np.cumsum
+        def bounded_cumsum(values, *args, **kwargs):
+            sizes.append(kwargs['out'].nbytes)
+            return original_cumsum(values, *args, **kwargs)
+        plane = np.full((73, 181), .125, dtype=np.float32)
+        with patch.object(renderer, '_FLOAT_WORK_BYTES', 16 * 1024), \
+                patch.object(renderer.np, 'cumsum', side_effect=bounded_cumsum):
+            self.assertIs(renderer._gaussian_inplace(plane, 7), plane)
+        self.assertGreater(len(sizes), 6)
+        self.assertLessEqual(max(sizes), 16 * 1024)
+        self.assertTrue(np.allclose(plane, .125, atol=1e-7, rtol=0))
+        self.assertEqual(plane.dtype, np.float32)
+        impulse = np.zeros((9, 13), dtype=np.float32)
+        impulse[4, 6] = 1
+        renderer._gaussian_inplace(impulse, .2)
+        self.assertGreater(impulse[4, 5], 0)
+        self.assertLess(impulse[4, 6], 1)
+        renderer._gaussian_inplace(impulse, 250)
+        self.assertTrue(np.isfinite(impulse).all())
+        self.assertGreaterEqual(float(impulse.min()), 0)
+        self.assertLessEqual(float(impulse.max()), 1)
+        for invalid in (float('nan'), float('inf'), -1, 251):
+            with self.assertRaises(ValueError):
+                renderer._gaussian_inplace(plane, invalid)
+        with self.assertRaises(ValueError):
+            renderer._gaussian_inplace(np.array([[float('nan')]], dtype=np.float32), 1)
+
+    def test_linear_effect_endpoints_keep_exact_source_and_original_sampling(self):
+        from platforms.windows.bluraction.renderer import to_qimage
+        import numpy as np
+        values = np.zeros((6, 8, 4), dtype=np.uint8)
+        values[:, :, 0] = np.arange(8) * 30
+        values[:, :, 1] = 17
+        values[:, :, 3] = 255
+        values[:, :2] = [231, 12, 87, 0]  # hidden original bytes outside mask
+        image = to_qimage(Image.fromarray(values))
+        before = bytes(image.constBits())
+        self.workspace.add_cover('rectangle', [[.5, 0], [1, 1]], 'blur', 4, 0)
+        state = deepcopy(self.workspace.page.state)
+        state['regions'][0]['effect']['timeRange'] = [1, 2]
+        with patch('platforms.windows.bluraction.renderer._gaussian_inplace',
+                   side_effect=AssertionError('inactive effect must not filter')):
+            inactive = render(image, state, 0)
+        self.assertEqual(bytes(inactive.constBits()), before)
+        first = render(image, state, 1)
+        actual = np.asarray(Image.frombytes('RGBA', (8, 6), bytes(first.constBits())))
+        self.assertTrue(np.array_equal(actual[:, :4], values[:, :4]))
+        state['regions'].append(deepcopy(state['regions'][0]))
+        # Same fully covered blur twice must sample original both times.
+        second = render(image, state, 1)
+        self.assertEqual(bytes(first.constBits()), bytes(second.constBits()))
+        self.assertEqual(bytes(image.constBits()), before)
+
     def test_mixed_selection_restyles_only_matching_schema_and_reopens(self):
         workspace = self.workspace
         workspace.add_cover('rectangle', [[.1, .1], [.4, .4]])
@@ -123,8 +246,112 @@ class EngineTests(unittest.TestCase):
             {'red': 1, 'green': 0, 'blue': 0, 'alpha': .5}, .006, 1)
         result = render(self.workspace.page.image, self.workspace.page.state)
         pixel = result.pixelColor(80, 50)
-        self.assertGreaterEqual(pixel.green(), 125)
-        self.assertLessEqual(pixel.green(), 130)
+        # Native Mac's encoded annotation overlay is composited over white
+        # in linear light: half-light is sRGB187/188 (alpha127/128), not128.
+        self.assertEqual((pixel.red(), pixel.blue(), pixel.alpha()), (255, pixel.green(), 255))
+        self.assertIn(pixel.green(), (187, 188))
+
+    def test_fill_opacity_uses_same_single_linear_overlay_composite(self):
+        self.workspace.add_drawing('rectangle', [[.1, .1], [.9, .9]],
+            {'red': 0, 'green': 0, 'blue': 0, 'alpha': 1}, .04, .5)
+        result = render(self.workspace.page.image, self.workspace.page.state)
+        center = result.pixelColor(80, 50)
+        self.assertIn(center.red(), (187, 188))
+        self.assertEqual((center.green(), center.blue(), center.alpha()),
+                         (center.red(), center.red(), 255))
+        # Fill opacity must not reduce the fully opaque outline.
+        self.assertEqual(result.pixelColor(16, 50), QColor('black'))
+
+    def test_self_intersecting_cover_and_freehand_use_nonzero_winding(self):
+        # Five-point star traversal has winding2 at its center. Odd-even
+        # would wrongly expose the original white center through both masks.
+        points = [[.5, .8125], [.65, .25], [.2625, .59375],
+                  [.7375, .59375], [.35, .25]]
+        for drawing in (False, True):
+            with self.subTest(drawing=drawing):
+                workspace = Workspace()
+                workspace.load([self.source])
+                if drawing:
+                    workspace.add_drawing('freehand', points,
+                        {'red': 0, 'green': 0, 'blue': 0, 'alpha': 1}, .006, 1)
+                else:
+                    workspace.add_cover('polygon', points, 'solid', 0, 0)
+                before = deepcopy(workspace.page.state)
+                rendered = render(workspace.page.image, before)
+                self.assertEqual(rendered.pixelColor(80, 50), QColor('black'))
+                self.assertEqual(rendered.pixelColor(10, 10), QColor('white'))
+                self.assertEqual(workspace.page.state, before)
+
+    def test_duplicate_alpha_annotations_share_encoded_overlay_before_linear_composite(self):
+        for _ in range(2):
+            self.workspace.add_drawing('rectangle', [[.1, .1], [.9, .9]],
+                {'red': 0, 'green': 0, 'blue': 0, 'alpha': .5}, .006, 1)
+        state = deepcopy(self.workspace.page.state)
+        self.assertNotEqual(state['drawings'][0]['id'], state['drawings'][1]['id'])
+        rendered = render(self.workspace.page.image, state)
+        pixel = rendered.pixelColor(80, 50)
+        # Overlay alpha191/192 leaves linear white64/65 out of255. Its
+        # sRGB encoding is136/137. Missing a layer yields187/188; composing
+        # each layer directly in encoded RGB yields63/64.
+        self.assertIn(pixel.red(), (136, 137))
+        self.assertEqual((pixel.green(), pixel.blue(), pixel.alpha()),
+                         (pixel.red(), pixel.red(), 255))
+        self.assertEqual(rendered.pixelColor(5, 5), QColor('white'))
+        self.assertEqual(self.workspace.page.state, state)
+
+    def test_annotation_erasure_is_isolated_and_respects_time_and_layer_order(self):
+        self.workspace.add_drawing('rectangle', [[.1, .1], [.9, .9]],
+            {'red': 1, 'green': 0, 'blue': 0, 'alpha': 1}, .006, 1)
+        self.workspace.add_drawing('rectangle', [[.1, .1], [.9, .9]],
+            {'red': 0, 'green': 0, 'blue': 1, 'alpha': 1}, .006, 1)
+        self.workspace.page.state['drawings'][-1]['erasures'] = [
+            {'points': [[.35, .5], [.65, .5]], 'width': .12, 'from': 1}]
+        before = deepcopy(self.workspace.page.state)
+        early = render(self.workspace.page.image, before, time=.5)
+        late = render(self.workspace.page.image, before, time=1.5)
+        self.assertEqual(early.pixelColor(80, 50), QColor('blue'))
+        self.assertEqual(late.pixelColor(80, 50), QColor('red'))
+        self.assertEqual(late.pixelColor(80, 30), QColor('blue'))
+        self.assertEqual(late.pixelColor(5, 5), QColor('white'))
+        reversed_state = deepcopy(before)
+        reversed_state['drawings'].reverse()
+        self.assertEqual(render(self.workspace.page.image, reversed_state, time=1.5)
+                         .pixelColor(80, 30), QColor('red'))
+        self.assertEqual(self.workspace.page.state, before)
+
+    def test_annotation_over_transparent_source_has_no_hidden_color_bleed(self):
+        from platforms.windows.bluraction.renderer import to_qimage, to_pillow
+        import numpy as np
+        source_bytes = np.zeros((100, 160, 4), dtype=np.uint8)
+        # Invisible blue is deliberately retained in untouched source pixels.
+        source_bytes[:, :, 2] = 255
+        source = to_qimage(Image.fromarray(source_bytes))
+        original = bytes(source.constBits())
+        self.workspace.add_drawing('rectangle', [[.1, .1], [.9, .9]],
+            {'red': 1, 'green': 0, 'blue': 0, 'alpha': .5}, .006, 1)
+        state = deepcopy(self.workspace.page.state)
+        result = render(source, state)
+        pixel = result.pixelColor(80, 50)
+        self.assertEqual((pixel.red(), pixel.green(), pixel.blue()), (255, 0, 0))
+        self.assertIn(pixel.alpha(), (127, 128))
+        self.assertTrue(np.array_equal(np.asarray(to_pillow(result))[5, 5], source_bytes[5, 5]))
+        self.assertEqual(bytes(source.constBits()), original)
+        self.assertEqual(self.workspace.page.state, state)
+
+    def test_annotation_composite_tiles_preserve_exact_zero_alpha_and_color_endpoints(self):
+        from platforms.windows.bluraction.renderer import _composite_annotations
+        import numpy as np
+        pixels = np.zeros((7, 8, 4), dtype=np.uint8)
+        pixels[:, :, :3] = [13, 79, 211]
+        pixels[:, :, 3] = 128
+        overlay = QImage(8, 7, QImage.Format.Format_RGBA8888_Premultiplied)
+        overlay.fill(QColor(0, 0, 0, 0))
+        overlay.setPixelColor(3, 3, QColor('red'))
+        with patch('platforms.windows.bluraction.renderer._FLOAT_WORK_BYTES', 1024):
+            actual = np.asarray(_composite_annotations(Image.fromarray(pixels), overlay))
+        expected = pixels.copy()
+        expected[3, 3] = [255, 0, 0, 255]
+        self.assertTrue(np.array_equal(actual, expected))
 
     def test_still_eraser_ignores_time_and_video_uses_from(self):
         self.workspace.add_cover('rectangle', [[0, 0], [1, 1]], 'solid', 25, 0)

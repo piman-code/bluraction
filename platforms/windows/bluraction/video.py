@@ -161,6 +161,7 @@ class VideoSource:
                 raise VideoError('영상 첫 프레임을 읽을 수 없습니다.')
             first_time = _timestamp(first)
             self.origin = min(starts) if starts else first_time
+            self.first_frame_time = first_time - self.origin
             self.video_end = (Fraction(video.start_time) * video.time_base + Fraction(video.duration) * video.time_base
                               if video.start_time is not None and video.duration is not None else None)
             ends = [Fraction(s.start_time + s.duration) * s.time_base for s in container.streams
@@ -187,6 +188,8 @@ class VideoSource:
             if duration <= 0 or not math.isfinite(duration):
                 raise VideoError('영상의 실제 길이를 읽을 수 없습니다.')
             self.duration = float(duration)
+            if not math.isfinite(self.first_frame_time) or not 0 <= self.first_frame_time < duration:
+                raise VideoError('첫 프레임의 실제 시각이 영상 범위 밖입니다.')
             check_cancel(cancel)
             self._first_image = _display_image(first, self.sample_aspect_ratio, self.metadata)
         self.validate(cancel)
@@ -211,11 +214,16 @@ class VideoSource:
         self._guard()
         return Page(self.path, self.source_sha256, self._first_image.copy(), source_identity=self._source_identity)
 
-    def frame_at(self, time):
+    def frame_at(self, time, cancel=None):
+        """Backwards-compatible image-only wrapper; new previews use actual PTS."""
+        return self.frame_at_timed(time, cancel=cancel).image
+
+    def frame_at_timed(self, time, cancel=None):
         """Frame displayed at time: hold preceding actual PTS, not nearest frame/FPS."""
         if not math.isfinite(time):
             raise VideoError('재생 시각이 올바르지 않습니다.')
         target = self.origin + Fraction(str(max(0, min(self.duration, time))))
+        check_cancel(cancel)
         self._guard()
         with _av().open(str(self.path)) as container:
             stream = container.streams[self.stream_index]
@@ -225,17 +233,20 @@ class VideoSource:
                 # A fresh container has no reused decoder state; unsupported seeks decode from start.
                 container.close()
                 with _av().open(str(self.path)) as beginning:
-                    image = self._frame_from_decode(beginning.decode(beginning.streams[self.stream_index]), target)
+                    image = self._frame_from_decode(beginning.decode(beginning.streams[self.stream_index]), target, cancel)
                 self._guard()
+                check_cancel(cancel)
                 return image
-            image = self._frame_from_decode(container.decode(stream), target)
+            image = self._frame_from_decode(container.decode(stream), target, cancel)
         self._guard()
+        check_cancel(cancel)
         return image
 
-    def _frame_from_decode(self, frames, target):
+    def _frame_from_decode(self, frames, target, cancel=None):
         chosen = None
         last_time = None
         for frame in frames:
+            check_cancel(cancel)
             stamp = _timestamp(frame)
             if last_time is not None and stamp <= last_time:
                 raise VideoError('영상 프레임 PTS가 증가하지 않습니다.')
@@ -249,6 +260,7 @@ class VideoSource:
             # Exact EOF seeks can return no frame; decode from start rather than guess an index.
             with _av().open(str(self.path)) as beginning:
                 for frame in beginning.decode(beginning.streams[self.stream_index]):
+                    check_cancel(cancel)
                     stamp = _timestamp(frame)
                     if chosen is not None and stamp > target:
                         break
@@ -257,7 +269,11 @@ class VideoSource:
                         break
                 if chosen is None:
                     raise VideoError('요청 시각의 프레임을 읽을 수 없습니다.')
-        return _display_image(chosen, self.sample_aspect_ratio, self.metadata)
+        time = _timestamp(chosen) - self.origin
+        if not math.isfinite(time) or not 0 <= time <= self.duration:
+            raise VideoError('선택한 프레임의 실제 시각이 영상 범위 밖입니다.')
+        check_cancel(cancel)
+        return TimedImage(time, _display_image(chosen, self.sample_aspect_ratio, self.metadata))
 
     def iter_frames(self, start=0, end=None, cancel=None):
         """Chronological source frames with presentation seconds relative to origin."""
