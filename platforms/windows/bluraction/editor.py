@@ -476,6 +476,9 @@ class Workspace:
         project = self._read_project(path)
         tree = project.to_dict()
         entry = tree if project.version == 1 else tree['pages'][page_index]
+        if self.video and project.version == 1:
+            from .video_project_compatibility import require_legacy_video_timing_compatible
+            require_legacy_video_timing_compatible(entry, getattr(self.video, 'origin', None))
         groups, additions = {}, {'regions': [], 'drawings': []}
         for key, region in [('regions', True), ('drawings', False)]:
             for original in entry[key]:
@@ -511,6 +514,9 @@ class Workspace:
         # media. Load into a temporary workspace so failure retains current edits.
         candidate = Workspace()
         candidate.load(media_paths, cancel=cancel)
+        if candidate.video and project.version == 1:
+            from .video_project_compatibility import require_legacy_video_timing_compatible
+            require_legacy_video_timing_compatible(entry, getattr(candidate.video, 'origin', None))
         for page in candidate.pages:
             check_cancel(cancel)
             page.state = {key: deepcopy(entry[key]) for key in ('regions', 'drawings')}
@@ -555,6 +561,9 @@ class Workspace:
         destination = Path(path).absolute()
         from .media import validate_sources
         validate_sources(self.pages, cancel)
+        if self.video:
+            from .video_project_compatibility import require_legacy_video_timing_compatible
+            require_legacy_video_timing_compatible(self.page.state, getattr(self.video, 'origin', None))
         tree = deepcopy(self._project_tree) if self._project_tree else {}
         def reference(page):
             return page.source.name if page.source.parent == destination.parent else str(page.source)
@@ -650,6 +659,8 @@ class Workspace:
                 if source.suffix.lower() in {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm'}:
                     from .video import VideoSource
                     video = VideoSource(source, cancel=cancel)
+                    from .video_project_compatibility import require_legacy_video_timing_compatible
+                    require_legacy_video_timing_compatible(entry, getattr(video, 'origin', None))
                     decoded[source] = [video.page()]
                 else:
                     decoded[source] = load_pages([source], cancel=cancel) if cancel is not None else load_pages([source])

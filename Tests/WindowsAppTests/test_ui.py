@@ -8,6 +8,7 @@ import time
 import threading
 import unittest
 from copy import deepcopy
+from fractions import Fraction
 from unittest.mock import patch
 from shiboken6 import isValid
 
@@ -307,6 +308,7 @@ class WindowTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         class TimedSource:
             duration = 2
+            origin = Fraction(0)  # Explicit zero-axis synthetic control, no codec proof.
             def frame_at_timed(self, seconds, cancel=None):
                 calls.append((seconds, QThread.currentThread()))
                 entered.set()
@@ -595,6 +597,7 @@ class WindowTests(unittest.TestCase):
         class FakeVideoSource:
             duration = 2
             first_frame_time = 0
+            origin = Fraction(0)  # Synthetic frames and project periods share this axis.
 
             def __init__(self, path, cancel=None):
                 self.source = Path(path)
