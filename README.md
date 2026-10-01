@@ -2,16 +2,22 @@
 
 macOS에서 영상·이미지의 원하는 부분을 **블러·모자이크·단색**으로 가리고, 선·도형·화살표·글자를 그려 넣는 로컬 앱입니다. 원본은 수정하지 않고 별도 파일로 저장합니다. 영상에서는 가린 영역과 그림을 **움직임에 맞춰 따라가게** 직접 기록하거나 **자동 추적**으로 기록하고, 여러 항목을 **그룹**으로 묶어 함께 옮기며, 지우개도 **시간을 따라** 적용됩니다. 모든 항목은 **레이어 목록**에서 이름·보이기·잠금을 관리하고, 작업은 **프로젝트 파일**로 저장해 이어 하거나 다른 영상에 템플릿처럼 적용할 수 있습니다.
 
-macOS 14 이상과 Swift Command Line Tools가 필요하며, 외부 Swift 패키지는 사용하지 않습니다.
+현재 Mac 후보의 검수 대상은 macOS 14 이상 arm64입니다. 소스 빌드·내부 검증에는 Swift Command Line Tools가 필요하며, 외부 Swift 패키지는 사용하지 않습니다. 현재 저장소에는 같은 프로젝트 형식을 읽는 Windows Qt 개발 후보도 있습니다. Windows 실제 실행·설치 및 양방향 호환 검수는 진행 중이며, 아직 검수 완료된 Windows 릴리스는 없습니다.
+
+- [플랫폼별 빌드·패키징](docs/플랫폼-빌드-상태.md)
+- [현재 검증 상태](docs/검증-상태.md)
+- [Windows 한국어 사용 안내 초안](docs/Windows-사용-안내.md)
+- [실제 OS 사용자 검수](docs/실제-OS-검수.md)
+- [Mac 후보 설치·복구](docs/Mac-설치와-복구.md)
 
 ## 빌드와 실행
 
 ```bash
-./scripts/build_app.sh
-open BlurAction.app
+./scripts/build_app.sh --build-only --no-install
+open .build/BlurAction.app
 ```
 
-빌드 명령은 `.build/BlurAction.app`을 검증한 뒤 프로젝트 루트의 `BlurAction.app`과 `/Applications/BlurAction.app`을 같은 결과로 갱신합니다. 그래서 Spotlight나 Launchpad로 열어도 최신 빌드가 실행됩니다. 이전 앱은 지우지 않고 `.build/backups/`로 옮겨 보존합니다. `/Applications`에 다른 앱이 같은 이름으로 있으면 건드리지 않습니다.
+위 명령은 `.build/BlurAction.app` 후보만 만듭니다. 운영 설치를 교체하려면 검수한 후보와 복구본을 먼저 확인하세요. 옵션 없는 `./scripts/build_app.sh`는 `.build/BlurAction.app`을 검증한 뒤 프로젝트 루트의 `BlurAction.app`과 `/Applications/BlurAction.app`을 같은 결과로 갱신합니다. 그래서 Spotlight나 Launchpad로 열어도 최신 빌드가 실행됩니다. 이전 앱은 지우지 않고 `.build/backups/`로 옮겨 보존합니다. `/Applications`에 다른 앱이 같은 이름으로 있으면 건드리지 않습니다.
 
 - `./scripts/build_app.sh --no-install`: `/Applications`는 그대로 두고 루트 앱만 갱신
 - `./scripts/build_app.sh --build-only`: `.build/BlurAction.app` 후보만 생성
@@ -152,8 +158,10 @@ open BlurAction.app
 ## 검증
 
 ```bash
-./scripts/test.sh
+python3 scripts/verify_mac.py
 ```
+
+각 검사 묶음을 별도 프로세스로 실행하고 실제 suite·Test run 완료 문구, 종료 코드, 입력·로그 해시를 확인합니다. 종료 코드0만 있거나 시간 제한을 넘으면 미완료로 기록하며 `.build/mac-verification-…/`에 로그와 보고서를 보존합니다. 한 묶음만 확인하려면 `--suite PortableProjectCompatibilityTests`처럼 지정합니다.
 
 테스트는 합성 이미지·영상을 생성해 다음을 확인합니다.
 
@@ -186,4 +194,4 @@ Python `scripts/blur_action.py`는 초기 CLI 실험 도구이며 앱 자체 검
 
 ## 라이선스
 
-[MIT License](LICENSE)
+[MIT License](LICENSE) — 이 저장소의 앱 소스에 적용됩니다. Windows 의존성과 배포 DLL은 각 라이선스를 별도로 따릅니다. 실제 배포 바이너리·코덱 구성, 고지 및 필요한 대응 소스의 검토가 완료되기 전에는 설치 파일을 공개하지 않습니다.

@@ -1,0 +1,129 @@
+name: Verify Mac and Windows candidates
+
+# This workflow is source preparation. It has not been run on GitHub.
+# Candidate packaging is opt-in; no installation, signing, push or release step.
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+    inputs:
+      prepare_windows_candidate:
+        description: Build a private Windows candidate after approving runner dependencies
+        type: boolean
+        default: false
+      windows_license_materials_path:
+        description: Existing approved real dependency-materials directory on the runner (empty blocks packaging)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-project:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6; verified 2026-10-02
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Verify actual Swift-encoded fixture contract without opening media references
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m unittest discover -s Tests/PortableProjectTests -v
+          python -m unittest discover -s Tests/VerificationRunnerTests -v
+
+  mac-native:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Record native runner and require the existing fixture tool
+        run: |
+          uname -a
+          swift --version
+          xcode-select -p
+          if ! command -v ffmpeg; then
+            echo '::error::Swift fixture checks require an approved ffmpeg installation on this runner.'
+            exit 1
+          fi
+      - name: Native Mac regression checks
+        run: python3 scripts/verify_mac.py
+      - name: Retain synthetic native verification logs and input hashes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mac-native-verification
+          path: .build/mac-verification-*/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build candidate without operating installation
+        run: ./scripts/build_app.sh --build-only --no-install
+
+  windows-native:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+          architecture: x64
+      - name: Install exact candidate dependencies into an isolated runner environment
+        shell: pwsh
+        run: |
+          python -m venv .ci-venv
+          & .ci-venv/Scripts/python.exe -m pip install --only-binary=:all: -r platforms/windows/requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows wheels unavailable; do not silently downgrade or skip a media feature.' }
+          & .ci-venv/Scripts/python.exe -m pip freeze
+      - name: Check required native media capabilities
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
+          if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
+          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
+      - name: Verify model and Qt/media controllers with bounded subprocesses
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/WindowsAppTests','-v'],check=True,timeout=900)"
+          if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
+      - name: Prepare onedir candidate only
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        shell: pwsh
+        env:
+          APPROVED_LICENSE_MATERIALS: ${{ inputs.windows_license_materials_path }}
+        run: |
+          if (-not $env:APPROVED_LICENSE_MATERIALS) {
+            throw 'Packaging remains pending: real dependency notices/configuration evidence are not supplied. No invented review record or manifest will be uploaded.'
+          }
+          & .ci-venv/Scripts/python.exe -m pip install --only-binary=:all: -r platforms/windows/installer/requirements-packaging.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Approved packaging dependency unavailable.' }
+          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Version "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}" -LicenseMaterials $env:APPROVED_LICENSE_MATERIALS -PrepareForReview
+      - name: Retain candidate manifest for review, without uploading unchecked binaries
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-candidate-manifest
+          path: .build/windows-packages/**/bundle-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+# This workflow proves only the stages it actually executes. Explorer drag/drop,
+# OS dialogs, clean-user installation, packaged HEIC codecs, signed distribution and user
+# acceptance require the manual-OS checklist and specific candidate evidence.
