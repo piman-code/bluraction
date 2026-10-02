@@ -61,8 +61,24 @@ Both hosts resolve the following ASCII generic requests, including uppercase
 and mixed-case ASCII spellings. No whitespace trimming or partial-name matching
 converts a named request to a generic one. Availability and rendering use the
 same native resolver on each host. Non-ASCII case-fold equivalents remain an
-open cross-host check: Windows currently uses `casefold()`, while Mac uses
-`lowercased()`. The stored request is preserved in either case.
+explicit named request: Windows recognizes generic names only with ASCII
+lowercasing, so `ſerif`, `ſystem` and `monoſpace` do not become generic aliases.
+Mac's exact lowercased comparisons likewise do not classify those names as
+generics. Qt may normalize a requested family itself (for example its surrounding
+spaces); the adapter still preserves the stored string and checks named-font
+availability instead of adding its own trimming or partial matching.
+
+The Windows picker offers all seven explicit requests below as well as installed
+named families; its initial native named default remains unchanged. Text Apply
+sends only fields explicitly edited in that inspector. An explicit re-selection
+of the displayed font can replace an omitted/null/empty default with that name;
+an unchanged Apply does not do so or add an undo entry. Only explicitly selected,
+unlocked text receives the edited fields, with one undo for the transaction.
+Selection/page/related raw text or lock changes discard a stale inspector draft;
+unrelated refreshes retain it. Omitted or null `bold` renders and displays as
+`true`, matching Swift's legacy default, while its original JSON is retained
+until the person explicitly edits weight. Omitted or null `text` displays as
+empty without being rewritten by a font-only or weight-only edit.
 
 | Request | Mac native resolution | Windows native resolution |
 | --- | --- | --- |

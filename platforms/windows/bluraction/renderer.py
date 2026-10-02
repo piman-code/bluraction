@@ -13,6 +13,24 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QColorSpace, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QImage, QPainter, QPainterPath, QPen
 
 
+PORTABLE_FONT_REQUESTS = ('System', 'Sans Serif', 'sans-serif', 'Monospace', 'Serif', 'Cursive', 'Fantasy')
+
+
+def generic_font_request(name):
+    """Recognize complete ASCII requests, retaining every saved named value."""
+    if not name:
+        return 'sans serif'
+    if name.isascii() and name.lower() in {request.lower() for request in PORTABLE_FONT_REQUESTS}:
+        return name.lower()
+    return None
+
+
+def text_bold(item):
+    """Swift's legacy absent/null weight is true; do not rewrite the record."""
+    value = item.get('bold')
+    return True if value is None else value
+
+
 def text_font(name):
     """Resolve portable generic requests without changing saved named fonts.
 
@@ -20,7 +38,7 @@ def text_font(name):
     system font is the documented native choice for that generic request.
     https://doc.qt.io/qt-6/qfontdatabase.html#systemFont
     """
-    generic = (name or 'Sans Serif').casefold()
+    generic = generic_font_request(name)
     if generic == 'monospace':
         fixed = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         if QFontInfo(fixed).fixedPitch():
@@ -532,7 +550,7 @@ def render(image, state, time=None):
                     background.addRoundedRect(box.adjusted(-pad, -pad / 2, pad, pad / 2), pad, pad)
                     painter.fillPath(background, color(item['textBackground']))
                 font = text_font(item.get('fontName'))
-                font.setBold(item.get('bold', True))
+                font.setBold(text_bold(item))
                 # A fixed font size and painter transform retain fractional sizes.
                 font.setPixelSize(100)
                 painter.setFont(font)

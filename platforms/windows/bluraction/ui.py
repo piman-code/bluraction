@@ -48,14 +48,13 @@ def font_available(name, families=None):
     QFontInfo also resolves real aliases omitted by QFontDatabase.families().
     https://doc.qt.io/qt-6/qfontinfo.html#details
     """
-    if not name:
-        return True
-    families = families if families is not None else {f.casefold() for f in QFontDatabase.families()}
-    if name.casefold() in families or name == QApplication.font().family():
-        return True
-    if name.casefold() in {'sans serif', 'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'system'}:
+    generic = renderer.generic_font_request(name)
+    if generic is not None:
         info = QFontInfo(renderer.text_font(name))
-        return bool(info.family()) and (name.casefold() != 'monospace' or info.fixedPitch())
+        return bool(info.family()) and (generic != 'monospace' or info.fixedPitch())
+    families = families if families is not None else {f.lower() for f in QFontDatabase.families()}
+    if name.lower() in families or name == QApplication.font().family():
+        return True
     return QFontInfo(QFont(name)).exactMatch()
 
 
@@ -624,6 +623,7 @@ class BlurActionWindow(QMainWindow):
         self.workspace = workspace
         self._refreshing = False
         self._text_editor_baseline = None
+        self._text_changed_fields = set()
         self._thread = None
         self._worker = None
         self._operation_receiver = _OperationReceiver(self)
@@ -852,17 +852,26 @@ class BlurActionWindow(QMainWindow):
         default_family = QApplication.font().family()
         if self.font.findText(default_family) < 0:
             self.font.addItem(default_family)
+        for request in renderer.PORTABLE_FONT_REQUESTS:
+            if self.font.findText(request) < 0:
+                self.font.addItem(request)
         self.font.setCurrentText(default_family)
+        self.font.currentIndexChanged.connect(lambda: self._mark_text_field('fontName'))
+        # Qt emits activated for an explicit same-index choice too. A null/raw
+        # default may therefore be intentionally replaced by its displayed name.
+        # https://doc.qt.io/qt-6/qcombobox.html#activated
+        self.font.activated.connect(lambda: self._mark_text_field('fontName'))
+        self.text.textChanged.connect(lambda: self._mark_text_field('text'))
         form.addRow('글꼴', self.font)
         self.font_warning = QLabel()
         self.font_warning.setWordWrap(True)
         form.addRow(self.font_warning)
         self.bold = QCheckBox('굵게')
         self.bold.setChecked(True)
+        self.bold.toggled.connect(lambda: self._mark_text_field('bold'))
         form.addRow(self.bold)
         self.text_apply = QPushButton('선택 글자 내용·글꼴 적용')
-        self.text_apply.clicked.connect(lambda: self.update_selection(text=self.text.toPlainText(),
-            fontName=self.font.currentText(), bold=self.bold.isChecked()))
+        self.text_apply.clicked.connect(self.apply_text_changes)
         form.addRow(self.text_apply)
         self.layers = QListWidget()
         self.layers.setAccessibleName('레이어 목록 — 위가 앞')
@@ -1095,7 +1104,7 @@ class BlurActionWindow(QMainWindow):
                 [control.value() for control in self.coordinates], self.workspace.time))
 
     def missing_fonts(self):
-        families = {family.casefold() for family in QFontDatabase.families()}
+        families = {family.lower() for family in QFontDatabase.families()}
         return [(index + 1, item['fontName']) for index, page in enumerate(self.workspace.pages)
                 for item in page.state['drawings']
                 if item['kind'] == 'text' and not item.get('hidden', False)
@@ -1116,6 +1125,49 @@ class BlurActionWindow(QMainWindow):
     def update_selection(self, **properties):
         if not self._refreshing and self.workspace.selectionID:
             self.perform(lambda: self.workspace.update_selected(**properties))
+
+    def _mark_text_field(self, key):
+        if not self._refreshing:
+            self._text_changed_fields.add(key)
+
+    def _selected_text_for_inspector(self):
+        texts = [item for item, region in self.workspace.items()
+                 if not region and item['kind'] == 'text' and item['id'] in self.workspace.selection_ids]
+        unlocked = [item for item in texts if not item.get('locked', False)]
+        choices = unlocked or texts
+        return next((item for item in choices if item['id'] == self.workspace.selectionID),
+                    choices[0] if choices else None)
+
+    def _text_context(self, representative):
+        def raw(item, key):
+            return key in item, item.get(key)
+        # A different selected text or lock state can change the transaction
+        # target without changing the representative's displayed properties.
+        targets = tuple((item['id'], item['kind'], raw(item, 'locked'),
+                         tuple(raw(item, key) for key in ('text', 'fontName', 'bold')))
+                        for item, region in self.workspace.items()
+                        if not region and item['id'] in self.workspace.selection_ids)
+        return (id(self.workspace.page), self.workspace.index,
+                tuple(sorted(self.workspace.selection_ids)), representative['id'], targets)
+
+    def apply_text_changes(self):
+        if self._refreshing or self.workspace.busy:
+            return
+        item = self._selected_text_for_inspector()
+        if item is None or item.get('locked', False):
+            return
+        if self._text_context(item) != self._text_editor_baseline:
+            self.refresh()
+            return
+        values = {'text': self.text.toPlainText(), 'fontName': self.font.currentText(),
+                  'bold': self.bold.isChecked()}
+        properties = {key: values[key] for key in self._text_changed_fields}
+        if not properties:
+            return
+        def apply():
+            self.workspace.apply_text_properties(**properties)
+            self._text_changed_fields.clear()
+        self.perform(apply)
 
     def style_changed(self, field):
         if self._refreshing:
@@ -1451,28 +1503,30 @@ class BlurActionWindow(QMainWindow):
             else:
                 self.width.setValue(chosen.get('lineWidth', .004) * 1000)
                 self.fill.setValue(chosen.get('fillOpacity', 0))
-                if item['kind'] == 'text':
-                    family = chosen.get('fontName') or QApplication.font().family()
-                    baseline = (selected, chosen.get('text', ''), family, chosen.get('bold', True))
-                    # Keep explicit, unapplied inspector choices through an
-                    # unrelated refresh. Selection/model changes (incl. undo)
-                    # load the saved fields, preserving unavailable family names.
-                    if self._text_editor_baseline != baseline:
-                        self.text.setPlainText(baseline[1])
-                        if self.font.findText(family) < 0:
-                            self.font.addItem(family)
-                        self.font.setCurrentText(family)
-                        self.bold.setChecked(baseline[3])
-                        self._text_editor_baseline = baseline
-                else:
-                    self._text_editor_baseline = None
             interval = chosen.get('timeRange', [0, 0])
             self.range_start.setValue(interval[0])
             self.range_end.setValue(interval[1])
-            if region:
-                self._text_editor_baseline = None
+        text_item = self._selected_text_for_inspector()
+        if text_item is not None:
+            baseline = self._text_context(text_item)
+            # Keep unapplied choices only while their complete edit context
+            # remains current. Loading the panel never changes raw null/defaults.
+            if self._text_editor_baseline != baseline:
+                family = text_item.get('fontName') or QApplication.font().family()
+                self.text.setPlainText(text_item.get('text') or '')
+                if self.font.findText(family) < 0:
+                    self.font.addItem(family)
+                self.font.setCurrentText(family)
+                self.bold.setChecked(renderer.text_bold(text_item))
+                self._text_editor_baseline = baseline
+                self._text_changed_fields.clear()
         else:
             self._text_editor_baseline = None
+            self._text_changed_fields.clear()
+        text_controls_enabled = not self.workspace.busy and not (text_item and text_item.get('locked', False))
+        for control in (self.text, self.font, self.bold):
+            control.setEnabled(text_controls_enabled)
+        self.text_apply.setEnabled(text_item is not None and text_controls_enabled)
         self.position_controls.setEnabled(current is not None and not self.workspace.busy)
         prior_keyframe = self.keyframes.currentItem()
         prior_time = prior_keyframe.data(Qt.ItemDataRole.UserRole) if prior_keyframe else None

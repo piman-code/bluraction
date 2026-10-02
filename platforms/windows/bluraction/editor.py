@@ -245,6 +245,34 @@ class Workspace:
                 else:
                     target[key] = deepcopy(value)
 
+    def apply_text_properties(self, **properties):
+        """Apply explicit text fields to unlocked selections in one undo.
+
+        Missing keys and explicit nulls remain distinct. This transaction never
+        expands a selection to its group or changes the general layer policy.
+        """
+        self._available()
+        if properties.keys() - {'text', 'fontName', 'bold'}:
+            raise ValueError('지원하지 않는 글자 편집 속성입니다.')
+        for key, value in properties.items():
+            if value is not None and (type(value) is not bool if key == 'bold' else not isinstance(value, str)):
+                raise ValueError('글자·글꼴은 문자열, 굵게는 참/거짓 값을 사용하세요.')
+        updates = []
+        for item, region in self.items():
+            if (region or item['kind'] != 'text' or item['id'] not in self.selection_ids
+                    or item.get('locked', False)):
+                continue
+            changed = {key: value for key, value in properties.items()
+                       if key not in item or item[key] != value}
+            if changed:
+                updates.append((item, changed))
+        if not updates:
+            return False
+        self._checkpoint()
+        for item, changed in updates:
+            item.update(deepcopy(changed))
+        return True
+
     def set_selected_color(self, color, region):
         """Restyle only matching, unlocked explicit selections, in one undo.
 
