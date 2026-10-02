@@ -12,7 +12,23 @@ $Destination = [IO.Path]::GetFullPath($Destination)
 $Repository = [IO.Path]::GetFullPath($Repository)
 if (Test-Path -LiteralPath $Destination) { throw 'A new, nonexistent attempt directory is required.' }
 if (-not (Test-Path -LiteralPath (Split-Path $Destination -Parent) -PathType Container)) { throw 'Existing approved parent required.' }
-$HostPython = (Get-Command $Python -CommandType Application).Source
+function Resolve-Application([string]$Name) {
+    # Resolve one application in execution precedence order before reading Source.
+    # Reading Source on the whole result can join several paths into one command.
+    $Application = Get-Command -Name $Name -CommandType Application -All -ErrorAction Stop |
+        Select-Object -First 1
+    if ($null -eq $Application) { throw "Required application unavailable: $Name" }
+    $Executable = $Application.Source
+    if ($Executable -isnot [string] -or [string]::IsNullOrWhiteSpace($Executable) -or
+        $Executable.IndexOfAny([char[]]"`r`n") -ge 0 -or
+        -not [IO.Path]::IsPathRooted($Executable) -or
+        [IO.Path]::GetExtension($Executable) -ine '.exe' -or
+        -not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+        throw "One actual executable path required: $Name"
+    }
+    return $Executable
+}
+$HostPython = Resolve-Application $Python
 $EnvNames = @('PATH','INCLUDE','LIB','LIBPATH','VCToolsInstallDir','VCToolsVersion','VCINSTALLDIR',
               'WindowsSdkDir','WindowsSDKVersion','MSYSTEM','MSYS2_PATH_TYPE','PIP_CONFIG_FILE',
               'PYTHONUTF8','PYTHONUNBUFFERED','DISTUTILS_USE_SDK','MSSdk')
@@ -61,7 +77,7 @@ try {
         }
     }
     $Tools = @('cl.exe','link.exe','lib.exe') | ForEach-Object {
-        $Tool = (Get-Command $_ -CommandType Application).Source
+        $Tool = Resolve-Application $_
         [ordered]@{name=$_;path=$Tool;version=(Get-Item -LiteralPath $Tool).VersionInfo.FileVersion;
             sha256=(Get-FileHash -LiteralPath $Tool -Algorithm SHA256).Hash.ToLowerInvariant()}
     }

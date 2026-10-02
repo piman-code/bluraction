@@ -157,7 +157,7 @@ jobs:
           ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
           & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
-      - name: Observe offscreen and native Windows font backends without windows or OS input
+      - name: Observe default and system-font offscreen backends without windows or OS input
         shell: pwsh
         run: |
           & .ci-venv/Scripts/python.exe scripts/windows-font-diagnostic/run_font_diagnostic.py --repository "$PWD" --timeout 30
@@ -165,6 +165,10 @@ jobs:
       - name: Verify model and Qt/media controllers with bounded subprocesses
         shell: pwsh
         run: |
+          # The offscreen FreeType DB needs actual system fonts; native Windows
+          # resolved Courier New in CI8. No font is installed or bundled here.
+          $env:QT_QPA_FONTDIR = Join-Path $env:SystemRoot 'Fonts'
+          if (-not (Test-Path -LiteralPath $env:QT_QPA_FONTDIR -PathType Container)) { throw 'System font folder unavailable.' }
           & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/VerificationRunnerTests','-v'],check=True,timeout=120)"
           if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
           & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300
@@ -234,7 +238,7 @@ jobs:
               [StringComparison]::OrdinalIgnoreCase)) { throw 'Recipe must stay inside reviewed checkout.' }
           $attempt = Join-Path $env:RUNNER_TEMP ('bluraction-owned-ffmpeg-' + [guid]::NewGuid().ToString())
           "OWNED_CANDIDATE_ROOT=$attempt" >> $env:GITHUB_ENV
-          & (Join-Path $recipe 'BuildOwnedCandidate.ps1') -Repository $repo -Destination $attempt -Python python
+          & (Join-Path $recipe 'BuildOwnedCandidate.ps1') -Repository $repo -Destination $attempt -Python (Join-Path $env:pythonLocation 'python.exe')
       - name: Preserve synthetic reports and locked source/build provenance
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f

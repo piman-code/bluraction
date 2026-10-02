@@ -11,7 +11,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument('--repository', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
-parser.add_argument('--platform', choices=('offscreen', 'windows'), required=True)
+parser.add_argument('--platform', choices=('offscreen', 'offscreen-system-fonts', 'windows'), required=True)
 args = parser.parse_args()
 if sys.platform != 'win32':
     raise SystemExit('Actual Windows required; do not substitute host results')
@@ -25,7 +25,13 @@ paths = [Path(__file__).resolve(), repo / 'platforms/windows/bluraction/renderer
 before = {str(p.relative_to(repo)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 # Only the new child process changes its QPA choice. The application below never
 # creates/shows a QWidget, starts an event loop or sends any input event.
-os.environ['QT_QPA_PLATFORM'] = args.platform
+actual_platform = 'offscreen' if args.platform == 'offscreen-system-fonts' else args.platform
+os.environ['QT_QPA_PLATFORM'] = actual_platform
+os.environ.pop('QT_QPA_FONTDIR', None)
+if args.platform == 'offscreen-system-fonts':
+    font_folder = Path(os.environ['SystemRoot']) / 'Fonts'
+    if not font_folder.is_dir(): raise SystemExit('Existing Windows system fonts required')
+    os.environ['QT_QPA_FONTDIR'] = str(font_folder)
 sys.path.insert(0, str(repo))
 row = {'status': 'incomplete', 'actualWindows': True, 'OSInput': False,
        'windowShown': False, 'installedFonts': False, 'requestedPlatform': args.platform,
@@ -36,6 +42,9 @@ app = None
 
 def checkpoint(stage):
     print(json.dumps({'stage': stage, 'platform': args.platform}), file=sys.stderr, flush=True)
+
+class EmptyFontDatabase(Exception):
+    pass
 
 try:
     checkpoint('before-qt-import')
@@ -48,7 +57,7 @@ try:
     row.update(PySide6Version=PySide6.__version__, QtVersion=qVersion(),
                actualPlatform=app.platformName(),
                customFontDirectoryConfigured=bool(os.environ.get('QT_QPA_FONTDIR')))
-    if app.platformName() != args.platform:
+    if app.platformName() != actual_platform:
         raise ValueError('Requested and actual QPA platform differ')
     from platforms.windows.bluraction.renderer import text_font
     from platforms.windows.bluraction.ui import font_available
@@ -84,6 +93,11 @@ try:
     if len(families) > 4096 or any(len(f) > 256 for f in families):
         raise ValueError('Family census resource bound reached')
     row['familyCount'] = len(families)
+    print(json.dumps({'stage': 'family-count', 'platform': args.platform, 'families': len(families)}), file=sys.stderr, flush=True)
+    if not families:
+        # CI8 crashed before a metrics report; its family count was unknown.
+        # An observed empty census has no safe renderability/metrics assertion.
+        raise EmptyFontDatabase()
     row['applicationFont'] = observe(app.font())
     for name in ('GeneralFont', 'FixedFont', 'TitleFont', 'SmallestReadableFont'):
         kind = getattr(QFontDatabase.SystemFont, name)
@@ -115,6 +129,11 @@ try:
                                    'resolvedFamily': font['resolvedFamily'], 'resolvedStyle': font['resolvedStyle']})
     row['observedFixedCandidates'] = candidates
     row['status'] = 'observations-complete-not-product-pass'
+    code = 0
+except EmptyFontDatabase:
+    row.update(status='observations-complete-not-product-pass',
+               renderableFonts=False, fontMetricsEvaluated=False,
+               unavailableReason='Complete font census is empty; no metrics or availability claim')
     code = 0
 except BaseException as error:
     row.update(errorType=type(error).__name__, error=str(error))

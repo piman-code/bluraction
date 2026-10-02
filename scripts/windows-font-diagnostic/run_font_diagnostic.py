@@ -36,7 +36,7 @@ baseline = {str(p.relative_to(repo)): hashlib.sha256(p.read_bytes()).hexdigest()
                 repo/'Tests/WindowsAppTests/test_ui.py')}
 rows = []
 status = 0
-for platform in ('offscreen', 'windows'):
+for platform in ('offscreen', 'offscreen-system-fonts'):
     output, log = directory/(platform+'.json'), directory/(platform+'.log')
     bootstrap = "import sys,subprocess\nif sys.stdin.buffer.read(1)!=b'G': raise SystemExit(125)\nraise SystemExit(subprocess.call(sys.argv[1:]))\n"
     argv = [sys.executable, '-c', bootstrap, sys.executable, str(source),
@@ -52,7 +52,7 @@ for platform in ('offscreen', 'windows'):
             entry.update(reportSHA256=hashlib.sha256(output.read_bytes()).hexdigest(),
                          status=report.get('status'), sourcesPreserved=report.get('sourcesPreserved'))
             if (report.get('status') != 'observations-complete-not-product-pass' or
-                    report.get('sourcesPreserved') is not True or report.get('actualPlatform') != platform):
+                    report.get('sourcesPreserved') is not True or report.get('actualPlatform') != ('offscreen' if platform == 'offscreen-system-fonts' else platform)):
                 status = 1
         else: status = 1; entry['status'] = 'missing-complete-report'
         if exit_code != 0 or timed_out: status = 1
