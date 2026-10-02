@@ -565,7 +565,8 @@ struct PortableProjectCompatibilityTests {
         try #require(documentFinished && document.hasVideo && document.errorMessage == nil)
         #expect(abs(document.firstVideoFrameTime - actualFrameTime) < 0.000001)
         #expect(abs(document.duration - duration) < 0.000001)
-        #expect(document.sourceSHA256 == (try PageWorkspace.digest(of: output)))
+        let expectedSourceDigest = try PageWorkspace.digest(of: output)
+        #expect(document.sourceSHA256 == expectedSourceDigest)
 
         var errors: [String] = []
         let controller = MainWindowController(loadErrorPresenter: { errors.append($0) })

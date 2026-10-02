@@ -135,8 +135,8 @@ struct InteractionBoundaryRegressionTests {
         controller.openProject(ProjectFile(mediaPath: input.path,
             regions: [.init(shape: shape, effect: effect)], drawings: [drawing]), media: input)
         #expect(canvas.isVideoBinding?() == false)
-        let shown = try #require(canvas.regionsBinding?().first)
-        let annotation = try #require(canvas.annotationsBinding?().first)
+        let shown = try XCTUnwrap(canvas.regionsBinding?().first)
+        let annotation = try XCTUnwrap(canvas.annotationsBinding?().first)
         #expect(abs(shown.boundingRect.minX / canvas.bounds.width - 0.1) < 1e-9)
         #expect(abs(annotation.bounds.minX / canvas.bounds.width - 0.15) < 1e-9)
         #expect(canvas.motionPathProvider?().isEmpty == true)

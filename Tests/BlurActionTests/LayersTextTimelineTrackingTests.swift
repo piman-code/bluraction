@@ -46,11 +46,11 @@ final class LayersTextTimelineTrackingTests {
         let canvas = session.canvas
         let controller = session.controller
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         let r = region.boundingRect
         session.tool(1)
         try session.drag(from: CGPoint(x: r.minX - 10, y: r.midY - 10), to: CGPoint(x: r.maxX + 10, y: r.midY + 10))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
         func holes() -> (Int, Int) {
             (canvas.effectForID?(region.id)?.erasures.count ?? -1, canvas.annotationsBinding?().first?.erasures.count ?? -1)
         }
@@ -86,10 +86,10 @@ final class LayersTextTimelineTrackingTests {
         let canvas = session.canvas
         let controller = session.controller
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         session.tool(1)
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 50, y: 50))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
         #expect(controller.layerRows.map(\.id) == [drawing.id, region.id], "Top of the list is drawn on top")
         #expect(controller.layerName(of: region.id) == "블러 사각형 1")
 
@@ -148,13 +148,13 @@ final class LayersTextTimelineTrackingTests {
         session.tool(1)
         session.mode(5)
         session.controller.addText("첫 줄\n둘째 줄", at: CGPoint(x: 20, y: 150))
-        let text = try #require(session.canvas.annotationsBinding?().last)
+        let text = try XCTUnwrap(session.canvas.annotationsBinding?().last)
         #expect(text.text == "첫 줄\n둘째 줄")
         let background = try #require(session.descendants.compactMap { $0 as? NSPopUpButton }.first { $0.itemTitles.contains("검정 배경") })
         background.selectItem(withTitle: "검정 배경"); _ = background.sendAction(background.action, to: background.target)
         let bold = try #require(session.descendants.compactMap { $0 as? NSButton }.first { $0.title == "굵게" })
         bold.state = .off; _ = bold.sendAction(bold.action, to: bold.target)
-        let styled = try #require(session.canvas.annotationsBinding?().last)
+        let styled = try XCTUnwrap(session.canvas.annotationsBinding?().last)
         #expect(styled.textBackground == RGBAColor(red: 0, green: 0, blue: 0, alpha: 1) && !styled.bold)
         #expect(MainWindowController.cleanedText("  a \n\n b  ") == "a\n\nb")
     }
@@ -167,7 +167,7 @@ final class LayersTextTimelineTrackingTests {
         defer { session.close() }
         let canvas = session.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         let r = region.boundingRect
         session.tool(1)
         try session.drag(from: CGPoint(x: r.maxX + 10, y: r.minY), to: CGPoint(x: r.maxX + 30, y: r.minY + 20))
@@ -176,13 +176,13 @@ final class LayersTextTimelineTrackingTests {
         session.tool(1)
         try session.shiftClick(CGPoint(x: r.maxX + 10, y: r.minY + 10))
         session.controller.perform(NSSelectorFromString("groupTapped"))
-        let before = try #require(canvas.annotationsBinding?().first).bounds
+        let before = try XCTUnwrap(canvas.annotationsBinding?().first).bounds
 
         // Drag the region's right edge handle: width doubles, the drawing scales about the region.
         session.tool(0)
         canvas.selectRegion(id: region.id)
         try session.drag(from: CGPoint(x: r.maxX, y: r.midY), to: CGPoint(x: r.maxX + r.width, y: r.midY))
-        let after = try #require(canvas.annotationsBinding?().first).bounds
+        let after = try XCTUnwrap(canvas.annotationsBinding?().first).bounds
         #expect(abs(after.minX - (r.minX + (before.minX - r.minX) * 2)) < 0.5, "Scaled about the edited box")
         #expect(abs(after.width - before.width * 2) < 0.5 && abs(after.height - before.height) < 0.5)
 
@@ -202,7 +202,7 @@ final class LayersTextTimelineTrackingTests {
         let canvas = session.container.canvas
         let controller = session.controller
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         try await session.seek(2)
         let c = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
         try session.drag(from: c, to: CGPoint(x: c.x + 20, y: c.y))
@@ -276,7 +276,7 @@ final class LayersTextTimelineTrackingTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         try await session.seek(2)
         // Record a nearly collapsed size at 2 s, then rub across it with a wide brush.
         let tiny = CGRect(x: region.boundingRect.midX, y: region.boundingRect.midY, width: 1.5, height: 1.5)
@@ -346,7 +346,7 @@ final class LayersTextTimelineTrackingTests {
         let size = container.canvas.bounds.size
         let rect = CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
         container.canvas.regionsUpdate?([.rectangle(id: UUID(), origin: rect.origin, size: rect.size)])
-        let region = try #require(container.canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(container.canvas.regionsBinding?().first)
         container.canvas.selectRegion(id: region.id)
         controller.perform(NSSelectorFromString("autoTrackTapped"))
         try await waitUntil { (container.canvas.effectForID?(region.id)?.keyframes.count ?? 0) > 30 }

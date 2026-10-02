@@ -52,7 +52,7 @@ final class GroupsEraserProjectTests {
         let canvas = session.canvas
         session.tool(1)
         try session.drag(from: CGPoint(x: 20, y: 20), to: CGPoint(x: 80, y: 80))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
         session.tool(2)
         session.eraserMode(0)
         try session.drag(from: CGPoint(x: 10, y: 50), to: CGPoint(x: 90, y: 50))
@@ -64,12 +64,12 @@ final class GroupsEraserProjectTests {
         #expect(hole(drawing.id) == CGPoint(x: start.x + 40, y: start.y), "A canvas drag moves the hole")
 
         session.controller.perform(NSSelectorFromString("duplicateSelectedTapped"))
-        let copy = try #require(canvas.annotationsBinding?().last)
+        let copy = try XCTUnwrap(canvas.annotationsBinding?().last)
         #expect(hole(copy.id) == CGPoint(x: start.x + 52, y: start.y - 12), "A duplicate keeps its hole in place")
 
         session.tool(0)
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         try session.shiftClick(CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY))
         session.tool(1)
         try session.shiftClick(CGPoint(x: 60, y: 40))
@@ -105,10 +105,10 @@ final class GroupsEraserProjectTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         session.tool(1)
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
 
         try await session.seek(2)
         session.tool(2)
@@ -124,7 +124,7 @@ final class GroupsEraserProjectTests {
         // Partial (brush) erasing is stored on the drawing, from now on.
         session.tool(1)
         try session.drag(from: CGPoint(x: 60, y: 60), to: CGPoint(x: 100, y: 90))
-        let target = try #require(canvas.annotationsBinding?().last)
+        let target = try XCTUnwrap(canvas.annotationsBinding?().last)
         session.tool(2)
         session.eraserMode(0)
         try session.drag(from: CGPoint(x: 50, y: 75), to: CGPoint(x: 110, y: 75))
@@ -155,11 +155,11 @@ final class GroupsEraserProjectTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         let center = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
         session.tool(1)
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
         // Shift-picks survive switching tools, so regions and drawings can be grouped together.
         session.tool(0)
         try session.shiftClick(center)
@@ -172,7 +172,7 @@ final class GroupsEraserProjectTests {
         // Moving the drawing at 2 s moves the region by the same offset, both recorded at 2 s.
         try await session.seek(2)
         try session.drag(from: CGPoint(x: 10, y: 25), to: CGPoint(x: 30, y: 25))
-        let moved = try #require(canvas.regionsBinding?().first).boundingRect
+        let moved = try XCTUnwrap(canvas.regionsBinding?().first).boundingRect
         #expect(abs(moved.minX - (region.boundingRect.minX + 20)) < 0.01 && abs(moved.minY - region.boundingRect.minY) < 0.01)
         #expect(canvas.effectForID?(region.id)?.keyframes.last.map { abs($0.time - 2) < 0.01 } == true)
         session.controller.perform(NSSelectorFromString("undoTapped"))
@@ -229,11 +229,11 @@ final class GroupsEraserProjectTests {
         #expect(canvas.annotationsBinding?().last?.kind == .arrow)
 
         session.controller.addText("안녕", at: CGPoint(x: 20, y: 120))
-        let text = try #require(canvas.annotationsBinding?().last)
+        let text = try XCTUnwrap(canvas.annotationsBinding?().last)
         #expect(text.kind == .text && text.text == "안녕")
         #expect(abs(text.bounds.maxY - 120) < 0.01, "The click point is the text's top-left")
         session.controller.replaceText(of: text.id, with: "안녕하세요")
-        let longer = try #require(canvas.annotationsBinding?().last)
+        let longer = try XCTUnwrap(canvas.annotationsBinding?().last)
         #expect(longer.text == "안녕하세요" && longer.bounds.width > text.bounds.width * 1.5)
         #expect(abs(longer.bounds.height - text.bounds.height) < 0.01)
     }
@@ -246,7 +246,7 @@ final class GroupsEraserProjectTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         try await session.seek(2)
         let center = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
         try session.drag(from: center, to: CGPoint(x: center.x + 30, y: center.y))
@@ -265,7 +265,7 @@ final class GroupsEraserProjectTests {
         reopened.window?.setContentSize(NSSize(width: 900, height: 600))
         reopened.openProject(project, media: URL(fileURLWithPath: project.mediaPath))
         try await waitUntil { container.canvas.regionsBinding?().count == 1 }
-        let restored = try #require(container.canvas.regionsBinding?().first)
+        let restored = try XCTUnwrap(container.canvas.regionsBinding?().first)
         let effect = try #require(container.canvas.effectForID?(restored.id))
         #expect(effect.keyframes.map(\.time) == [0, 2])
         let sx = container.canvas.bounds.width / canvas.bounds.width

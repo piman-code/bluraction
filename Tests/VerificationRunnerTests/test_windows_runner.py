@@ -31,7 +31,7 @@ class WindowsRunnerContracts(unittest.TestCase):
     def test_source_inputs_include_nested_authored_pdf_and_manual_fixtures(self):
         inputs = runner.source_inputs()
         fixture_root = runner.ROOT / 'shared/fixtures'
-        expected = {str(p.relative_to(runner.ROOT)) for p in fixture_root.rglob('*') if p.is_file()}
+        expected = {p.relative_to(runner.ROOT).as_posix() for p in fixture_root.rglob('*') if p.is_file()}
         self.assertTrue(expected <= set(inputs))
         self.assertIn('shared/fixtures/pdf-geometry/generated/inset-r270.pdf', inputs)
         self.assertIn('shared/fixtures/manual-os/synthetic-three-pages.pdf', inputs)

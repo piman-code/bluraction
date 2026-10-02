@@ -121,13 +121,13 @@ struct RegionTimingTests {
         try await waitFor { fixture.player.currentTime().seconds > captured + 0.25 }
         fixture.container.canvas.mouseDragged(with: try fixture.mouse(.leftMouseDragged, 110, 120))
         fixture.container.canvas.mouseUp(with: try fixture.mouse(.leftMouseUp, 110, 120))
-        let drawn = try #require(fixture.container.canvas.regionsBinding?().first)
+        let drawn = try XCTUnwrap(fixture.container.canvas.regionsBinding?().first)
         #expect(fixture.container.canvas.effectForID?(drawn.id)?.timeRange == captured...12)
         #expect(fixture.container.canvas.effectForID?(drawn.id)?.isActive(at: 0) == false)
 
         let toolbarStart = fixture.player.currentTime().seconds
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let added = try #require(fixture.container.canvas.regionsBinding?().last)
+        let added = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
         let effect = try #require(fixture.container.canvas.effectForID?(added.id))
         #expect(effect.timeRange.lowerBound >= toolbarStart - 0.03)
         #expect(effect.timeRange.lowerBound <= fixture.player.currentTime().seconds + 0.03)
@@ -142,11 +142,11 @@ struct RegionTimingTests {
         defer { fixture.close() }
         try await fixture.seek(0.5)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let first = try #require(fixture.container.canvas.regionsBinding?().first)
+        let first = try XCTUnwrap(fixture.container.canvas.regionsBinding?().first)
         let firstEffect = try #require(fixture.container.canvas.effectForID?(first.id))
         try await fixture.seek(1)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let second = try #require(fixture.container.canvas.regionsBinding?().last)
+        let second = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
         let original = try #require(fixture.container.canvas.effectForID?(second.id))
         try await fixture.seek(2)
         let menu = fixture.controller.makeRegionContextMenu(for: second.id)
@@ -196,7 +196,7 @@ struct RegionTimingTests {
         #expect(NSApp.sendAction(eofAction, to: eofItem.target, from: eofItem))
         #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == lastDisplayedPTS...12)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let eofShape = try #require(fixture.container.canvas.regionsBinding?().last)
+        let eofShape = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
         #expect(fixture.container.canvas.effectForID?(eofShape.id)?.timeRange == lastDisplayedPTS...12)
         #expect(fixture.container.canvas.effectForID?(eofShape.id)?.isActive(at: lastDisplayedPTS) == true)
         #expect(fixture.container.canvas.effectForID?(eofShape.id)?.isActive(at: 1) == false)
@@ -216,7 +216,7 @@ struct RegionTimingTests {
         #expect(output.stringValue.contains("목표"))
 
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let base = try #require(fixture.container.canvas.regionsBinding?().first)
+        let base = try XCTUnwrap(fixture.container.canvas.regionsBinding?().first)
         try await fixture.seek(2)
         for (label, value) in [("왼쪽 X (원본 픽셀)", "12"), ("위쪽 Y (원본 픽셀)", "8"),
                                ("너비 (원본 픽셀)", "40"), ("높이 (원본 픽셀)", "30")] {

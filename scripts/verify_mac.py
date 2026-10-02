@@ -35,11 +35,11 @@ def completed_count(output, suite, exit_code):
 
 
 def source_inputs():
-    paths = [ROOT / 'Package.swift', ROOT / 'Resources/Info.plist',
+    paths = [ROOT / '.gitattributes', ROOT / 'Package.swift', ROOT / 'Resources/Info.plist',
              ROOT / 'scripts/test.sh', Path(__file__).resolve()]
     paths += sorted((ROOT / 'Sources/BlurAction').glob('*.swift'))
     paths += sorted((ROOT / 'Tests/BlurActionTests').glob('*.swift'))
-    return {str(path.relative_to(ROOT)): sha(path) for path in paths}
+    return {path.relative_to(ROOT).as_posix(): sha(path) for path in paths}
 
 
 def native_suites():
@@ -48,7 +48,7 @@ def native_suites():
         # Existing top-level Swift Testing suite declarations. Unknown or
         # ambiguous new structure must be reviewed instead of silently skipped.
         found = re.findall(r'^(?:final\s+)?(?:class|struct)\s+(\w+Tests)\s*\{',
-                           path.read_text(), re.MULTILINE)
+                           path.read_text(encoding='utf-8'), re.MULTILINE)
         if len(found) != 1:
             raise ValueError(f'Cannot establish exactly one suite for {path.name}')
         result += found
@@ -99,7 +99,7 @@ def main(argv=None):
         with path.open('w') as log:
             exit_code, timed_out = run_native_command(
                 ['bash', str(ROOT / 'scripts/test.sh'), '--filter', suite], log, options.timeout)
-        count = completed_count(path.read_text(errors='replace'), suite, exit_code)
+        count = completed_count(path.read_text(encoding='utf-8', errors='replace'), suite, exit_code)
         row = {'suite': suite, 'exit': exit_code, 'timedOut': timed_out,
                'status': 'pass' if count is not None else 'failed-or-incomplete',
                'testCount': count or 0, 'log': str(path), 'logSHA256': sha(path)}
@@ -113,7 +113,7 @@ def main(argv=None):
               all(row['status'] == 'pass' for row in report['suites']))
     report['status'] = 'source-linked-regression-pass' if passed else 'failed-or-incomplete'
     target = destination / 'report.json'
-    target.write_text(json.dumps(report, indent=2))
+    target.write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(target, flush=True)
     return 0 if passed else 1
 

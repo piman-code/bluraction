@@ -204,13 +204,13 @@ final class MotionAndToolsTests {
         session.tool(1)
         let width = canvas.bounds.width, height = canvas.bounds.height
         try session.drag(from: CGPoint(x: width * 0.6, y: height * 0.3), to: CGPoint(x: width * 0.9, y: height * 0.7))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
 
         // Pick from the red left half, away from the drawing.
         session.controller.perform(NSSelectorFromString("pickAnnotationColor"))
         canvas.mouseDown(with: try session.mouse(.leftMouseDown, width * 0.2, height * 0.5))
         canvas.mouseUp(with: try session.mouse(.leftMouseUp, width * 0.2, height * 0.5))
-        let picked = try #require(canvas.annotationsBinding?().first)
+        let picked = try XCTUnwrap(canvas.annotationsBinding?().first)
         #expect(picked.id == drawing.id)
         #expect(picked.red > 0.95 && picked.green < 0.05 && picked.blue < 0.05, "Picked \(picked.red),\(picked.green),\(picked.blue)")
 
@@ -234,7 +234,7 @@ final class MotionAndToolsTests {
         cover.selectedSegment = 2
         _ = cover.sendAction(cover.action, to: cover.target)
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         #expect(canvas.effectForID?(region.id)?.style == .solid)
         let export = try #require(session.descendants.compactMap { $0 as? NSButton }.first { $0.title == "내보내기" })
         #expect(export.isEnabled)
@@ -248,7 +248,7 @@ final class MotionAndToolsTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         let start = region.boundingRect
 
         try await session.seek(2)
@@ -275,11 +275,11 @@ final class MotionAndToolsTests {
         session.tool(1)
         session.mode(2) // line
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 50, y: 10))
-        let line = try #require(canvas.annotationsBinding?().first)
+        let line = try XCTUnwrap(canvas.annotationsBinding?().first)
         #expect(abs(line.timeRange.lowerBound - 1) < 0.01 && !line.isVisible(at: 0.5))
         try await session.seek(3)
         try session.drag(from: CGPoint(x: 30, y: 10), to: CGPoint(x: 30, y: 40))
-        let tracked = try #require(canvas.annotationsBinding?().first)
+        let tracked = try XCTUnwrap(canvas.annotationsBinding?().first)
         #expect(tracked.keyframes.map(\.time).map { ($0 * 100).rounded() / 100 } == [1, 3])
         #expect(abs((tracked.displayed(at: 2).points.first?.y ?? 0) - 25) < 0.01)
         session.controller.perform(NSSelectorFromString("undoTapped"))

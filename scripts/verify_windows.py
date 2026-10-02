@@ -194,7 +194,7 @@ class WindowsJob:
 
 def run_command(argv, log, timeout):
     """Gated private tree; even an exit-zero parent cannot leave grandchildren."""
-    env = dict(os.environ, QT_QPA_PLATFORM='offscreen', PYTHONUNBUFFERED='1')
+    env = dict(os.environ, QT_QPA_PLATFORM='offscreen', PYTHONUNBUFFERED='1', PYTHONUTF8='1')
     job = WindowsJob() if os.name == 'nt' else None
     child = None
     try:
@@ -236,7 +236,7 @@ def run_command(argv, log, timeout):
 
 
 def source_inputs():
-    paths = [Path(__file__).resolve(), ROOT / 'platforms/windows/build_package.ps1',
+    paths = [Path(__file__).resolve(), ROOT / '.gitattributes', ROOT / 'platforms/windows/build_package.ps1',
              ROOT / 'platforms/windows/requirements-dev.txt']
     for folder in ('shared', 'platforms/windows/bluraction', 'Tests/WindowsAppTests', 'Tests/PortableProjectTests', 'Tests/VerificationRunnerTests'):
         paths += sorted((ROOT / folder).glob('*.py'))
@@ -245,7 +245,7 @@ def source_inputs():
     regular = [p for p in paths if p.is_file()]
     if any(p.is_symlink() for p in regular):
         raise ValueError('Verification inputs must be regular nonsymlink source or synthetic fixture files')
-    return {str(p.relative_to(ROOT)): sha(p) for p in regular}
+    return {p.relative_to(ROOT).as_posix(): sha(p) for p in regular}
 
 
 def main(argv=None):

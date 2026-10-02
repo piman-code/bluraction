@@ -4,7 +4,7 @@ macOS에서 영상·이미지의 원하는 부분을 **블러·모자이크·단
 
 현재 Mac 후보의 검수 대상은 macOS 14 이상 arm64입니다. 소스 빌드·내부 검증에는 Swift Command Line Tools가 필요하며, 외부 Swift 패키지는 사용하지 않습니다. 현재 저장소에는 같은 프로젝트 형식을 읽는 Windows Qt 개발 후보도 있습니다. Windows 실제 실행·설치 및 양방향 호환 검수는 진행 중이며, 아직 검수 완료된 Windows 릴리스는 없습니다.
 
-개발 소스는 `codex/multipage-document-blur` 브랜치에서 공개하고 있습니다. [첫 실제 CI](https://github.com/piman-code/bluraction/actions/runs/36953462804)는 portable 검사 통과 후 Mac 검사 도구 준비와 Windows 파일 지문 검사에서 실패했습니다. [후속 실제 CI](https://github.com/piman-code/bluraction/actions/runs/36955897197)의 Windows PDF/HEIF9 검사는 모두 통과했고 H.264/CSRT 등록을 확인했습니다. 이어 저장 race 검사와 Mac 도구 선택 단계에서 중단됐습니다. 수정 후 결과와 필수 미검증 항목은 아래 상태 문서에 구분합니다.
+개발 소스는 `codex/multipage-document-blur` 브랜치에서 공개하고 있습니다. [첫 실제 CI](https://github.com/piman-code/bluraction/actions/runs/36953462804)는 portable 검사 통과 후 Mac 검사 도구 준비와 Windows 파일 지문 검사에서 실패했습니다. [후속 실제 CI](https://github.com/piman-code/bluraction/actions/runs/36955897197)의 Windows PDF/HEIF9 검사는 모두 통과했고 H.264/CSRT 등록을 확인했습니다. 이어 저장 race 검사와 Mac 도구 선택 단계에서 중단됐습니다. [세 번째 CI](https://github.com/piman-code/bluraction/actions/runs/36959291323)는 Windows PDF/HEIF·저장·Job Object 검사까지 통과했고, 검사 도구의 UTF-8·경로 처리와 Mac 테스트 매크로 호환성 오류에서 중단됐습니다. 수정 후 결과와 필수 미검증 항목은 아래 상태 문서에 구분합니다.
 
 - [플랫폼별 빌드·패키징](docs/플랫폼-빌드-상태.md)
 - [현재 검증 상태](docs/검증-상태.md)
