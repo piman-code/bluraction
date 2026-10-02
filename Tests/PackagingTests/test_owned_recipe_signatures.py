@@ -5,6 +5,7 @@ snapshot. Test DBs are authored tar images with synthetic signature framing,
 NOT cryptographic PGP proof or a bundled MSYS database.
 """
 import base64
+from compression import zstd
 import hashlib
 import importlib.util
 import io
@@ -31,9 +32,10 @@ def signature():
     return b'\x89' + len(body).to_bytes(2, 'big') + body
 
 
-def write_db(path, rows, *, changes=None, duplicate=None, unsafe=False):
+def write_db(path, rows, *, changes=None, duplicate=None, unsafe=False, compression='gzip'):
     changes = changes or {}
-    with tarfile.open(path, 'w:gz') as archive:
+    image = io.BytesIO()
+    with tarfile.open(fileobj=image, mode='w:') as archive:
         for row in rows:
             name, version, filename, digest, database = row
             data = {'NAME':[name], 'VERSION':[version], 'FILENAME':[filename],
@@ -47,9 +49,16 @@ def write_db(path, rows, *, changes=None, duplicate=None, unsafe=False):
             if duplicate == name:
                 second = tarfile.TarInfo('duplicate-' + leaf)
                 second.size = len(raw); archive.addfile(second, io.BytesIO(raw))
+    raw_image = image.getvalue()
+    if compression == 'zstd': raw_image = zstd.compress(raw_image)
+    elif compression == 'gzip':
+        import gzip
+        raw_image = gzip.compress(raw_image, mtime=0)
+    elif compression != 'plain': raise ValueError('unknown authored compression')
+    path.write_bytes(raw_image)
 
 
-def setup(root, *, changes=None, duplicate=None, unsafe=False):
+def setup(root, *, changes=None, duplicate=None, unsafe=False, compression='gzip'):
     (root/'owned.json').write_text('{}')
     (root/'downloads').mkdir(); (root/'reports').mkdir()
     lines = []
@@ -59,7 +68,7 @@ def setup(root, *, changes=None, duplicate=None, unsafe=False):
     (root/'pacman-plan.txt').write_text('\n'.join(lines)+'\n')
     for db in ('msys.db','mingw64.db'):
         write_db(root/'reports'/db,[r for r in OBSERVED_CLOSURE if r[4]==db],
-                 changes=changes,duplicate=duplicate,unsafe=unsafe)
+                 changes=changes,duplicate=duplicate,unsafe=unsafe,compression=compression)
 
 
 class Response(io.BytesIO):
@@ -70,6 +79,57 @@ class Response(io.BytesIO):
 
 
 class OwnedSignatureTests(unittest.TestCase):
+    def test_zstandard_and_plain_observed_closure_preserve_compressed_sha_and_signature_policy(self):
+        for compression in ('zstd','plain'):
+            with self.subTest(compression=compression), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder).resolve();setup(root,compression=compression)
+                before={p.name:p.read_bytes() for p in (root/'reports').iterdir()}
+                rows,hashes=support.resolve_package_plan(root)
+                self.assertEqual([(r['name'],r['version'],r['filename'],r['sha256'],r['database'])
+                                  for r in rows],[tuple(r) for r in OBSERVED_CLOSURE])
+                self.assertEqual(sum('_embedded_signature' in r for r in rows),1)
+                for database,data in before.items():
+                    if compression=='zstd':self.assertEqual(data[:4],b'\x28\xb5\x2f\xfd')
+                    self.assertEqual(hashes[database],hashlib.sha256(data).hexdigest())
+                    self.assertEqual((root/'reports'/database).read_bytes(),data)
+
+    def test_zstandard_malformed_truncated_and_expansion_fail_before_tar_or_acquisition(self):
+        for fault in ('invalid','truncated','expanded'):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder).resolve();setup(root,compression='zstd')
+                path=root/'reports/msys.db'
+                if fault=='invalid':path.write_bytes(b'\x28\xb5\x2f\xfd'+b'not-a-frame')
+                elif fault=='truncated':path.write_bytes(path.read_bytes()[:-1])
+                before=path.read_bytes()
+                limit=32 if fault=='expanded' else support.MAX_DB_EXPANDED_BYTES
+                with patch.object(support,'MAX_DB_EXPANDED_BYTES',limit), \
+                        patch.object(support.tarfile,'open') as parse_tar, \
+                        patch.object(support,'fetch_package_signature') as fetch, \
+                        patch.object(support,'download') as acquire:
+                    with self.assertRaises((ValueError,EOFError,zstd.ZstdError)):
+                        support.package_lock(root)
+                    parse_tar.assert_not_called();fetch.assert_not_called();acquire.assert_not_called()
+                self.assertEqual(path.read_bytes(),before)
+                self.assertFalse((root/'reports/compiler-packages-lock.json').exists())
+
+    def test_zstandard_selected_record_and_mandatory_signature_fail_closed(self):
+        name=OBSERVED_CLOSURE[0][0]
+        for changes in ({name:{'SHA256SUM':['0'*64]}},{'make':{'PGPSIG':['']}}):
+            with self.subTest(changes=changes),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder).resolve();setup(root,compression='zstd',changes=changes)
+                with patch.object(support,'fetch_package_signature') as fetch, \
+                        patch.object(support,'download') as acquire:
+                    with self.assertRaises(ValueError):support.package_lock(root)
+                    fetch.assert_not_called();acquire.assert_not_called()
+                self.assertFalse((root/'reports/compiler-packages-lock.json').exists())
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve();setup(root,compression='zstd')
+            with patch.object(support,'fetch_package_signature',return_value=b'invalid'*30), \
+                    patch.object(support,'download') as acquire:
+                with self.assertRaises(ValueError):support.package_lock(root)
+                acquire.assert_not_called()
+            self.assertFalse((root/'reports/compiler-packages-lock.json').exists())
+
     def test_observed_24_closure_exact_metadata_and_23_detached_routes(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder).resolve(); setup(root)

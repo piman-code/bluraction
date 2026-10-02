@@ -234,8 +234,15 @@ def _database_records(path, requested):
     if raw.startswith(b'\x1f\x8b'):
         with gzip.GzipFile(fileobj=io.BytesIO(raw)) as compressed:
             tar_image = compressed.read(MAX_DB_EXPANDED_BYTES + 1)
+    elif raw.startswith(b'\x28\xb5\x2f\xfd'):
+        # CPython 3.14 stdlib; missing optional _zstd fails closed. Bound both
+        # output BEFORE tar/PAX parsing and the decoder's history window.
+        from compression import zstd
+        with zstd.ZstdFile(io.BytesIO(raw), 'rb', options={
+                zstd.DecompressionParameter.window_log_max: 29}) as compressed:
+            tar_image = compressed.read(MAX_DB_EXPANDED_BYTES + 1)
     else:
-        tar_image = raw  # Current copied DB contract is gzip or plain tar.
+        tar_image = raw  # Plain tar only; unsupported compression fails parsing.
     if len(tar_image) > MAX_DB_EXPANDED_BYTES:
         raise ValueError('repository database decompression budget')
     records = {}; members = expanded = 0

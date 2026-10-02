@@ -64,6 +64,8 @@ $attempt = Join-Path $env:RUNNER_TEMP ('bluraction-owned-ffmpeg-' + [guid]::NewG
 
 copied `msys.db`/`mingw64.db`를 디스크 extraction 없이 bounded tar-image로 읽어 선택 항목의 name/version/filename/SHA를 정확히 대조한다. DB64MiB·100000 members·expanded512MiB·desc64KiB·plan1MiB·closure160개 제한이며 duplicate/unsafe/unknown/mismatched rows는 acquisition 전에 실패한다. top3 pin과 모든 archive expectedSHA는 유지한다.
 
+실제 CI14 copied DB는 Zstandard magic `28b52ffd`였다. 이전12개 authored gzip 검사의 성공은 이 실제 압축 형식 지원을 검증하지 못했고, 기존 parser는 이를 plain tar로 전달하여 실패했다. 이제 gzip·Zstandard·plain tar 경로 모두 tar/PAX 해석 전에 expanded512MiB+1 한도로 읽고 초과 시 실패한다. Zstandard는 Python3.14 표준 `compression.zstd.ZstdFile`을 사용하며 decoder history window도512MiB로 제한한다. 이 optional stdlib 모듈이 없는 interpreter에서는 실패하며 외부 decoder 설치나 무제한 fallback은 없다. compressed DB bytes의 SHA/identity 검사는 유지하며 signature/HTTP/pacman Required trust 규칙은 변경하지 않는다. 실제 copied DB 재검증과 Windows CI 결과는 별도 증거로 기록한다.
+
 서명은 다음 명시적 정책을 따른다. DB에 `%PGPSIG%`가 있으면 strict base64로 해석한 binary bytes를 쓴다. 필드가 있으나 invalid/empty면 fallback 없이 실패한다. 필드 자체가 없으면 그 패키지의 검증된 **동일한 `https://repo.msys2.org/.../<exactfilename>` URL에 `.sig`를 붙인 주소만** 요청한다. HTTPS 인증·정확 host/path·redirect guard는 유지하며 다른 recipe host로도 이동하지 않는다. 서명128..65536B, binary signature packet framing과 HTTP length를 검사한다. acquisition read loop45초와 각 socket15초 제한을 두고 실패 자료를 보존한다; cryptographic verification으로 오해하지 않는다.
 
 [MSYS2 공식 signing 문서](https://www.msys2.org/wiki/Signing-packages/)는 non-armored detached package signature와 pacman의 자체 keyring/trust를 설명한다. 사용자 key를 추가하거나 임의 trust를 부여하는 단계는 새로 넣지 않았다. 실제 공식 GCC/NASM/pkgconf `.sig` 각각566B TLS 취득 관측은 존재하지만 당시 `PGPVerified=false`였다.
