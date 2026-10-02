@@ -12,6 +12,16 @@ private enum ProbeError: Error {
     case usage, invalidParent, identityChanged, allocationFailed, fileBudgetExceeded
 }
 
+// Flush a small checkpoint before native calls. A crash must leave its last
+// attempted stage, rather than erase every observation until the final JSON.
+private func progress(_ stage: String, _ values: [String: Any] = [:]) {
+    var entry = values
+    entry["diagnosticStage"] = stage
+    if let data = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]) {
+        FileHandle.standardError.write(data + Data([10]))
+    }
+}
+
 private func digest(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
@@ -184,6 +194,9 @@ private func outputInfo(_ url: URL, expectedType: String, width: Int, height: In
 
 private func encode(_ image: CGImage, variant: String, contextOptions: [String: Any],
                     type: UTType, directory: OwnedDirectory, listed: Bool) -> [String: Any] {
+    let witness: [String: Any] = ["variant": variant, "type": type.identifier,
+        "width": image.width, "height": image.height]
+    progress("image-properties", witness)
     var result: [String: Any] = ["variant": variant, "contextOptions": contextOptions,
         "type": type.identifier, "listedAsImageIODestination": listed,
         "sourceCGImage": imageInfo(image), "destinationCreated": false,
@@ -192,17 +205,21 @@ private func encode(_ image: CGImage, variant: String, contextOptions: [String: 
         let ext = type.preferredFilenameExtension ?? "bin"
         let url = try directory.reserve("\(image.width)x\(image.height)-\(variant).\(ext)")
         result["path"] = url.path
+        progress("destination-create", witness)
         if let destination = CGImageDestinationCreateWithURL(url as CFURL,
                 type.identifier as CFString, 1, nil) {
             result["destinationCreated"] = true
+            progress("destination-add-image", witness)
             CGImageDestinationAddImage(destination, image, [
                 kCGImageDestinationLossyCompressionQuality: 1.0,
                 kCGImagePropertyOrientation: 1
             ] as CFDictionary)
+            progress("destination-finalize", witness)
             let finalized = CGImageDestinationFinalize(destination)
             result["nativeFinalize"] = finalized
             result["stage"] = finalized ? "finalized" : "finalize-failed"
         } else { result["stage"] = "destination-create-failed" }
+        progress("destination-readback", witness)
         let readback = try outputInfo(url, expectedType: type.identifier,
                                       width: image.width, height: image.height)
         result["readback"] = readback
@@ -212,6 +229,7 @@ private func encode(_ image: CGImage, variant: String, contextOptions: [String: 
         result["error"] = errorInfo(error)
         result["stage"] = "diagnostic-file-error"
     }
+    progress("image-attempt-complete", witness.merging(["succeeded": result["succeeded"] ?? false]) { _, new in new })
     return result
 }
 
@@ -228,6 +246,7 @@ private func softwareHEIF(_ image: CIImage, width: Int, height: Int,
         let options: [CIImageRepresentationOption: Any] = [
             CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 1.0
         ]
+        progress("software-heif-write", ["width": width, "height": height])
         try context.writeHEIFRepresentation(of: image, to: url, format: .RGBA8,
                                            colorSpace: space, options: options)
         result["apiReturnedWithoutError"] = true
@@ -248,6 +267,7 @@ private func softwareHEIF(_ image: CIImage, width: Int, height: Int,
 @main
 private struct ImageIODiagnostic {
     static func main() {
+        progress("main-enter")
         var report: [String: Any] = ["schemaVersion": 1, "diagnosticOnly": true,
             "productCodeExecuted": false, "existingFilesOverwritten": false,
             "physicalDeviceCapabilityVerified": false,
@@ -287,9 +307,12 @@ private struct ImageIODiagnostic {
             let types = [UTType.png, .jpeg, .heic, .tiff]
             let destinationTypes = (CGImageDestinationCopyTypeIdentifiers() as? [String]) ?? []
             report["imageIODestinationTypeIdentifiers"] = destinationTypes.sorted()
+            progress("default-context-create")
             let defaultContext = CIContext()
+            progress("software-context-create")
             let softwareContext = CIContext(options: [.useSoftwareRenderer: true,
                 .workingColorSpace: space, .outputColorSpace: space, .cacheIntermediates: false])
+            progress("context-properties")
             report["contexts"] = [
                 "default": ["requestedOptions": [:] as [String: Any],
                     "workingFormatRaw": defaultContext.workingFormat.rawValue,
@@ -304,6 +327,7 @@ private struct ImageIODiagnostic {
             var preserved = true
             for (width, height) in [(48, 32), (96, 64), (256, 128)] {
                 try autoreleasepool {
+                    progress("source-create", ["width": width, "height": height])
                     let (source, bytes) = try makeSource(width: width, height: height, space: space)
                     let before = digest(bytes)
                     let ci = CIImage(cgImage: source)
@@ -324,6 +348,7 @@ private struct ImageIODiagnostic {
                     ]
                     for (name, options, create) in variants {
                         autoreleasepool {
+                            progress("variant-create", ["variant": name, "width": width, "height": height])
                             if let rendered = create() {
                                 for type in types {
                                     let result = autoreleasepool {

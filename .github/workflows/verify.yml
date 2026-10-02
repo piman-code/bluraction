@@ -94,6 +94,9 @@ jobs:
             echo '::warning::ImageIO encode failures observed. Mandatory native regressions still follow; no formats are skipped.'
           fi
       - name: Native Mac regression checks
+        # Keep the mandatory product run even if its separate diagnostic
+        # crashes; both failures remain failures with their own evidence.
+        if: ${{ !cancelled() }}
         run: python3 scripts/verify_mac.py
       - name: Retain synthetic native verification logs and input hashes
         if: always()

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from platforms.windows.bluraction import frame_inventory as raw
 from platforms.windows.bluraction import canonical_frames as canonical
+from platforms.windows.bluraction import local_decoder
 from shared.video_timeline import encode_rational as R
 
 
@@ -46,11 +47,14 @@ class CanonicalFramesTests(unittest.TestCase):
             codec_context=SimpleNamespace(sample_aspect_ratio=None), sample_aspect_ratio=None)
         class Container:
             streams = SimpleNamespace(video=[stream])
+            format = SimpleNamespace(name='mov')
             def __enter__(self): return self
-            def __exit__(self, *args): pass
+            def __exit__(self, *args): self.close()
+            def close(self): pass
             def decode(self, *args, **kwargs): return iter(frames)
-        module = SimpleNamespace(__version__='controlled-test', open=lambda *a, **k: Container())
-        with patch.object(raw, '_av', return_value=module):
+        module = SimpleNamespace(__version__='19.0.0', open=lambda *a, **k: Container())
+        with patch.object(raw, '_av', return_value=module), \
+             patch.object(local_decoder, '_av', return_value=module):
             result = raw.FrameInventory.build(self.source, expected_sha256=self.sha,
                 generation=self.generation, **kwargs)
         self.addCleanup(result.close)

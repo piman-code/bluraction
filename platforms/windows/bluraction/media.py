@@ -158,14 +158,25 @@ _cache_guard = threading.RLock()
 
 @contextmanager
 def _read_qt_pdf(path):
+    # Qt6.11.1's filename load owns a QFile; close() returns early when
+    # PDFium did not create a document. Keep the external input device owned
+    # here so a retained error traceback never keeps that filename locked.
+    device = QFile(str(path))
     document = QPdfDocument()
     try:
-        error = document.load(str(path))
-        if error != QPdfDocument.Error.None_:
+        if not device.open(QIODevice.OpenModeFlag.ReadOnly):
+            raise ValueError('PDF 원본을 열 수 없습니다: ' + device.errorString())
+        document.load(device)
+        error = document.error()
+        if error != QPdfDocument.Error.None_ or document.status() != QPdfDocument.Status.Ready:
             raise ValueError('PDF를 열 수 없습니다: ' + error.name)
         yield document
     finally:
-        _cleanup_preserving_primary(document.close, 'PDF input document close')
+        try:
+            _cleanup_preserving_primary(document.close, 'PDF input document close')
+        finally:
+            document = None
+            _cleanup_preserving_primary(device.close, 'PDF input device close')
 
 
 def _read_qt_image(path, *, metadata_only=False):

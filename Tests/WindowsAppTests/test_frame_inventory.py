@@ -16,6 +16,7 @@ import unittest
 from unittest.mock import patch
 
 from platforms.windows.bluraction import frame_inventory as inventory
+from platforms.windows.bluraction import local_decoder
 from platforms.windows.bluraction import media
 
 
@@ -27,17 +28,20 @@ def frame(pts=500, duration=40, **changes):
 
 
 class Frames:
-    def __init__(self, values, *, failure=None, on_eof=None, close_failure=None):
+    def __init__(self, values, *, failure=None, on_eof=None, close_failure=None, on_frame=None):
         self.values = iter(values); self.failure = failure; self.on_eof = on_eof
         self.close_failure = close_failure; self.closed = False; self.eof = False
+        self.on_frame = on_frame
     def __iter__(self): return self
     def __next__(self):
-        try: return next(self.values)
+        try: value = next(self.values)
         except StopIteration:
             if self.failure is not None: raise self.failure
             self.eof = True
             if self.on_eof is not None: self.on_eof()
             raise
+        if self.on_frame is not None: self.on_frame()
+        return value
     def close(self):
         self.closed = True
         if self.close_failure is not None: raise self.close_failure
@@ -49,8 +53,10 @@ class FakeContainer:
         video = SimpleNamespace(width=96, height=64, index=1, id=2, time_base=Fraction(1,1000),
                                 codec_context=SimpleNamespace(sample_aspect_ratio=None), sample_aspect_ratio=None)
         self.streams = SimpleNamespace(video=[video]*stream_count)
+        self.format = SimpleNamespace(name='mov')
     def __enter__(self): return self
-    def __exit__(self, *args):
+    def __exit__(self, *args): self.close()
+    def close(self):
         self.closed = True
         if self.on_close is not None: self.on_close()
         if self.close_failure is not None: raise self.close_failure
@@ -110,7 +116,8 @@ class FrameInventoryTests(unittest.TestCase):
         iterator = iterator or Frames([frame(500), frame(610, 90)] if values is None else values)
         container = container or FakeContainer(iterator)
         module = SimpleNamespace(__version__='19.0.0', open=lambda *a, **k: container)
-        with patch.object(inventory, '_av', return_value=module):
+        with patch.object(inventory, '_av', return_value=module), \
+             patch.object(local_decoder, '_av', return_value=module):
             return inventory.FrameInventory.build(self.source, expected_sha256=self.sha,
                 generation=self.generation, **kwargs)
 
@@ -357,8 +364,9 @@ class FrameInventoryTests(unittest.TestCase):
                                         (Frames([frame()], close_failure=RuntimeError('iterator close failed')), None),
                                         (Frames([frame()]), RuntimeError('codec close failed'))):
             container = FakeContainer(frames, close_failure=container_error)
-            with self.assertRaises((inventory.FrameInventoryError, RuntimeError)):
+            with self.assertRaises((inventory.FrameInventoryError, RuntimeError)) as caught:
                 self.build(iterator=frames, container=container)
+            self.assertIsNot(caught.exception.__cause__, caught.exception)
             self.assertTrue(frames.closed); self.assertTrue(container.closed); self.assert_no_spools()
         for count in (0,2):
             with self.assertRaises(inventory.FrameInventoryError):
@@ -445,11 +453,16 @@ class FrameInventoryTests(unittest.TestCase):
     def test_bounded_input_uses_owned_descriptor_not_reopened_path_and_limits_each_read(self):
         observed = []
         def opening(stream, **kwargs):
-            self.assertIsInstance(stream, inventory._BoundedInput)
+            # Native receives the close-shield facade over the SAME bounded
+            # readonly captured descriptor, not a reopened path/unbounded IO.
+            self.assertIsInstance(stream, local_decoder._BorrowedPrimary)
+            self.assertIsInstance(stream._file, inventory._BoundedInput)
             observed.append(stream.read(-1))
             stream.seek(0); self.assertEqual(stream.read(4), self.original[:4])
             return FakeContainer(Frames([frame()]))
-        with patch.object(inventory, '_av', return_value=SimpleNamespace(__version__='19.0.0', open=opening)):
+        module = SimpleNamespace(__version__='19.0.0', open=opening)
+        with patch.object(inventory, '_av', return_value=module), \
+             patch.object(local_decoder, '_av', return_value=module):
             with inventory.FrameInventory.build(self.source, expected_sha256=self.sha, generation=19) as result:
                 self.assertTrue(result.complete)
         self.assertEqual(observed, [self.original]); self.assert_no_spools()
@@ -464,6 +477,64 @@ class FrameInventoryTests(unittest.TestCase):
         for token in (lambda: None, lambda: 1, object()):
             with self.assertRaises(inventory.FrameInventoryError): self.build(cancel=token)
         self.assert_no_spools()
+
+    def test_ignored_secondary_requests_during_open_frame_eof_or_close_never_publish_inventory(self):
+        with self.build() as old:
+            old_first = old[0]
+            for phase in ('open', 'frame', 'EOF', 'close'):
+                with self.subTest(phase=phase):
+                    callbacks = {}; denied_counts = []
+                    def ignored_request():
+                        try:
+                            callbacks['io_open']('controlled-secondary-never-opened', 1, {})
+                        except local_decoder.SecondaryIODenied as error:
+                            denied_counts.append(error.request_count)
+                    frames = Frames([frame()], on_frame=ignored_request if phase == 'frame' else None,
+                                    on_eof=ignored_request if phase == 'EOF' else None)
+                    container = FakeContainer(frames, on_close=ignored_request if phase == 'close' else None)
+                    def opening(file, **kwargs):
+                        self.assertIsInstance(file, local_decoder._BorrowedPrimary)
+                        callbacks['io_open'] = kwargs['io_open']
+                        if phase == 'open': ignored_request()
+                        return container
+                    module = SimpleNamespace(__version__='19.0.0', open=opening)
+                    with patch.object(inventory, '_av', return_value=module), \
+                         patch.object(local_decoder, '_av', return_value=module):
+                        with self.assertRaises(local_decoder.SecondaryIODenied) as caught:
+                            inventory.FrameInventory.build(self.source, expected_sha256=self.sha, generation=19)
+                    self.assertEqual(denied_counts, [1])
+                    self.assertNotIn('controlled-secondary', str(caught.exception))
+                    self.assertTrue(container.closed)
+                    if phase != 'open': self.assertTrue(frames.closed)
+                    self.assertTrue(old.complete); self.assertEqual(old[0], old_first)
+                    self.assertTrue(all(not path.exists() for path in self.spools[1:]))
+                    self.assertEqual(self.source.read_bytes(), self.original)
+        self.assert_no_spools()
+
+    def test_primary_decode_error_survives_ignored_postclose_secondary_request_and_cleans_spool(self):
+        callbacks = {}; denied_counts = []
+        primary = RuntimeError('controlled primary frame decode failure')
+        def ignored_request():
+            try:
+                callbacks['io_open']('controlled-secondary-never-opened', 1, {})
+            except local_decoder.SecondaryIODenied as error:
+                denied_counts.append(error.request_count)
+        frames = Frames([frame()], failure=primary)
+        container = FakeContainer(frames, on_close=ignored_request)
+        def opening(file, **kwargs):
+            callbacks['io_open'] = kwargs['io_open']
+            return container
+        module = SimpleNamespace(__version__='19.0.0', open=opening)
+        with patch.object(inventory, '_av', return_value=module), \
+             patch.object(local_decoder, '_av', return_value=module):
+            with self.assertRaises(RuntimeError) as caught:
+                inventory.FrameInventory.build(self.source, expected_sha256=self.sha, generation=19)
+        self.assertIs(caught.exception, primary)
+        self.assertIsInstance(primary.__cause__, local_decoder.SecondaryIODenied)
+        self.assertEqual(denied_counts, [1]); self.assertTrue(frames.closed); self.assertTrue(container.closed)
+        self.assertTrue(any('context cleanup' in note for note in primary.__notes__))
+        self.assertNotIn('controlled-secondary', ' '.join(primary.__notes__))
+        self.assert_no_spools(); self.assertEqual(self.source.read_bytes(), self.original)
 
 
 @unittest.skipUnless(importlib.util.find_spec('av') is not None,

@@ -5,6 +5,7 @@ through explicit fake decoder seams. All source bytes belong to this test.
 No current application, network, encoder, Qt audio or native player is used.
 """
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import replace
 from fractions import Fraction as F
 import hashlib
@@ -18,6 +19,7 @@ from unittest.mock import patch
 from PIL import Image
 from platforms.windows.bluraction import canonical_video as video
 from platforms.windows.bluraction import frame_inventory as raw
+from platforms.windows.bluraction import local_decoder
 from Tests.WindowsAppTests.test_asset_timeline import movie, track
 
 
@@ -35,11 +37,13 @@ class Container:
         self.rows=rows; self.seek_failure=seek_failure; self.closed=False
         self.exit_action=exit_action; self.exit_failure=exit_failure
         self.seek_calls=[]; self.iterator_closed=False
+        self.format=SimpleNamespace(name='mov')
         self.streams=SimpleNamespace(video=[SimpleNamespace(id=2,index=0,time_base=F(1,1000),
             width=96,height=64,codec_context=SimpleNamespace(sample_aspect_ratio=F(1)),
             sample_aspect_ratio=F(1),metadata={})])
     def __enter__(self): return self
-    def __exit__(self,*args):
+    def __exit__(self,*args): self.close()
+    def close(self):
         self.closed=True
         if self.exit_action is not None: self.exit_action()
         if self.exit_failure is not None: raise self.exit_failure
@@ -69,8 +73,9 @@ class CanonicalVideoTests(unittest.TestCase):
         def build_inventory(path,**kwargs):
             self.inventory_options.append(kwargs['demux_options'].copy())
             container=Container(self.rows)
-            module=SimpleNamespace(__version__='controlled-only',open=lambda *a,**k:container)
-            with patch.object(raw,'_av',return_value=module):
+            module=SimpleNamespace(__version__='19.0.0',open=lambda *a,**k:container)
+            with patch.object(raw,'_av',return_value=module), \
+                 patch.object(local_decoder,'_av',return_value=module):
                 result=raw.FrameInventory.build(path,**kwargs)
             self.inventories.append(result); self.addCleanup(result.close)
             if inventory_change is not None: inventory_change(result)
@@ -135,6 +140,46 @@ class CanonicalVideoTests(unittest.TestCase):
         self.assertEqual([c.seek_calls for c in self.containers],[[750],[]])
         self.assertTrue(all(c.closed for c in self.containers))
         self.assertTrue(all(f.stream.closed for f in self.received_files))
+
+    def test_secondary_seek_request_never_becomes_successful_fresh_decode(self):
+        for native_failure in (False, True):
+            with self.subTest(native_failure=native_failure):
+                opened = []
+                base = self.access()
+
+                def native_open(file, **kwargs):
+                    container = Container(self.rows)
+                    opened.append(container)
+
+                    def seek(*args, **options):
+                        try:
+                            kwargs['io_open']('controlled-secondary', 1, {})
+                        except local_decoder.SecondaryIODenied:
+                            pass  # Native optional IO can ignore callback denial.
+                        if native_failure:
+                            raise OSError('controlled native seek failed after denied IO')
+                    container.seek = seek
+                    return container
+
+                module = SimpleNamespace(__version__='19.0.0', open=native_open)
+
+                @contextmanager
+                def guarded_open(file, **kwargs):
+                    with patch.object(local_decoder, '_av', return_value=module):
+                        with local_decoder.open_local_decoder(file, **kwargs) as decoder:
+                            yield decoder
+
+                provider = self.build(decoder_access=video.DecoderAccess(
+                    base.build_inventory, guarded_open))
+                inventory = self.inventories[-1]
+                with self.assertRaises((local_decoder.SecondaryIODenied, OSError)):
+                    provider.frame_at(F(3, 4))
+                self.assertEqual(len(opened), 1, 'Denied IO must never open a fallback decoder')
+                self.assertTrue(opened[0].closed)
+                self.assertFalse(inventory.complete)
+                with self.assertRaises(video.CanonicalVideoReview):
+                    provider.frame_at(F(3, 4))
+                self.assertEqual(self.source.read_bytes(), self.original)
 
     def test_missing_future_and_changed_row_metadata_fail_without_pixel_substitution(self):
         variants=([frame(750)], [frame(500,duration=251)], [frame(500,width=95)],
@@ -229,6 +274,49 @@ class CanonicalVideoTests(unittest.TestCase):
         self.assertTrue(any('decoder teardown' in text for text in caught.exception.__notes__))
         self.assertFalse(self.inventories[-1].complete)
         self.assertTrue(self.received_files[-1].stream.closed)
+
+    def test_same_cancel_error_during_active_pixels_and_decoder_close_preserves_first_error(self):
+        old=self.build(); old_image=old.frame_at(F(1,2)).image
+        old_inventory=self.inventories[-1]
+        cancelled=[False]; primary=raw.InventoryCancelled('controlled repeated pixel cancellation')
+        def cancel_check():
+            if cancelled[0]: raise primary
+            return False
+        def pixels_then_cancel():
+            cancelled[0]=True
+            return Image.new('RGB',(96,64),(20,180,40))
+        provider=self.build(cancel=cancel_check,decoder_access=self.access(
+            pixel_rows=[frame(500,to_image=pixels_then_cancel)],pixel_exit_failure=primary))
+        owned=self.inventories[-1]; private=Path(owned._directory.name)
+        with self.assertRaises(raw.InventoryCancelled) as caught:
+            provider.frame_at(F(1,2))
+        self.assertIs(caught.exception,primary); self.assertIsNot(primary.__cause__,primary)
+        self.assertTrue(any('pixel decoder teardown' in n for n in primary.__notes__))
+        self.assertTrue(self.containers[-1].iterator_closed); self.assertTrue(self.containers[-1].closed)
+        self.assertFalse(owned.complete); self.assertFalse(private.exists())
+        self.assertTrue(self.received_files[-1].stream.closed)
+        cancelled[0]=False
+        with self.assertRaises(video.CanonicalVideoReview): provider.frame_at(F(1,2))
+        self.assertTrue(old_inventory.complete)
+        self.assertEqual(old.frame_at(F(1,2)).image,old_image)
+        self.assertEqual(self.source.read_bytes(),self.original)
+
+    def test_descriptor_dto_reads_are_independent_of_caller_mutation_and_stale_review(self):
+        provider=self.build(); snapshot=provider.timeline; original=deepcopy(snapshot)
+        digest=provider.descriptor_sha256
+        snapshot['tracks'][0]['segments'][1]['mediaStart']['numerator']='99'
+        snapshot['tracks'].clear(); snapshot['version']=999
+        self.assertEqual(provider.timeline,original)
+        self.assertIsNot(provider.timeline,provider.timeline)
+        from platforms.windows.bluraction.canonical_frames import descriptor_sha256
+        self.assertEqual(descriptor_sha256(provider.timeline),digest)
+        self.assertEqual(provider.frame_at(F(1,2)).asset_pts,F(1,2))
+        self.current[0]=10
+        with self.assertRaises(raw.FrameInventoryError): provider.timeline
+        self.assertFalse(self.inventories[-1].complete)
+        self.current[0]=9
+        with self.assertRaises(video.CanonicalVideoReview): provider.timeline
+        self.assertEqual(self.source.read_bytes(),self.original)
 
 
 if __name__ == '__main__':

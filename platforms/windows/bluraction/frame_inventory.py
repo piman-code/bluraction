@@ -4,6 +4,8 @@ No VideoSource origin, FPS, microseconds, epsilon, duration/SAR guesses, renderi
 or media rewriting. The observed clock depends on the recorded demux options;
 EOF membership alone does not prove edit-list, asset, native Qt or audio mapping.
 Missing actual duration is an explicit incomplete observation, not a format ban.
+Decoder input now uses the PyAV19 latched secondary-open denial boundary. This
+does not certify an OS sandbox or canonical timeline; native policy is separate.
 
 Official PyAV19 APIs: Frame.pts/duration/time_base/is_corrupt are decoder values;
 VideoFrame.rotation is counterclockwise. VideoStream.sample_aspect_ratio is a
@@ -277,6 +279,9 @@ class FrameInventory(Sequence):
     def build(cls, path, *, expected_sha256, generation, limits=None, cancel=None,
               current_generation=None, demux_options=None):
         from .media import _capture_identity, _check_identity, fingerprint
+        # The helper imports _BoundedInput; importing here avoids a module-level
+        # cycle and keeps actual decoder loading behind the explicit build call.
+        from .local_decoder import open_local_decoder
         limits = InventoryLimits() if limits is None else limits
         if type(limits) is not InventoryLimits:
             raise FrameInventoryError('limits must be InventoryLimits')
@@ -314,7 +319,7 @@ class FrameInventory(Sequence):
                 fd = None
                 _check_identity(path, identity); check()
                 bounded = _BoundedInput(source, size, descriptor, check)
-                with av.open(bounded, mode='r', options=options) as container:
+                with open_local_decoder(bounded, mode='r', options=options) as container:
                     videos = list(container.streams.video)
                     if len(videos) != 1:
                         raise FrameInventoryError('exactly one video stream is required for this inventory')
@@ -384,7 +389,9 @@ class FrameInventory(Sequence):
                 failure.retry_inventory_cleanup = result.close
                 raise failure from cleanup_error
             if teardown_error is not None:
-                raise failure from teardown_error
+                if teardown_error is not failure:
+                    raise failure from teardown_error
+                raise  # Repeated iterator close may raise the same primary object.
             raise
         finally:
             if fd is not None: os.close(fd)

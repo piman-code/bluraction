@@ -81,6 +81,66 @@ class MediaSafetyTests(unittest.TestCase):
         renamed.unlink()
         self.assertFalse(renamed.exists())
 
+    def test_valid_pdf_body_failure_releases_external_device_with_retained_traceback(self):
+        from pypdf import PdfWriter
+        path = self.folder / 'valid-owned-input.pdf'
+        writer = PdfWriter()
+        writer.add_blank_page(width=96, height=64)
+        with path.open('wb') as output:
+            writer.write(output)
+        original = path.read_bytes()
+        primary = ValueError('controlled post-load failure')
+        try:
+            with media._read_qt_pdf(path) as document:
+                self.assertEqual(document.pageCount(), 1)
+                self.assertEqual((document.pagePointSize(0).width(),
+                                  document.pagePointSize(0).height()), (96, 64))
+                raise primary
+        except ValueError as error:
+            self.assertIs(error, primary)
+        self.assertIsNotNone(primary.__traceback__)
+        self.assertEqual(path.read_bytes(), original)
+        renamed = path.with_name('released-valid-input.pdf')
+        path.rename(renamed)
+        renamed.unlink()
+
+    def test_invalid_pdf_document_close_failure_still_closes_external_device(self):
+        path = self.folder / 'controlled-close-failure.pdf'
+        original = b'controlled malformed PDF'
+        path.write_bytes(original)
+        opened = []
+        native_type = media.QPdfDocument
+
+        class FailingDocument:
+            Error = native_type.Error
+            Status = native_type.Status
+
+            def load(self, device):
+                opened.append(device)
+                if not device.isOpen():
+                    raise AssertionError('The actual QFile was not opened')
+
+            def error(self):
+                return native_type.Error.InvalidFileFormat
+
+            def close(self):
+                raise OSError('controlled document close failure')
+
+        failure = None
+        with patch.object(media, 'QPdfDocument', FailingDocument):
+            try:
+                with media._read_qt_pdf(path):
+                    self.fail('Invalid document must never be yielded')
+            except ValueError as error:
+                failure = error
+        self.assertIsNotNone(failure)
+        self.assertIn('InvalidFileFormat', str(failure))
+        self.assertIn('controlled document close failure', '\n'.join(failure.__notes__))
+        self.assertEqual(len(opened), 1)
+        self.assertFalse(opened[0].isOpen())
+        self.assertEqual(path.read_bytes(), original)
+        path.unlink()
+
     def symlink(self, target, path, directory=False):
         try:
             path.symlink_to(target, target_is_directory=directory)

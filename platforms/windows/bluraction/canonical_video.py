@@ -16,6 +16,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
+import json
 import os
 from pathlib import Path
 import re
@@ -30,6 +31,7 @@ from .frame_inventory import (FrameInventory, InventoryLimits, _BoundedInput,
                               _observe, _exact_fraction, _generation, _cancel)
 from .media import _capture_identity, _check_identity, fingerprint
 from .video import _display_image
+from .local_decoder import LocalDecoderError, SecondaryIODenied
 
 
 _OPTIONS = (('advanced_editlist', '1'), ('ignore_editlist', '0'))
@@ -126,6 +128,10 @@ class OwnedCanonicalVideoProvider:
         try:
             result._guard(hash_source=True)
             descriptor = _descriptor(inspect_asset_timeline(result._path, cancel=result._check))
+            # Immutable validated storage; public DTO reads allocate independent
+            # copies rather than exposing a mutable source-bound contract.
+            result._timeline_json = json.dumps(descriptor, sort_keys=True,
+                separators=(',', ':'), ensure_ascii=True).encode('ascii')
             result._guard(hash_source=True)
             # Explicit transfer of this attempt's NEW inventory; never infer
             # that an arbitrary callback or default av.open denies nested IO.
@@ -205,6 +211,8 @@ class OwnedCanonicalVideoProvider:
                     except BaseException as error:
                         if failure is not None:
                             failure.add_note(f'pixel decoder teardown also failed: {error!r}')
+                            if error is failure:
+                                raise failure
                             raise failure from error
                         raise
                 if not same_domain(before, stat_snapshot(os.fstat(source.fileno()), domain='descriptor')):
@@ -230,6 +238,11 @@ class OwnedCanonicalVideoProvider:
                 except Exception as error:
                     # Cancellation/source checks below prevent treating these
                     # failures as a harmless unsupported seek.
+                    if isinstance(error, (LocalDecoderError, SecondaryIODenied)):
+                        raise
+                    boundary = getattr(container, 'check_boundary', None)
+                    if callable(boundary):
+                        boundary()
                     self._guard()
                     raise _SeekUnavailable() from error
             frames = iter(container.decode(stream))
@@ -285,6 +298,8 @@ class OwnedCanonicalVideoProvider:
                     except BaseException as error:
                         if failure is not None:
                             failure.add_note(f'pixel iterator teardown also failed: {error!r}')
+                            if error is failure:
+                                raise failure
                             raise failure from error
                         raise
 
@@ -324,6 +339,8 @@ class OwnedCanonicalVideoProvider:
         except BaseException as error:
             primary.add_note(f'canonical candidate cleanup also failed: {error!r}')
             primary.retry_canonical_cleanup = self.close
+            if error is primary:
+                raise primary
             raise primary from error
 
     @property
@@ -342,6 +359,17 @@ class OwnedCanonicalVideoProvider:
             try:
                 self._guard()
                 return self._descriptor_sha
+            except BaseException as error:
+                self._discard(error)
+                raise
+
+    @property
+    def timeline(self):
+        """Fresh validated DTO copy; no clock shift or producer metadata is added."""
+        with self._lock:
+            try:
+                self._guard()
+                return json.loads(self._timeline_json)
             except BaseException as error:
                 self._discard(error)
                 raise
