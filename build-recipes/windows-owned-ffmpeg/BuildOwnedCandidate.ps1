@@ -67,17 +67,28 @@ try {
     if ($LASTEXITCODE -ne 0 -or @($VS).Count -ne 1) { throw 'One actual runner MSVC installation required.' }
     $DevCmd = Join-Path $VS 'Common7/Tools/VsDevCmd.bat'
     if (-not (Test-Path -LiteralPath $DevCmd -PathType Leaf)) { throw 'Actual compiler environment script missing.' }
-    $EnvironmentRows = & $env:ComSpec /d /s /c ('""' + $DevCmd + '" -no_logo -arch=x64 -host_arch=x64 && set"')
-    if ($LASTEXITCODE -ne 0) { throw 'Actual MSVC environment unavailable.' }
-    foreach ($Line in $EnvironmentRows) {
-        $Split = $Line.IndexOf('=')
-        if ($Split -gt 0) {
-            $Key = $Line.Substring(0,$Split)
-            if ($EnvNames -contains $Key) { [Environment]::SetEnvironmentVariable($Key,$Line.Substring($Split+1),'Process') }
-        }
+    # Native CMD receives only a fixed ASCII wrapper basename. Installed paths
+    # travel in child environment, avoiding PowerShell/CMD double-quote parsing.
+    # The reviewed Job wrapper and inner Job retain separate stdout/stderr/exit.
+    OwnedCommand 'msvc-environment' 180 @($CandidatePython,
+        (Join-Path $Recipe 'capture_msvc_environment.py'),'capture','--root',$Destination,
+        '--devcmd',$DevCmd,'--comspec',$env:ComSpec)
+    $Capture = Get-Content -LiteralPath (Join-Path $Destination 'reports/msvc-environment-capture.json') -Raw -Encoding utf8 | ConvertFrom-Json
+    $EnvironmentPath = Join-Path $Destination 'msvc-environment/environment.json'
+    if ($Capture.status -ne 'installed-msvc-environment-captured' -or
+        $Capture.exitCode -ne 0 -or $Capture.timedOut -or -not $Capture.privateTreeDrained -or
+        (Get-FileHash -LiteralPath $EnvironmentPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Capture.environmentSHA256) {
+        throw 'Actual recorded MSVC environment unavailable.'
     }
+    $SelectedEnvironment = Get-Content -LiteralPath $EnvironmentPath -Raw -Encoding utf8 | ConvertFrom-Json
+    foreach ($Property in $SelectedEnvironment.environment.PSObject.Properties) {
+        if ($EnvNames -notcontains $Property.Name) { throw 'Unexpected MSVC environment field.' }
+        [Environment]::SetEnvironmentVariable($Property.Name,$Property.Value,'Process')
+    }
+    $ExpectedCompilerDirectory = [IO.Path]::GetFullPath((Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64'))
     $Tools = @('cl.exe','link.exe','lib.exe') | ForEach-Object {
         $Tool = Resolve-Application $_
+        if ((Split-Path $Tool -Parent) -ine $ExpectedCompilerDirectory) { throw 'Resolved tool is outside selected installed x64 MSVC.' }
         [ordered]@{name=$_;path=$Tool;version=(Get-Item -LiteralPath $Tool).VersionInfo.FileVersion;
             sha256=(Get-FileHash -LiteralPath $Tool -Algorithm SHA256).Hash.ToLowerInvariant()}
     }

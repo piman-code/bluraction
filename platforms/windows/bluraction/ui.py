@@ -27,6 +27,7 @@ from . import renderer
 from .media import Cancelled, Page, export_documents, export_image, safe_stem
 from .preview_worker import PreviewQueue, PreviewRequest, ValueQueue, ValueRequest
 from .canonical_transport import AssetClock, PCMBuffer, PCMPlaybackPlan, TransportReview, exact_time
+from .video import QualityPreset, output_bit_rate
 
 
 TOOLS = (
@@ -73,6 +74,7 @@ class EditorCanvas(QWidget):
     created = Signal(str, object)
     picked = Signal(object)
     moved = Signal(float, float)
+    nudged = Signal(int, object)
     erased = Signal(object)
     message = Signal(str)
     presented = Signal(object)
@@ -101,6 +103,16 @@ class EditorCanvas(QWidget):
         self._stroke = []
         self._drag_start = None
         self._drag_item = None
+
+    def keyPressEvent(self, event):
+        arrows = (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+        allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        if event.key() in arrows and not (event.modifiers() & ~allowed):
+            if not self.busy and not self._stroke and self._drag_start is None:
+                self.nudged.emit(event.key(), event.modifiers())
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     @property
     def display_rect(self):
@@ -569,6 +581,7 @@ class BlurActionWindow(QMainWindow):
         self.canvas.created.connect(self.create_item)
         self.canvas.picked.connect(self.pick_item)
         self.canvas.moved.connect(self.move_items)
+        self.canvas.nudged.connect(self.nudge_items)
         self.canvas.erased.connect(self.erase_points)
         self.canvas.message.connect(lambda text: self.statusBar().showMessage(text))
         self.canvas.presented.connect(self.preview_presented)
@@ -809,6 +822,16 @@ class BlurActionWindow(QMainWindow):
         self.copy_all_button = QPushButton('현재 페이지 작업을 모든 페이지에 적용…')
         self.copy_all_button.clicked.connect(self.copy_all)
         form.addRow(self.copy_all_button)
+        self.quality = QComboBox()
+        self.quality.setAccessibleName('내보내기 화질')
+        for preset in QualityPreset:
+            self.quality.addItem(preset.label, preset.value)
+        self.quality.setCurrentIndex(self.quality.findData(QualityPreset.HIGH.value))
+        self.quality.currentIndexChanged.connect(self.update_quality_info)
+        form.addRow('내보내기 화질', self.quality)
+        self.quality_info = QLabel()
+        self.quality_info.setWordWrap(True)
+        form.addRow(self.quality_info)
         self.export_button = QPushButton('내보내기…')
         self.export_button.clicked.connect(self.export_dialog)
         self.cancel_button = QPushButton('취소')
@@ -876,6 +899,84 @@ class BlurActionWindow(QMainWindow):
     def move_items(self, dx, dy):
         if not self.canvas.preview_pending:
             self.perform(lambda: self.workspace.move_selected(dx, dy, self.workspace.time))
+
+    def nudge_items(self, key, modifiers=Qt.KeyboardModifier.NoModifier):
+        """A single source-unit transaction, scoped to canvas keyboard focus.
+
+        Document units are page points; images/video use displayed source pixels.
+        Fit/zoom and the surrounding letterbox never enter persisted coordinates.
+        Group members share the bounded delta; locked members stay unchanged.
+        """
+        if (self.workspace.busy or self.canvas.busy or self.canvas.preview_pending
+                or QApplication.focusWidget() is not self.canvas
+                or QApplication.activeModalWidget() is not None
+                or not self.workspace.page or not self.workspace.selected()):
+            return
+        allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        if modifiers & ~allowed:
+            return
+        anchor, region = self.workspace.selected()
+        if (anchor['effect'] if region else anchor).get('locked', False):
+            return
+        page = self.workspace.page
+        # Image point_size describes its PDF-export layout (normally half its
+        # pixel dimensions), not the editing pixel grid. Only a PDF page uses
+        # page points for keyboard movement.
+        dimensions = (page.point_size if page.pdf_index is not None and page.point_size else
+                      (self.canvas.image.width(), self.canvas.image.height()))
+        if any(not math.isfinite(value) or value <= 0 for value in dimensions):
+            return
+        step = (10 if modifiers & Qt.KeyboardModifier.ShiftModifier else
+                .1 if modifiers & Qt.KeyboardModifier.ControlModifier else 1)
+        directions = {Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0),
+                      Qt.Key.Key_Up: (0, 1), Qt.Key.Key_Down: (0, -1)}
+        if key not in directions:
+            return
+        delta = [directions[key][axis] * step / dimensions[axis] for axis in range(2)]
+        identities = self.workspace._selected_ids_with_groups()
+        rectangles = []
+        for item, is_region in self.workspace.items():
+            target = item['effect'] if is_region else item
+            if self.workspace.item_id(item, is_region) not in identities or target.get('locked', False):
+                continue
+            shown = renderer.positioned(item, is_region, self.workspace.time)
+            points = renderer.shape_points(shown)[1] if is_region else shown['points']
+            rectangles.append(renderer.bounds(points))
+        if not rectangles:
+            return
+        for axis in range(2):
+            lower = -min(rect[axis] for rect in rectangles)
+            upper = 1 - max(rect[axis] + rect[axis + 2] for rect in rectangles)
+            # Imported off-page geometry may move toward the page gradually;
+            # do not teleport it or alter its shape to make it fit.
+            delta[axis] = max(min(0, lower), min(max(0, upper), delta[axis]))
+        if not any(delta):
+            return  # Boundary/locked no-ops do not create an undo entry.
+        self._pause_asset()
+        self.player.pause()
+        self.perform(lambda: self.workspace.move_selected(*delta, self.workspace.time))
+
+    def update_quality_info(self, *_):
+        preset = QualityPreset(self.quality.currentData())
+        page, video = self.workspace.page, self.workspace.video
+        if not page:
+            self.quality_info.setText('파일을 열면 출력 사양이 표시됩니다.')
+            return
+        if not video:
+            self.quality_info.setText('PDF·PNG·TIFF: 평탄화 출력 · JPEG·HEIC: 압축 품질 '
+                                      f'{preset.image_quality}%')
+            return
+        if preset == QualityPreset.ORIGINAL:
+            target = '원본 비트레이트 기준 (최소 0.50 Mb/s)'
+        else:
+            try:
+                image = getattr(video, '_first_image', self.canvas.image)
+                rate = output_bit_rate(preset, 0, float(getattr(video, 'average_rate', None) or 0),
+                                       image.width(), image.height())
+                target = f'목표 {rate / 1_000_000:.2f} Mb/s'
+            except ValueError:
+                target = '영상 정보 확인 필요'
+        self.quality_info.setText(f'H.264 · {target} · 원본 화질도 재인코딩\n오디오는 원본 형식·시간 보존')
 
     def apply_position(self):
         if not self.canvas.preview_pending:
@@ -1232,6 +1333,8 @@ class BlurActionWindow(QMainWindow):
         for name, action in self.actions.items():
             action.setEnabled(not self.workspace.busy and (bool(page) if name not in ('open', 'open_project', 'template') else True))
         self.export_button.setEnabled(bool(page) and not self.workspace.busy)
+        self.quality.setEnabled(bool(page) and not self.workspace.busy)
+        self.update_quality_info()
         self.actions['delete'].setEnabled(bool(selected) and not self.workspace.busy)
         self.actions['duplicate'].setEnabled(bool(selected) and not self.workspace.busy)
         self.actions['undo'].setEnabled(self.workspace.can_undo)
@@ -1539,7 +1642,9 @@ class BlurActionWindow(QMainWindow):
             if path:
                 from .video import export_video
                 source, state = self.workspace.video, deepcopy(self.workspace.page.state)
-                self.start_export(lambda cancel, progress: export_video(source, state, Path(path), cancel, progress))
+                quality = QualityPreset(self.quality.currentData())
+                self.start_export(lambda cancel, progress: export_video(source, state, Path(path), cancel, progress,
+                                                                       quality=quality))
             return
         pdf = len(self.workspace.pages) > 1 or self.workspace.page.pdf_index is not None
         filters = '평탄화 PDF (*.pdf)' if pdf else 'PNG 이미지 (*.png);;JPEG 이미지 (*.jpg);;HEIC 이미지 (*.heic);;TIFF 이미지 (*.tiff)'
@@ -1558,7 +1663,8 @@ class BlurActionWindow(QMainWindow):
         else:
             kind = ('jpeg' if selected.startswith('JPEG') else 'heic' if selected.startswith('HEIC')
                     else 'tiff' if selected.startswith('TIFF') else 'png')
-            task = lambda cancel, progress: export_image(pages[0], Path(path), kind, 95, cancel)
+            quality = QualityPreset(self.quality.currentData()).image_quality
+            task = lambda cancel, progress: export_image(pages[0], Path(path), kind, quality, cancel)
         self.start_export(task)
 
     def start_export(self, task):

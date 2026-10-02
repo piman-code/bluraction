@@ -81,7 +81,8 @@ private func rgbaObservation(_ image: CGImage) throws -> [String: Any] {
 }
 
 // Only opaque authored RGB colors. The 48x32 case matches the existing six-tile fixture.
-private func makeSource(width: Int, height: Int, space: CGColorSpace) throws -> (CGImage, Data) {
+private func makeSource(width: Int, height: Int, space: CGColorSpace,
+                        authoredInput: Data? = nil) throws -> (CGImage, Data) {
     let colors: [[UInt8]] = [[255,0,0,255], [0,255,0,255], [0,0,255,255],
                              [0,255,255,255], [255,0,255,255], [255,255,0,255]]
     var bytes = Data(count: width * height * 4)
@@ -94,6 +95,10 @@ private func makeSource(width: Int, height: Int, space: CGColorSpace) throws -> 
                 for c in 0..<4 { pixels[offset + c] = color[c] }
             }
         }
+    }
+    if let authoredInput {
+        guard authoredInput == bytes else { throw ProbeError.identityChanged }
+        bytes = authoredInput
     }
     guard let provider = CGDataProvider(data: bytes as CFData),
           let image = CGImage(width: width, height: height, bitsPerComponent: 8,
@@ -237,6 +242,7 @@ private func softwareHEIF(_ image: CIImage, width: Int, height: Int,
                           context: CIContext, space: CGColorSpace,
                           directory: OwnedDirectory) -> [String: Any] {
     var result: [String: Any] = ["variant": "software-writeHEIFRepresentation",
+        "type": UTType.heic.identifier,
         "width": width, "height": height, "format": "RGBA8", "colorSpace": "sRGB",
         "useSoftwareRenderer": true, "apiReturnedWithoutError": false,
         "nativeFinalize": NSNull(), "succeeded": false]
@@ -268,7 +274,7 @@ private func softwareHEIF(_ image: CIImage, width: Int, height: Int,
 private struct ImageIODiagnostic {
     static func main() {
         progress("main-enter")
-        var report: [String: Any] = ["schemaVersion": 1, "diagnosticOnly": true,
+        var report: [String: Any] = ["schemaVersion": 2, "diagnosticOnly": true,
             "productCodeExecuted": false, "existingFilesOverwritten": false,
             "physicalDeviceCapabilityVerified": false,
             "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
@@ -286,104 +292,106 @@ private struct ImageIODiagnostic {
         #endif
         do {
             let args = Array(CommandLine.arguments.dropFirst())
-            var parent = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            var parent: URL?
+            var input: URL?
+            var attempt: Int?
             var i = 0
             while i < args.count {
                 if args[i] == "--cleanup" { cleanup = true; i += 1 }
                 else if args[i] == "--output-parent", i + 1 < args.count, args[i + 1].hasPrefix("/") {
                     parent = URL(fileURLWithPath: args[i + 1], isDirectory: true); i += 2
+                } else if args[i] == "--input-rgba", i + 1 < args.count, args[i + 1].hasPrefix("/") {
+                    input = URL(fileURLWithPath: args[i + 1]); i += 2
+                } else if args[i] == "--attempt-index", i + 1 < args.count, let value = Int(args[i + 1]), (0..<51).contains(value) {
+                    attempt = value; i += 2
                 } else { throw ProbeError.usage }
             }
+            guard let parent, let input, let attempt, cleanup else { throw ProbeError.usage }
+            let sizes = [(48, 32), (96, 64), (256, 128)]
+            let (width, height) = sizes[attempt / 17]
+            let slot = attempt % 17
+            let names = ["direct-source", "default-CI", "explicit-RGBA8-sRGB", "software-RGBA8-sRGB"]
+            let types = [UTType.png, .jpeg, .heic, .tiff]
+            report["attemptIndex"] = attempt
+            report["width"] = width; report["height"] = height
+            report["bounds"] = ["maxSourcePixels": 32768, "attemptCount": 1,
+                "maxReadbackFileBytes": 16 * 1024 * 1024,
+                "nativeHangDeadline": "caller owns one bounded child per native attempt"]
+            // The coordinator supplies only its owned exact authored RGBA
+            // witness. A native crash cannot destroy that external input proof.
+            var inputBefore = stat()
+            guard input.deletingLastPathComponent().standardizedFileURL == parent.deletingLastPathComponent().standardizedFileURL,
+                  input.lastPathComponent == "input.rgba",
+                  lstat(input.path, &inputBefore) == 0, (inputBefore.st_mode & S_IFMT) == S_IFREG,
+                  inputBefore.st_size == off_t(width * height * 4) else { throw ProbeError.invalidParent }
+            let inputBytes = try Data(contentsOf: input)
+            var inputAfter = stat()
+            guard lstat(input.path, &inputAfter) == 0,
+                  inputAfter.st_dev == inputBefore.st_dev, inputAfter.st_ino == inputBefore.st_ino,
+                  inputAfter.st_size == inputBefore.st_size,
+                  inputAfter.st_mtimespec.tv_sec == inputBefore.st_mtimespec.tv_sec,
+                  inputAfter.st_mtimespec.tv_nsec == inputBefore.st_mtimespec.tv_nsec else { throw ProbeError.identityChanged }
             guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { throw ProbeError.allocationFailed }
+            let (source, bytes) = try makeSource(width: width, height: height, space: space, authoredInput: inputBytes)
+            let before = digest(bytes)
+            progress("source-ready", ["attemptIndex": attempt, "width": width, "height": height,
+                "authoredRGBA8SHA256": before, "inputFileSHA256": digest(inputBytes),
+                "sourceCGImage": imageInfo(source)])
             let directory = try OwnedDirectory(parent: parent)
             ownedDirectory = directory
             report["outputDirectory"] = directory.url.path
             report["cleanupRequested"] = cleanup
             report["retainedArtifacts"] = true
-            report["bounds"] = ["maxSourcePixels": 32768, "sourceCount": 3,
-                "imageIOAttemptCount": 48, "separateHEIFAttemptCount": 3,
-                "maxReadbackFileBytes": 16 * 1024 * 1024,
-                "nativeHangDeadline": "caller must impose a bounded process deadline"]
-            let types = [UTType.png, .jpeg, .heic, .tiff]
+            progress("owned-output-created", ["attemptIndex": attempt, "directory": directory.url.lastPathComponent])
             let destinationTypes = (CGImageDestinationCopyTypeIdentifiers() as? [String]) ?? []
             report["imageIODestinationTypeIdentifiers"] = destinationTypes.sorted()
-            progress("default-context-create")
-            let defaultContext = CIContext()
-            progress("software-context-create")
-            let softwareContext = CIContext(options: [.useSoftwareRenderer: true,
-                .workingColorSpace: space, .outputColorSpace: space, .cacheIntermediates: false])
-            progress("context-properties")
-            report["contexts"] = [
-                "default": ["requestedOptions": [:] as [String: Any],
-                    "workingFormatRaw": defaultContext.workingFormat.rawValue,
-                    "workingColorSpace": colorSpaceInfo(defaultContext.workingColorSpace)],
-                "software": ["requestedOptions": ["useSoftwareRenderer": true,
-                    "workingColorSpace": "sRGB", "outputColorSpace": "sRGB", "cacheIntermediates": false],
-                    "workingFormatRaw": softwareContext.workingFormat.rawValue,
-                    "workingColorSpace": colorSpaceInfo(softwareContext.workingColorSpace)]
-            ]
-            var results: [[String: Any]] = []
-            var sources: [[String: Any]] = []
-            var preserved = true
-            for (width, height) in [(48, 32), (96, 64), (256, 128)] {
-                try autoreleasepool {
-                    progress("source-create", ["width": width, "height": height])
-                    let (source, bytes) = try makeSource(width: width, height: height, space: space)
-                    let before = digest(bytes)
-                    let ci = CIImage(cgImage: source)
-                    let bounds = CGRect(x: 0, y: 0, width: width, height: height)
-                    // Lazy factories avoid retaining multiple rendered buffers across encoding attempts.
-                    let variants: [(String, [String: Any], () -> CGImage?)] = [
-                        ("direct-source", ["context": "none"], { source }),
-                        ("default-CI", ["context": "default", "requestedFormat": "unspecified"], {
-                            defaultContext.createCGImage(ci, from: bounds)
-                        }),
-                        ("explicit-RGBA8-sRGB", ["context": "default", "requestedFormat": "RGBA8", "outputColorSpace": "sRGB"], {
-                            defaultContext.createCGImage(ci, from: bounds, format: .RGBA8, colorSpace: space)
-                        }),
-                        ("software-RGBA8-sRGB", ["context": "software", "useSoftwareRenderer": true,
-                            "requestedFormat": "RGBA8", "workingColorSpace": "sRGB", "outputColorSpace": "sRGB"], {
-                            softwareContext.createCGImage(ci, from: bounds, format: .RGBA8, colorSpace: space)
-                        })
-                    ]
-                    for (name, options, create) in variants {
-                        autoreleasepool {
-                            progress("variant-create", ["variant": name, "width": width, "height": height])
-                            if let rendered = create() {
-                                for type in types {
-                                    let result = autoreleasepool {
-                                        encode(rendered, variant: name, contextOptions: options, type: type,
-                                               directory: directory, listed: destinationTypes.contains(type.identifier))
-                                    }
-                                    results.append(result)
-                                }
-                            } else {
-                                for type in types { results.append(["variant": name, "contextOptions": options,
-                                    "width": width, "height": height, "type": type.identifier,
-                                    "stage": "createCGImage-failed", "succeeded": false]) }
-                            }
-                        }
-                    }
-                    results.append(autoreleasepool {
-                        softwareHEIF(ci, width: width, height: height, context: softwareContext,
-                                     space: space, directory: directory)
-                    })
-                    let after = digest(bytes)
-                    let providerAfter: String?
-                    if let providerBytes = source.dataProvider?.data { providerAfter = digest(providerBytes as Data) }
-                    else { providerAfter = nil }
-                    let same = before == after && providerAfter == before
-                    preserved = preserved && same
-                    sources.append(["sourceCGImage": imageInfo(source), "authoredRGBA8SHA256": before,
-                                    "sourceRGBAObservation": try rgbaObservation(source), "sourcePreserved": same])
-                    defaultContext.clearCaches()
-                    softwareContext.clearCaches()
+            let result: [String: Any]
+            if slot == 16 {
+                progress("software-context-create")
+                let context = CIContext(options: [.useSoftwareRenderer: true,
+                    .workingColorSpace: space, .outputColorSpace: space, .cacheIntermediates: false])
+                result = softwareHEIF(CIImage(cgImage: source), width: width, height: height,
+                    context: context, space: space, directory: directory)
+                context.clearCaches()
+            } else {
+                let variant = slot / 4, type = types[slot % 4]
+                var options: [String: Any] = ["context": "none"]
+                var rendered: CGImage? = source
+                var retainedContext: CIContext?
+                if variant != 0 {
+                    let software = variant == 3
+                    progress(software ? "software-context-create" : "default-context-create")
+                    let context = software ? CIContext(options: [.useSoftwareRenderer: true,
+                        .workingColorSpace: space, .outputColorSpace: space, .cacheIntermediates: false]) : CIContext()
+                    retainedContext = context
+                    let ci = CIImage(cgImage: source), bounds = CGRect(x: 0, y: 0, width: width, height: height)
+                    options = ["context": software ? "software" : "default",
+                        "workingFormatRaw": context.workingFormat.rawValue,
+                        "workingColorSpace": colorSpaceInfo(context.workingColorSpace),
+                        "useSoftwareRenderer": software, "requestedFormat": variant == 1 ? "unspecified" : "RGBA8"]
+                    progress("variant-create", ["variant": names[variant], "width": width, "height": height])
+                    rendered = variant == 1 ? context.createCGImage(ci, from: bounds)
+                        : context.createCGImage(ci, from: bounds, format: .RGBA8, colorSpace: space)
                 }
+                if let rendered {
+                    result = encode(rendered, variant: names[variant], contextOptions: options,
+                        type: type, directory: directory, listed: destinationTypes.contains(type.identifier))
+                } else {
+                    result = ["variant": names[variant], "contextOptions": options, "width": width,
+                        "height": height, "type": type.identifier, "stage": "createCGImage-failed", "succeeded": false]
+                }
+                retainedContext?.clearCaches()
             }
-            let failures = results.filter { $0["succeeded"] as? Bool != true }.count
-            report["sources"] = sources
-            report["results"] = results
-            report["attemptCount"] = results.count
+            let providerAfter: String?
+            if let providerBytes = source.dataProvider?.data { providerAfter = digest(providerBytes as Data) }
+            else { providerAfter = nil }
+            let preserved = digest(bytes) == before && providerAfter == before
+            guard preserved else { throw ProbeError.identityChanged }
+            let failures = result["succeeded"] as? Bool == true ? 0 : 1
+            report["sources"] = [["sourceCGImage": imageInfo(source), "authoredRGBA8SHA256": before,
+                "sourceRGBAObservation": try rgbaObservation(source), "sourcePreserved": preserved]]
+            report["results"] = [result]
+            report["attemptCount"] = 1
             report["failedAttemptCount"] = failures
             report["sourcesPreserved"] = preserved
             report["status"] = failures == 0 && preserved ? "all-diagnostic-encodes-readable" : "diagnostic-failures-observed"

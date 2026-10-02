@@ -401,12 +401,55 @@ class Workspace:
                 frame['rect'] = [moved_frame[:2], moved_frame[2:]]
 
     def move_selected(self, dx, dy, time=None):
-        item = self.selected()
-        if item:
-            shown = positioned(item[0], item[1], time)
-            pts = shape_points(shown)[1] if item[1] else shown['points']
-            r = bounds(pts)
-            self.resize_selected([r[0] + dx, r[1] + dy, r[2], r[3]], time)
+        """Translate without applying resize minimums or recomputing extents.
+
+        A one-pixel or subpixel item remains the same size, including every
+        recorded frame and erasure. Actual resize keeps its separate minimum
+        policy. Both mouse and keyboard moves use this single undo transaction.
+        """
+        if not math.isfinite(dx) or not math.isfinite(dy):
+            raise ValueError('이동은 유한한 좌표를 사용하세요.')
+        if time is not None and (not math.isfinite(time) or time < 0):
+            raise ValueError('편집 시각을 확인하세요.')
+        if not self.selected() or not (dx or dy):
+            return
+        selected_ids = self._selected_ids_with_groups()
+        moving = [(item, region) for item, region in self.items()
+                  if self.item_id(item, region) in selected_ids
+                  and not (item['effect'] if region else item).get('locked', False)]
+        if not moving:
+            return
+        self._checkpoint()
+        def translated(point):
+            return [point[0] + dx, point[1] + dy]
+        for item, region in moving:
+            target = item['effect'] if region else item
+            if region:
+                kind, shape = next(iter(item['shape'].items()))
+                old = (bounds(shape['points']) if kind == 'polygon' else
+                       list(shape['origin']) + list(shape['size']))
+            else:
+                old = bounds(item['points'])
+            frames = target.get('keyframes', [])
+            start = target.get('timeRange', [0, 0])[0]
+            if time is not None and self.record_motion and (frames or time - start >= .001):
+                shown = rect_at(old, frames, time)
+                if not frames and time > start + .001:
+                    frames = [{'time': start, 'rect': [old[:2], old[2:]]}]
+                target['keyframes'] = sorted([f for f in frames if abs(f['time'] - time) >= .001]
+                    + [{'time': time, 'rect': [translated(shown[:2]), shown[2:]]}], key=lambda f: f['time'])
+                continue
+            if region:
+                if kind == 'polygon':
+                    shape['points'] = [translated(point) for point in shape['points']]
+                else:
+                    shape['origin'] = translated(shape['origin'])
+            else:
+                item['points'] = [translated(point) for point in item['points']]
+            for hole in target.get('erasures', []):
+                hole['points'] = [translated(point) for point in hole['points']]
+            for frame in frames:
+                frame['rect'][0] = translated(frame['rect'][0])
 
     def reorder_selected(self, offset):
         self._checkpoint()

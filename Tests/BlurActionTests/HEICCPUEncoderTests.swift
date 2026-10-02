@@ -141,10 +141,13 @@ struct HEICCPUEncoderTests {
         let sentinel = parent.appendingPathComponent("existing.heic")
         let sentinelBytes = Data("existing destination nonce".utf8)
         try sentinelBytes.write(to: sentinel, options: .withoutOverwriting)
-        let (source, original) = try image(width: 1024, height: 1024)
+        // Remain larger than a macOS pipe without making normalization consume
+        // the entire process timeout on a slower native CI host.
+        let (source, original) = try image(width: 256, height: 256)
+        #expect(original.count > 65_536)
         var attempt: URL?, pid: Int32 = 0
         let error = try failure {
-            try HEICCPUEncoder.encode(image: source, quality: 0.9, helper: executable, timeout: 0.5,
+            try HEICCPUEncoder.encode(image: source, quality: 0.9, helper: executable, timeout: 2,
                 hooks: .init(temporaryParent: parent, onAttempt: { attempt = $0 }, onStarted: { pid = $0 }))
         }
         #expect(isError(error.primary, .timedOut))

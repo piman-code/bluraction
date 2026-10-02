@@ -20,6 +20,7 @@ from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from enum import Enum
 from fractions import Fraction
 import math
 import os
@@ -38,6 +39,46 @@ from .renderer import bounds, positioned, render, shape_points, to_pillow, to_qi
 
 class VideoError(ValueError):
     pass
+
+
+class QualityPreset(str, Enum):
+    """Same compression and bitrate targets as the macOS QualityPreset.
+
+    'Original' still re-encodes edited pixels; it does not promise lossless H.264.
+    PNG/TIFF use their format's lossless pixel encoding, independent of this value.
+    """
+    ORIGINAL = 'original'
+    HIGH = 'high'
+    MEDIUM = 'medium'
+    LOW = 'low'
+
+    @property
+    def label(self):
+        return {'original': '원본', 'high': '고품질', 'medium': '중간', 'low': '낮음'}[self.value]
+
+    @property
+    def image_quality(self):
+        return {'original': 100, 'high': 92, 'medium': 75, 'low': 50}[self.value]
+
+    @property
+    def bits_per_pixel_per_second(self):
+        return {'original': 0, 'high': .10, 'medium': .05, 'low': .025}[self.value]
+
+
+def output_bit_rate(quality, estimated_rate, frame_rate, width, height):
+    """Bounded Mac-compatible H.264 target, without guessing frame timestamps."""
+    quality = QualityPreset(quality)
+    values = (estimated_rate, frame_rate, width, height)
+    if any(isinstance(value, bool) or not isinstance(value, (int, float, Fraction))
+           or not math.isfinite(value) for value in values):
+        raise VideoError('출력 화질에 필요한 영상 정보가 유한하지 않습니다.')
+    if not 0 <= estimated_rate <= 500_000_000 or not 0 <= frame_rate <= 240:
+        raise VideoError('영상 비트레이트 또는 프레임률이 지원 범위를 벗어났습니다.')
+    if not 0 < width <= 32_768 or not 0 < height <= 32_768 or width * height > 134_217_728:
+        raise VideoError('영상 출력 크기가 지원 범위를 벗어났습니다.')
+    raw_rate = (max(500_000, estimated_rate) if quality == QualityPreset.ORIGINAL else
+                width * height * max(1, frame_rate) * quality.bits_per_pixel_per_second)
+    return int(min(500_000_000, max(500_000, raw_rate)))
 
 
 _ASSET_LOAD=ContextVar('bluraction_owned_asset_load',default=False)
@@ -519,12 +560,13 @@ class VideoSource:
         self._guard()
 
 
-def export_video(source, state, path, cancel=None, progress=None):
+def export_video(source, state, path, cancel=None, progress=None, *, quality=QualityPreset.HIGH):
     """Original frame PTS/audio packet timing, once-normalized pixels, fresh output.
 
     MP4/MOV only. The muxer validates audio codec compatibility; no audio decoder,
     lossy transcode, CFR resampling or unapproved GPL encoder fallback is used.
     """
+    quality = QualityPreset(quality)
     target = fresh_target(path)
     if target.suffix.lower() not in ('.mp4', '.mov', '.m4v'):
         raise VideoError('영상 출력은 MP4 또는 MOV의 새 파일 이름을 선택하세요.')
@@ -550,7 +592,9 @@ def export_video(source, state, path, cancel=None, progress=None):
             result.codec_context.time_base = video.time_base
             result.codec_context.max_b_frames = 0
             result.codec_context.sample_aspect_ratio = Fraction(1)
-            result.bit_rate = max(2_000_000, video.bit_rate or 0)
+            result.bit_rate = output_bit_rate(quality, video.bit_rate or 0,
+                                              float(source.average_rate) if source.average_rate is not None else 0,
+                                              result.width, result.height)
             result.set_display_rotation(0)
             audio = {}
             for stream in input_.streams.audio:

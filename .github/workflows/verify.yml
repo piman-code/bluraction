@@ -6,7 +6,9 @@ name: Verify Mac and Windows candidates
 on:
   pull_request:
   push:
-    branches: [main, 'codex/**']
+    # Development branches are checked after a reviewed batch by dispatch;
+    # PRs and main keep automatic required checks without duplicate push runs.
+    branches: [main]
   workflow_dispatch:
     inputs:
       target_platform:
@@ -105,9 +107,13 @@ jobs:
             echo '::warning::ImageIO encode failures observed. Mandatory native regressions still follow; no formats are skipped.'
           fi
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        # Supply mandatory regressions even when the separate capability probe
+        # fails. Its failure remains visible in the job result and evidence.
+        if: ${{ !cancelled() }}
         with:
           python-version: '3.14'
       - name: Build owned CPU HEIC helper for mandatory product regressions
+        if: ${{ !cancelled() }}
         run: |
           python build-recipes/macos-heic-cpu/verify_candidate.py --repository "$PWD"
           python - <<'PYTHON'
@@ -159,6 +165,9 @@ jobs:
             .build/image-io-diagnostic-*/execution.json
             .build/image-io-diagnostic-*/native.json
             .build/image-io-diagnostic-*/native.stderr
+            .build/image-io-diagnostic-*/attempt-*/native.json
+            .build/image-io-diagnostic-*/attempt-*/native.stderr
+            .build/image-io-diagnostic-*/attempt-*/observation.json
             .build/image-io-diagnostic-*/compile.stdout
             .build/image-io-diagnostic-*/compile.stderr
           include-hidden-files: true
@@ -300,6 +309,9 @@ jobs:
           path: |
             ${{ env.OWNED_CANDIDATE_ROOT }}/reports/
             ${{ env.OWNED_CANDIDATE_ROOT }}/logs/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/msvc-environment/stdout.txt
+            ${{ env.OWNED_CANDIDATE_ROOT }}/msvc-environment/stderr.txt
+            ${{ env.OWNED_CANDIDATE_ROOT }}/msvc-environment/environment.json
             ${{ env.OWNED_CANDIDATE_ROOT }}/candidate-material-manifest.json
           include-hidden-files: true
           if-no-files-found: warn
