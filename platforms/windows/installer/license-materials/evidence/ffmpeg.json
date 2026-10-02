@@ -1,0 +1,482 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "sources": [
+      {
+        "name": "nv-codec-headers",
+        "URL": "https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n13.0.19.0.tar.gz",
+        "filename": "n13.0.19.0.tar.gz",
+        "expectedSHA256": "86d15d1a7c0ac73a0eafdfc57bebfeba7da8264595bf531cf4d8db1c22940116",
+        "actualSHA256": "86d15d1a7c0ac73a0eafdfc57bebfeba7da8264595bf531cf4d8db1c22940116",
+        "bytes": 83385,
+        "status": "verified-source-archive",
+        "license_texts": []
+      },
+      {
+        "name": "amf-headers",
+        "URL": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.2/AMF-headers-v1.5.2.tar.gz",
+        "filename": "AMF-headers-v1.5.2.tar.gz",
+        "expectedSHA256": "d3c12eb324edf05e214608b6a395a51dd95770ed9d45520185d6c3a206811c99",
+        "actualSHA256": "d3c12eb324edf05e214608b6a395a51dd95770ed9d45520185d6c3a206811c99",
+        "bytes": 83716,
+        "status": "verified-source-archive",
+        "license_texts": []
+      },
+      {
+        "name": "libvpl",
+        "URL": "https://github.com/intel/libvpl/archive/refs/tags/v2.16.0.tar.gz",
+        "filename": "v2.16.0.tar.gz",
+        "expectedSHA256": "d60931937426130ddad9f1975c010543f0da99e67edb1c6070656b7947f633b6",
+        "actualSHA256": "d60931937426130ddad9f1975c010543f0da99e67edb1c6070656b7947f633b6",
+        "bytes": 12968334,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "libvpl-2.16.0/LICENSE",
+            "material_path": "licenses/ffmpeg/libvpl-5133b659c4f0.txt",
+            "sha256": "bf1cfac2e2792b6e1e995ce103d70796aecaf2ec7e4c5fe5474f7acec7b4a677"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api1x_core/legacy-decode/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-e3485c68d0cb.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api1x_core/legacy-encode/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-5ccf9b5368df.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api1x_core/legacy-vpp/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-419df812de6b.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-decode/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-a3487a94878d.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-decvpp/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-1fe37ccf995f.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-encode-jpeg/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-fb59659b8243.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-encode/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-684327404d3e.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-sharing-dx11/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-105693bc97cf.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-sharing-ocl/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-2b5e2ab15be2.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-sharing-vaapi/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-f6de4031b9fa.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-transcode/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-46300f641356.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/api2x/hello-vpp/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-c7042f9fe338.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/interop/vpl-infer/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-8fd548478e8e.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/examples/tutorials/01_transition/License.txt",
+            "material_path": "licenses/ffmpeg/libvpl-8cd83fd4b804.txt",
+            "sha256": "2e35006c345787f7205bdaa86920c8fac86abd19b95d7b4c1ba5531853ea3938"
+          },
+          {
+            "archivePath": "libvpl-2.16.0/libvpl/test/ext/googletest/LICENSE",
+            "material_path": "licenses/ffmpeg/libvpl-157ec8b179c8.txt",
+            "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+          }
+        ]
+      },
+      {
+        "name": "nasm",
+        "URL": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz",
+        "filename": "nasm-2.16.03.tar.xz",
+        "expectedSHA256": "1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148",
+        "actualSHA256": "1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148",
+        "bytes": 1032388,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "nasm-2.16.03/AUTHORS",
+            "material_path": "licenses/ffmpeg/nasm-e3e1f10f4027.txt",
+            "sha256": "8a7bd0cc6c517a220265548bf2ecf62fe89bf682b6a9938afb7521008679149e"
+          },
+          {
+            "archivePath": "nasm-2.16.03/LICENSE",
+            "material_path": "licenses/ffmpeg/nasm-dd2dc3507afc.txt",
+            "sha256": "1563996c52e220e15ef2418e67d39488255aa8c28c89e617074d3afe3ee329e0"
+          }
+        ]
+      },
+      {
+        "name": "ffmpeg",
+        "URL": "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+        "filename": "ffmpeg-9.0.2.tar.xz",
+        "expectedSHA256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+        "actualSHA256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+        "bytes": 12040788,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "ffmpeg-9.0.2/COPYING.LGPLv2.1",
+            "material_path": "licenses/ffmpeg/ffmpeg-ed2b5c362313.txt",
+            "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/COPYING.GPLv2",
+            "material_path": "licenses/ffmpeg/ffmpeg-86df847c904e.txt",
+            "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/COPYING.LGPLv3",
+            "material_path": "licenses/ffmpeg/ffmpeg-7caf685e7b81.txt",
+            "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/COPYING.GPLv3",
+            "material_path": "licenses/ffmpeg/ffmpeg-583e8e6a6081.txt",
+            "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/doc/authors.texi",
+            "material_path": "licenses/ffmpeg/ffmpeg-da6957f12e4b.txt",
+            "sha256": "fb5fac6dd8f7474033e933814491a8297d8723c52be4dcbcc82eef9c4f008dd2"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/tests/checkasm/ext/src/html_data/LICENSE",
+            "material_path": "licenses/ffmpeg/ffmpeg-4893cc1671a5.txt",
+            "sha256": "0fd2c601fb2ead2add56807b7e32664da8d973b9835a422464f210bfea997a52"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/tests/checkasm/ext/LICENSE",
+            "material_path": "licenses/ffmpeg/ffmpeg-98ca8aab6cc7.txt",
+            "sha256": "a2dc8194271e5989c0622531c645a7b41af5da92eeb2531e4f2a3ec31023bc52"
+          },
+          {
+            "archivePath": "ffmpeg-9.0.2/LICENSE.md",
+            "material_path": "licenses/ffmpeg/ffmpeg-fb5dc8dc76f6.txt",
+            "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+          }
+        ]
+      },
+      {
+        "name": "lamer",
+        "URL": "https://github.com/basswood-io/lamer/archive/refs/tags/v3.101.0.tar.gz",
+        "filename": "lamer-3.101.0.tar.gz",
+        "expectedSHA256": "81839b16fdc401e20b73389d05f32a7656008f43bcb960feff290d6f08fc109e",
+        "actualSHA256": "81839b16fdc401e20b73389d05f32a7656008f43bcb960feff290d6f08fc109e",
+        "bytes": 404497,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "lamer-3.101.0/LICENSE",
+            "material_path": "licenses/ffmpeg/lamer-d5c762e97427.txt",
+            "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"
+          }
+        ]
+      },
+      {
+        "name": "opus",
+        "URL": "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz",
+        "filename": "opus-1.6.1.tar.gz",
+        "expectedSHA256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+        "actualSHA256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+        "bytes": 10472813,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "opus-1.6.1/AUTHORS",
+            "material_path": "licenses/ffmpeg/opus-ab4960157966.txt",
+            "sha256": "f9fd849e652219ce98e008303370b352d37663d0ffb27b8dc514ad93c9c7438b"
+          },
+          {
+            "archivePath": "opus-1.6.1/COPYING",
+            "material_path": "licenses/ffmpeg/opus-914803edf738.txt",
+            "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+          }
+        ]
+      },
+      {
+        "name": "dav1d",
+        "URL": "https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2",
+        "filename": "dav1d-1.5.4.tar.bz2",
+        "expectedSHA256": "2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011",
+        "actualSHA256": "2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011",
+        "bytes": 1228274,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "dav1d-1.5.4/COPYING",
+            "material_path": "licenses/ffmpeg/dav1d-a4167b07ad9e.txt",
+            "sha256": "dd92c3c2247c5651606fc23a5e2d6a1ebc5ace9a3e49cbde0e12f05ad1cb1ee5"
+          },
+          {
+            "archivePath": "dav1d-1.5.4/doc/PATENTS",
+            "material_path": "licenses/ffmpeg/dav1d-aef9ece5538a.txt",
+            "sha256": "335eca574598bf4ca181b12f708d6669e5a5e78c8e1513e5b35fa1f03901484b"
+          }
+        ]
+      },
+      {
+        "name": "libsvtav1",
+        "URL": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.2.0/SVT-AV1-v4.2.0.tar.bz2",
+        "filename": "SVT-AV1-v4.2.0.tar.bz2",
+        "expectedSHA256": "512f2ea5649e3e76c2dddcc25c2556fb67a9582baaab207c9c96161c94659dad",
+        "actualSHA256": "512f2ea5649e3e76c2dddcc25c2556fb67a9582baaab207c9c96161c94659dad",
+        "bytes": 10334915,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "SVT-AV1-v4.2.0/LICENSE-BSD2.md",
+            "material_path": "licenses/ffmpeg/libsvtav1-04a3da25d90e.txt",
+            "sha256": "c582fcbeb9cf972a60d298bfaf41dc5adff2dd14208946edcb9bb56a281e8438"
+          },
+          {
+            "archivePath": "SVT-AV1-v4.2.0/LICENSE.md",
+            "material_path": "licenses/ffmpeg/libsvtav1-2a6898e67ccb.txt",
+            "sha256": "0acc2fcb27472bdc9aaf8b71f37055bbdac4f54671b7d922f241bd7fcd0dd3e6"
+          },
+          {
+            "archivePath": "SVT-AV1-v4.2.0/PATENTS.md",
+            "material_path": "licenses/ffmpeg/libsvtav1-c77df798f497.txt",
+            "sha256": "20678ab10402659106dc4c147c97b2a6e94b5c0695415e15a8f195ebc3547922"
+          },
+          {
+            "archivePath": "SVT-AV1-v4.2.0/third_party/fastfeat/LICENSE",
+            "material_path": "licenses/ffmpeg/libsvtav1-53a9cce4b55b.txt",
+            "sha256": "043dcfd059386f9facd376351b2bd79325778744aa442177390cdfcca54babed"
+          },
+          {
+            "archivePath": "SVT-AV1-v4.2.0/third_party/safestringlib/LICENSE",
+            "material_path": "licenses/ffmpeg/libsvtav1-fc722bf1bd59.txt",
+            "sha256": "c0f99a208799ca20c9ccf31a30533d49334eb458dca5a3d14f9afe3e884e5d7d"
+          }
+        ]
+      },
+      {
+        "name": "vpx",
+        "URL": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.17.0.tar.gz",
+        "filename": "vpx-1.17.0.tar.gz",
+        "expectedSHA256": "1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a",
+        "actualSHA256": "1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a",
+        "bytes": 5670546,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "libvpx-1.17.0/AUTHORS",
+            "material_path": "licenses/ffmpeg/vpx-17aa525e9789.txt",
+            "sha256": "8a98b560e5314713550e6d3ba2d8acf3ef54dfc870fc448bef08a7c57648a0bd"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/LICENSE",
+            "material_path": "licenses/ffmpeg/vpx-f280127066ba.txt",
+            "sha256": "8267348d5af1262c11d1a08de2f5afc77457755f1ac658627dd9acf71011d615"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/PATENTS",
+            "material_path": "licenses/ffmpeg/vpx-50bf913a7c8d.txt",
+            "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/googletest/src/LICENSE",
+            "material_path": "licenses/ffmpeg/vpx-d9584a7e5a13.txt",
+            "sha256": "9702de7e4117a8e2b20dafab11ffda58c198aede066406496bef670d40a22138"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/libwebm/AUTHORS.TXT",
+            "material_path": "licenses/ffmpeg/vpx-dd40b3f8063c.txt",
+            "sha256": "3edb5f5496bfff3d6d4a62fa75fe996b814920d0d6e348c2e65c589e7ac5d177"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/libwebm/LICENSE.TXT",
+            "material_path": "licenses/ffmpeg/vpx-fde9537df87f.txt",
+            "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/libwebm/PATENTS.TXT",
+            "material_path": "licenses/ffmpeg/vpx-a547d7eb51ee.txt",
+            "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/libyuv/LICENSE",
+            "material_path": "licenses/ffmpeg/vpx-2c6d5e147091.txt",
+            "sha256": "2b2cc1180c7e6988328ad2033b04b80117419db9c4c584918bbb3cfec7e9364f"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/nalloc/LICENSE",
+            "material_path": "licenses/ffmpeg/vpx-5df6fe9b82d4.txt",
+            "sha256": "d7dd0396ec46975e1bf9093680068ef301bc0ed204603e623a6f7073ab922ab1"
+          },
+          {
+            "archivePath": "libvpx-1.17.0/third_party/x86inc/LICENSE",
+            "material_path": "licenses/ffmpeg/vpx-e53289dc2655.txt",
+            "sha256": "719d8fa235f2068e0ae6d6a7dceb0a7720d7840f0f0ebed29957989e6ded3cd8"
+          }
+        ]
+      },
+      {
+        "name": "png",
+        "URL": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz",
+        "filename": "libpng-1.6.58.tar.xz",
+        "expectedSHA256": "28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775",
+        "actualSHA256": "28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775",
+        "bytes": 1070096,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "libpng-1.6.58/AUTHORS",
+            "material_path": "licenses/ffmpeg/png-ae729e82e6d3.txt",
+            "sha256": "0c777e9f2a67bd4058ab91050eb7a56106c92ed038ba8fe5f54c83344f2d93ca"
+          },
+          {
+            "archivePath": "libpng-1.6.58/LICENSE",
+            "material_path": "licenses/ffmpeg/png-1f1ed72fa7f3.txt",
+            "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+          },
+          {
+            "archivePath": "libpng-1.6.58/contrib/gregbook/COPYING",
+            "material_path": "licenses/ffmpeg/png-c40f63e997ae.txt",
+            "sha256": "d6cb0e9e560f51085556949a84af12b79a00f10ab8b66c752537faf7cd665572"
+          },
+          {
+            "archivePath": "libpng-1.6.58/contrib/gregbook/LICENSE",
+            "material_path": "licenses/ffmpeg/png-4cb6ffbc6b06.txt",
+            "sha256": "b6a03c1803eb58ffb1f1278d5c7d4096c4c116e66dce8a7553e8c77d163c3438"
+          },
+          {
+            "archivePath": "libpng-1.6.58/contrib/pngminus/LICENSE.txt",
+            "material_path": "licenses/ffmpeg/png-b442cde3b65a.txt",
+            "sha256": "1806f1f10d393e9e377b3a8d1b968452b54f1a90378f14eeef45426946ace330"
+          },
+          {
+            "archivePath": "libpng-1.6.58/scripts/cmake/AUTHORS.md",
+            "material_path": "licenses/ffmpeg/png-b5217028f653.txt",
+            "sha256": "50633b976f0133862c921aa67d56de2c0b42eb344c8ca3853686efb092a447db"
+          }
+        ]
+      },
+      {
+        "name": "webp",
+        "URL": "https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.tar.gz",
+        "filename": "webp-1.6.0.tar.gz",
+        "expectedSHA256": "93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136",
+        "actualSHA256": "93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136",
+        "bytes": 3833512,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "libwebp-1.6.0/AUTHORS",
+            "material_path": "licenses/ffmpeg/webp-e459052b12be.txt",
+            "sha256": "f251be89fd442bd9d701360730aea163cc8e2076ff03528f59267dc2c4f8b60a"
+          },
+          {
+            "archivePath": "libwebp-1.6.0/COPYING",
+            "material_path": "licenses/ffmpeg/webp-deff4ccb527d.txt",
+            "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+          },
+          {
+            "archivePath": "libwebp-1.6.0/PATENTS",
+            "material_path": "licenses/ffmpeg/webp-9291173a1540.txt",
+            "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+          }
+        ]
+      },
+      {
+        "name": "libvmaf",
+        "URL": "https://github.com/Netflix/vmaf/archive/refs/tags/v3.2.1.tar.gz",
+        "filename": "vmaf-3.2.1.tar.gz",
+        "expectedSHA256": "5df7386911bc15fd1ca783132528748d219768ae4fc5f8e0b61184f041648092",
+        "actualSHA256": "5df7386911bc15fd1ca783132528748d219768ae4fc5f8e0b61184f041648092",
+        "bytes": 18590364,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "vmaf-3.2.1/LICENSE",
+            "material_path": "licenses/ffmpeg/libvmaf-b0a330501a6a.txt",
+            "sha256": "a6fdb51d02b9dfe198e55534bb8047fe6d756eda117f4ff83de98f92c1952710"
+          }
+        ]
+      },
+      {
+        "name": "x264",
+        "URL": "https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2",
+        "filename": "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2",
+        "expectedSHA256": "6eeb82934e69fd51e043bd8c5b0d152839638d1ce7aa4eea65a3fedcf83ff224",
+        "actualSHA256": "6eeb82934e69fd51e043bd8c5b0d152839638d1ce7aa4eea65a3fedcf83ff224",
+        "bytes": 848719,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55/AUTHORS",
+            "material_path": "licenses/ffmpeg/x264-75428df66242.txt",
+            "sha256": "783150c1bef404fc7140924f3006eff27c940ea73ef38b3bc76fcb9c173229a5"
+          },
+          {
+            "archivePath": "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55/COPYING",
+            "material_path": "licenses/ffmpeg/x264-ad18e28e5695.txt",
+            "sha256": "32b1062f7da84967e7019d01ab805935caa7ab7321a7ced0e30ebe75e5df1670"
+          }
+        ]
+      },
+      {
+        "name": "x265",
+        "URL": "https://github.com/Multicorewareinc/x265/releases/download/4.3/x265_4.3.tar.gz",
+        "filename": "x265_4.3.tar.gz",
+        "expectedSHA256": "83c53e4c8bbb8f1e33ed59e10a7d621d1d7801ca853910c3eb41f038b8ffb121",
+        "actualSHA256": "83c53e4c8bbb8f1e33ed59e10a7d621d1d7801ca853910c3eb41f038b8ffb121",
+        "bytes": 2052112,
+        "status": "verified-source-archive",
+        "license_texts": [
+          {
+            "archivePath": "x265_4.3/COPYING",
+            "material_path": "licenses/ffmpeg/x265-83c6e0e4a0f1.txt",
+            "sha256": "d8afb1bcc7a2cfc603683b168d6987ef0a48e59e0da3693bf55c5d33b67e2b49"
+          },
+          {
+            "archivePath": "x265_4.3/source/dynamicHDR10/LICENSE.txt",
+            "material_path": "licenses/ffmpeg/x265-6d4a1b37763b.txt",
+            "sha256": "47f15d63e82eb8a4de6e46471d5f96cf6d052fd5355944a002c3157880248b69"
+          },
+          {
+            "archivePath": "x265_4.3/source/dynamicHDR10/json11/LICENSE.txt",
+            "material_path": "licenses/ffmpeg/x265-a9ba2d53cb9d.txt",
+            "sha256": "950e288a2548cb33f6a90d23958806b0803f510ab17c600d661619a73ae3a6c8"
+          }
+        ]
+      }
+    ],
+    "vendor_recipe_executed": false,
+    "corresponding_source_complete": false
+  },
+  "limitations": [
+    "These are actual acquired source license texts, not all sources or a redistribution approval. PyAV vendor patch/build/toolchain mapping and winpthread provenance still pending; Qt/OpenCV FFmpeg sources must be separately bound."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

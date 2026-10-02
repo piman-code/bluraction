@@ -1,0 +1,273 @@
+{
+  "status": "material-presence-prepared-pending-unpublished-candidate",
+  "dependencies": [
+    {
+      "id": "numpy",
+      "version": "2.3.5",
+      "license": "BSD-3-Clause plus bundled notices",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/numpy/text-00426.txt",
+        "licenses/numpy/text-00494.txt",
+        "licenses/numpy/text-00860.txt",
+        "licenses/numpy/text-01004.txt"
+      ],
+      "evidence_files": [
+        "evidence/numpy.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pyinstaller",
+      "version": "6.22.3",
+      "license": "GPL-2.0-or-later with PyInstaller bootloader exception and bundled notices",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pyinstaller/text-00569.txt"
+      ],
+      "evidence_files": [
+        "evidence/pyinstaller.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pillow",
+      "version": "12.3.0",
+      "license": "MIT-CMU plus bundled notices",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pillow/text-00114.txt"
+      ],
+      "evidence_files": [
+        "evidence/pillow.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pyav",
+      "version": "19.0.0",
+      "license": "BSD-3-Clause wrapper; vendor codecs separately pending",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pyav/evidence-261.txt"
+      ],
+      "evidence_files": [
+        "evidence/pyav.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pillow-heif",
+      "version": "1.8.0",
+      "license": "BSD-3-Clause wrapper; wheel notice states GPLv2 aggregate, LGPLv3/GPLv2 dependencies pending",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pillow-heif/evidence-028.txt",
+        "licenses/pillow-heif/evidence-029.txt"
+      ],
+      "evidence_files": [
+        "evidence/pillow-heif.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "opencv",
+      "version": "4.14.0.94",
+      "license": "Apache-2.0 wrapper plus bundled third-party notices",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/opencv/evidence-000.txt",
+        "licenses/opencv/evidence-001.txt",
+        "licenses/opencv/evidence-031.txt",
+        "licenses/opencv/evidence-124.txt",
+        "licenses/opencv/evidence-125.txt"
+      ],
+      "evidence_files": [
+        "evidence/opencv.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pypdf",
+      "version": "6.19.0",
+      "license": "BSD-3-Clause",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pypdf/LICENSE"
+      ],
+      "evidence_files": [
+        "evidence/pypdf.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pdfium",
+      "version": "source candidate 1afaa1a380fcd06cec420f3e5b6ec1d2ccb920dc",
+      "license": "BSD-style PDFium plus full acquired third-party license text",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pdfium/LICENSE"
+      ],
+      "evidence_files": [
+        "evidence/pdfium.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "ffmpeg",
+      "version": "9.0.2 PyAV vendor source candidate; Qt7.1.3 and OpenCV provider unbound",
+      "license": "Multiple LGPL/GPL/source licenses; actual configuration and compatibility pending",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/ffmpeg/libvpl-5133b659c4f0.txt",
+        "licenses/ffmpeg/libvpl-e3485c68d0cb.txt",
+        "licenses/ffmpeg/libvpl-5ccf9b5368df.txt",
+        "licenses/ffmpeg/libvpl-419df812de6b.txt",
+        "licenses/ffmpeg/libvpl-a3487a94878d.txt",
+        "licenses/ffmpeg/libvpl-1fe37ccf995f.txt",
+        "licenses/ffmpeg/libvpl-fb59659b8243.txt",
+        "licenses/ffmpeg/libvpl-684327404d3e.txt",
+        "licenses/ffmpeg/libvpl-105693bc97cf.txt",
+        "licenses/ffmpeg/libvpl-2b5e2ab15be2.txt",
+        "licenses/ffmpeg/libvpl-f6de4031b9fa.txt",
+        "licenses/ffmpeg/libvpl-46300f641356.txt",
+        "licenses/ffmpeg/libvpl-c7042f9fe338.txt",
+        "licenses/ffmpeg/libvpl-8fd548478e8e.txt",
+        "licenses/ffmpeg/libvpl-8cd83fd4b804.txt",
+        "licenses/ffmpeg/libvpl-157ec8b179c8.txt",
+        "licenses/ffmpeg/nasm-e3e1f10f4027.txt",
+        "licenses/ffmpeg/nasm-dd2dc3507afc.txt",
+        "licenses/ffmpeg/ffmpeg-ed2b5c362313.txt",
+        "licenses/ffmpeg/ffmpeg-86df847c904e.txt",
+        "licenses/ffmpeg/ffmpeg-7caf685e7b81.txt",
+        "licenses/ffmpeg/ffmpeg-583e8e6a6081.txt",
+        "licenses/ffmpeg/ffmpeg-da6957f12e4b.txt",
+        "licenses/ffmpeg/ffmpeg-4893cc1671a5.txt",
+        "licenses/ffmpeg/ffmpeg-98ca8aab6cc7.txt",
+        "licenses/ffmpeg/ffmpeg-fb5dc8dc76f6.txt",
+        "licenses/ffmpeg/lamer-d5c762e97427.txt",
+        "licenses/ffmpeg/opus-ab4960157966.txt",
+        "licenses/ffmpeg/opus-914803edf738.txt",
+        "licenses/ffmpeg/dav1d-a4167b07ad9e.txt",
+        "licenses/ffmpeg/dav1d-aef9ece5538a.txt",
+        "licenses/ffmpeg/libsvtav1-04a3da25d90e.txt",
+        "licenses/ffmpeg/libsvtav1-2a6898e67ccb.txt",
+        "licenses/ffmpeg/libsvtav1-c77df798f497.txt",
+        "licenses/ffmpeg/libsvtav1-53a9cce4b55b.txt",
+        "licenses/ffmpeg/libsvtav1-fc722bf1bd59.txt",
+        "licenses/ffmpeg/vpx-17aa525e9789.txt",
+        "licenses/ffmpeg/vpx-f280127066ba.txt",
+        "licenses/ffmpeg/vpx-50bf913a7c8d.txt",
+        "licenses/ffmpeg/vpx-d9584a7e5a13.txt",
+        "licenses/ffmpeg/vpx-dd40b3f8063c.txt",
+        "licenses/ffmpeg/vpx-fde9537df87f.txt",
+        "licenses/ffmpeg/vpx-a547d7eb51ee.txt",
+        "licenses/ffmpeg/vpx-2c6d5e147091.txt",
+        "licenses/ffmpeg/vpx-5df6fe9b82d4.txt",
+        "licenses/ffmpeg/vpx-e53289dc2655.txt",
+        "licenses/ffmpeg/png-ae729e82e6d3.txt",
+        "licenses/ffmpeg/png-1f1ed72fa7f3.txt",
+        "licenses/ffmpeg/png-c40f63e997ae.txt",
+        "licenses/ffmpeg/png-4cb6ffbc6b06.txt",
+        "licenses/ffmpeg/png-b442cde3b65a.txt",
+        "licenses/ffmpeg/png-b5217028f653.txt",
+        "licenses/ffmpeg/webp-e459052b12be.txt",
+        "licenses/ffmpeg/webp-deff4ccb527d.txt",
+        "licenses/ffmpeg/webp-9291173a1540.txt",
+        "licenses/ffmpeg/libvmaf-b0a330501a6a.txt",
+        "licenses/ffmpeg/x264-75428df66242.txt",
+        "licenses/ffmpeg/x264-ad18e28e5695.txt",
+        "licenses/ffmpeg/x265-83c6e0e4a0f1.txt",
+        "licenses/ffmpeg/x265-6d4a1b37763b.txt",
+        "licenses/ffmpeg/x265-a9ba2d53cb9d.txt"
+      ],
+      "evidence_files": [
+        "evidence/ffmpeg.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "python",
+      "version": "3.14.7",
+      "license": "PSF-2.0 and incorporated historical license terms",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/python/python-3.14.7-LICENSE.txt"
+      ],
+      "evidence_files": [
+        "evidence/python.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pyside6",
+      "version": "6.11.1",
+      "license": "Wheel metadata LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only; commercial alternative notice without grant",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pyside6/PySide6-LicenseRef-Qt-Commercial.txt",
+        "licenses/pyside6/PySide6-Essentials-LicenseRef-Qt-Commercial.txt",
+        "licenses/pyside6/PySide6-Addons-LicenseRef-Qt-Commercial.txt",
+        "licenses/pyside6/shiboken6-LicenseRef-Qt-Commercial.txt",
+        "licenses/pyside6/qt-6.11.1-LGPL3.txt",
+        "licenses/pyside6/qt-6.11.1-GPL2.txt",
+        "licenses/pyside6/qt-6.11.1-GPL3.txt",
+        "licenses/pyside6/qt-6.11.1-GPL-exception.txt"
+      ],
+      "evidence_files": [
+        "evidence/pyside6.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "qt",
+      "version": "6.11.1",
+      "license": "LGPL/GPL/commercial alternatives per selected module; license choice and GPL-only plugin exposure pending",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/qt/PySide6-Essentials-wheel-LicenseRef-Qt-Commercial.txt",
+        "licenses/qt/PySide6-Addons-wheel-LicenseRef-Qt-Commercial.txt",
+        "licenses/qt/qt-6.11.1-LGPL3.txt",
+        "licenses/qt/qt-6.11.1-GPL2.txt",
+        "licenses/qt/qt-6.11.1-GPL3.txt",
+        "licenses/qt/qt-6.11.1-GPL-exception.txt"
+      ],
+      "evidence_files": [
+        "evidence/qt.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "libheif",
+      "version": "1.23.4 wheel-declared source candidate; DLL version verification pending",
+      "license": "LGPLv3 per actual pillow-heif Windows wheel bundled notice",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/libheif/libheif-1.23.4-COPYING.txt",
+        "licenses/libheif/pillow-heif-Windows-LICENSES_bundled.txt"
+      ],
+      "evidence_files": [
+        "evidence/libheif.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "heif-codecs",
+      "version": "libde2651.1.3/x2654.2 wheel-declared source candidates; DLL version verification pending",
+      "license": "libde265 LGPLv3 and x265 GPLv2 per actual Windows wheel bundled notice",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/heif-codecs/libde265-1.1.3-COPYING.txt",
+        "licenses/heif-codecs/x265-4.2-COPYING.txt",
+        "licenses/heif-codecs/pillow-heif-Windows-LICENSES_bundled.txt"
+      ],
+      "evidence_files": [
+        "evidence/heif-codecs.json"
+      ],
+      "actual_bundle_bound": false
+    }
+  ],
+  "missing_required_ids": [],
+  "redistribution_review": "pending-unpublished-candidate",
+  "final_bundle_bound": false
+}

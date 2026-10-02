@@ -16,3 +16,5 @@
 *.avi -text
 *.webm -text
 *.wav -text
+# Preserve exact imported upstream notice/evidence bytes and whitespace.
+platforms/windows/installer/license-materials/** -text -whitespace

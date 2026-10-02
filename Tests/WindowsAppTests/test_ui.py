@@ -1063,6 +1063,16 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(font_available(None))
         self.assertTrue(font_available('Sans Serif'))
         self.assertTrue(font_available('Monospace'))
+        from PySide6.QtGui import QFontDatabase, QFontInfo, QFontMetricsF
+        from platforms.windows.bluraction.renderer import text_font
+        fixed = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        resolved = text_font('Monospace')
+        if QFontInfo(fixed).fixedPitch():
+            self.assertEqual(QFontInfo(resolved).family(), QFontInfo(fixed).family())
+        self.assertTrue(QFontInfo(resolved).fixedPitch())
+        metrics = QFontMetricsF(resolved)
+        self.assertAlmostEqual(metrics.horizontalAdvance('iiii'), metrics.horizontalAdvance('WWWW'))
+        self.assertEqual(text_font(family).family(), family, 'A missing named font remains an explicit request')
         identity = self.workspace.add_drawing('text', [[.1, .1], [.9, .9]], text='합성 글자', font=family)
         self.window.refresh()
         self.assertEqual(self.window.font.currentText(), family)

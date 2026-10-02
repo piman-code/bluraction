@@ -37,6 +37,50 @@ class MediaSafetyTests(unittest.TestCase):
         Image.new('RGB', (32, 20), (235, 180, 80)).save(path)
         return path
 
+    def test_invalid_image_failure_releases_device_while_traceback_is_retained(self):
+        path = self.folder / 'invalid-new.png'
+        path.write_bytes(b'controlled invalid image')
+        failure = None
+        try:
+            media.load_pages([path])
+        except ValueError as error:
+            failure = error  # Keep traceback alive, as the asynchronous UI does.
+        self.assertIsNotNone(failure)
+        self.assertIsNotNone(failure.__traceback__)
+        self.assertEqual(path.read_bytes(), b'controlled invalid image')
+        renamed = path.with_name('released-invalid.png')
+        path.rename(renamed)  # Actual Windows handle exclusion is tested by CI.
+        renamed.unlink()
+        self.assertFalse(renamed.exists())
+
+    def test_valid_image_metadata_and_pixels_release_input_before_return(self):
+        path = self.png()
+        before = path.read_bytes()
+        size = media._read_qt_image(path, metadata_only=True)
+        image = media._read_qt_image(path)
+        self.assertEqual((size.width(), size.height()), (32, 20))
+        self.assertEqual((image.width(), image.height()), (32, 20))
+        self.assertEqual(image.pixelColor(16, 10).getRgb(), (235, 180, 80, 255))
+        self.assertEqual(path.read_bytes(), before)
+        path.unlink()  # The returned decoded image must not keep the file open.
+        self.assertFalse(path.exists())
+
+    def test_invalid_pdf_failure_releases_document_while_traceback_is_retained(self):
+        path = self.folder / 'invalid-new.pdf'
+        path.write_bytes(b'%PDF-1.7\ncontrolled incomplete PDF')
+        failure = None
+        try:
+            media.load_pages([path])
+        except ValueError as error:
+            failure = error
+        self.assertIsNotNone(failure)
+        self.assertIsNotNone(failure.__traceback__)
+        self.assertEqual(path.read_bytes(), b'%PDF-1.7\ncontrolled incomplete PDF')
+        renamed = path.with_name('released-invalid.pdf')
+        path.rename(renamed)
+        renamed.unlink()
+        self.assertFalse(renamed.exists())
+
     def symlink(self, target, path, directory=False):
         try:
             path.symlink_to(target, target_is_directory=directory)

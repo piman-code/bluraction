@@ -1,0 +1,42 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": [
+    {
+      "url": "https://raw.githubusercontent.com/qt/qtwebengine-chromium/58c11ad487f8a237cf0ac71cc3e818b52db150df/chromium/third_party/pdfium/README.chromium",
+      "file": "chromium_third_party_pdfium_README.chromium",
+      "exit": 56,
+      "stderr": "curl: (56) The requested URL returned error: 404\n",
+      "size": null,
+      "sha256": null
+    },
+    {
+      "url": "https://raw.githubusercontent.com/qt/qtwebengine-chromium/58c11ad487f8a237cf0ac71cc3e818b52db150df/chromium/third_party/pdfium/LICENSE",
+      "file": "chromium_third_party_pdfium_LICENSE",
+      "exit": 0,
+      "stderr": "",
+      "size": 12896,
+      "sha256": "1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/qt/qtwebengine-chromium/58c11ad487f8a237cf0ac71cc3e818b52db150df/chromium/DEPS",
+      "file": "chromium_DEPS",
+      "exit": 0,
+      "stderr": "",
+      "size": 183772,
+      "sha256": "ff886353101f8328493115766032d74dd5236b6b31a341fddb3115d9a0a7f67f"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/qt/qtwebengine-chromium/58c11ad487f8a237cf0ac71cc3e818b52db150df/chromium/chrome/VERSION",
+      "file": "chromium_chrome_VERSION",
+      "exit": 0,
+      "stderr": "",
+      "size": 39,
+      "sha256": "ce3a513eaf4c8b8574f8512e64b0e51d66cae4ce1649cf17c2638910ae96a485"
+    }
+  ],
+  "limitations": [
+    "Qt6.11.1 upstream source candidate only. Actual QtPdf DLL source/notice correspondence unproven; source candidate is not an observed DLL version."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

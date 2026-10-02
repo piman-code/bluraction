@@ -10,7 +10,41 @@ import math
 from PIL import Image, ImageFilter
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QColorSpace, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QColorSpace, QFont, QFontDatabase, QFontInfo, QFontMetricsF, QImage, QPainter, QPainterPath, QPen
+
+
+def text_font(name):
+    """Resolve portable generic requests without changing saved named fonts.
+
+    Windows need not have a font family literally named Monospace. Qt's fixed
+    system font is the documented native choice for that generic request.
+    https://doc.qt.io/qt-6/qfontdatabase.html#systemFont
+    """
+    generic = (name or 'Sans Serif').casefold()
+    if generic == 'monospace':
+        fixed = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        if QFontInfo(fixed).fixedPitch():
+            return fixed
+        # Offscreen/native backends can advertise an unresolved system alias.
+        # Select an actually installed fixed family instead of proportional
+        # fallback, using the same font for availability, preview and export.
+        for family in sorted(QFontDatabase.families(), key=str.casefold):
+            if QFontDatabase.isFixedPitch(family):
+                candidate = QFont(family)
+                if QFontInfo(candidate).fixedPitch():
+                    return candidate
+        fixed.setStyleHint(QFont.StyleHint.Monospace)
+        fixed.setFixedPitch(True)
+        return fixed
+    if generic == 'system':
+        return QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+    font = QFont(name or 'Sans Serif')
+    hints = {'sans serif': QFont.StyleHint.SansSerif, 'sans-serif': QFont.StyleHint.SansSerif,
+             'serif': QFont.StyleHint.Serif, 'cursive': QFont.StyleHint.Cursive,
+             'fantasy': QFont.StyleHint.Fantasy}
+    if generic in hints:
+        font.setStyleHint(hints[generic])
+    return font
 
 
 def active(interval, time):
@@ -497,7 +531,7 @@ def render(image, state, time=None):
                     background = QPainterPath()
                     background.addRoundedRect(box.adjusted(-pad, -pad / 2, pad, pad / 2), pad, pad)
                     painter.fillPath(background, color(item['textBackground']))
-                font = QFont(item.get('fontName') or 'Sans Serif')
+                font = text_font(item.get('fontName'))
                 font.setBold(item.get('bold', True))
                 # A fixed font size and painter transform retain fractional sizes.
                 font.setPixelSize(100)

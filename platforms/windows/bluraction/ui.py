@@ -50,7 +50,8 @@ def font_available(name, families=None):
     if name.casefold() in families or name == QApplication.font().family():
         return True
     if name.casefold() in {'sans serif', 'sans-serif', 'serif', 'monospace', 'cursive', 'fantasy', 'system'}:
-        return bool(QFontInfo(QFont(name)).family())
+        info = QFontInfo(renderer.text_font(name))
+        return bool(info.family()) and (name.casefold() != 'monospace' or info.fixedPitch())
     return QFontInfo(QFont(name)).exactMatch()
 
 

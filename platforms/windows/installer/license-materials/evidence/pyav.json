@@ -1,0 +1,14 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "filename": "av-19.0.0-cp312-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/38/21/81eefc2224ce5e44131552333a703346f55f0e23cae7db20961931b9d298/av-19.0.0-cp312-abi3-win_amd64.whl",
+    "size": 28158185,
+    "SHA256": "96e4c0981ec21cadfef4c0b840d04a5e3c3be821894aa6a7d7a8ee870ba6b727"
+  },
+  "limitations": [
+    "No redistribution license choice or corresponding-source completeness asserted. Exact collected DLL mapping pending."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

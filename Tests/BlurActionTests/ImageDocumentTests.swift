@@ -299,7 +299,12 @@ final class ImageDocumentTests {
         #expect(try Data(contentsOf: existing) == sentinel)
         for type in [UTType.png, .jpeg, .heic, .tiff] {
             let output = dir.appendingPathComponent("result.\(type.preferredFilenameExtension!)")
-            try export(output, type: type)
+            do {
+                try export(output, type: type)
+            } catch {
+                Issue.record("Image export failed: \(type.identifier), \(source.width)x\(source.height), \(error)")
+                throw error
+            }
             let encoded = try #require(CGImageSourceCreateWithURL(output as CFURL, nil))
             #expect(CGImageSourceCreateImageAtIndex(encoded, 0, nil) != nil)
             #expect(CGImageSourceGetType(encoded) as String? == type.identifier)

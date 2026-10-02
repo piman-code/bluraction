@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections import OrderedDict
+from contextlib import contextmanager
 import hashlib
 import math
 import os
@@ -155,6 +156,41 @@ _image_cache = OrderedDict()
 _cache_guard = threading.RLock()
 
 
+@contextmanager
+def _read_qt_pdf(path):
+    document = QPdfDocument()
+    try:
+        error = document.load(str(path))
+        if error != QPdfDocument.Error.None_:
+            raise ValueError('PDF를 열 수 없습니다: ' + error.name)
+        yield document
+    finally:
+        _cleanup_preserving_primary(document.close, 'PDF input document close')
+
+
+def _read_qt_image(path, *, metadata_only=False):
+    # A filename reader owns a QFile that can remain alive in an exception's
+    # traceback. Close our device even when invalid input aborts a load.
+    device = QFile(str(path))
+    reader = None
+    try:
+        if not device.open(QIODevice.OpenModeFlag.ReadOnly):
+            raise ValueError('이미지 원본을 열 수 없습니다: ' + device.errorString())
+        reader = QImageReader(device)
+        reader.setAutoTransform(True)
+        if metadata_only:
+            size = reader.size()
+            if reader.transformation() & QImageIOHandler.Transformation.TransformationRotate90:
+                size = size.transposed()
+            if not reader.canRead():
+                raise ValueError('이미지를 열 수 없습니다: ' + reader.errorString())
+            return size
+        return reader.read()
+    finally:
+        reader = None
+        _cleanup_preserving_primary(device.close, 'image input device close')
+
+
 def page_image(page, cancel=None):
     check_cancel(cancel)
     _check_identity(page.source, page.source_identity)
@@ -170,26 +206,20 @@ def page_image(page, cancel=None):
     if fingerprint(page.source, cancel=cancel) != page.source_sha256:
         raise ValueError('원본 파일이 변경되었습니다. 다시 열고 가림 위치를 확인하세요.')
     if page.pdf_index is not None:
-        document = QPdfDocument()
-        if document.load(str(page.source)) != QPdfDocument.Error.None_:
-            raise ValueError('PDF를 열 수 없습니다.')
-        size = document.pagePointSize(page.pdf_index)
-        dimensions = QSize(round(size.width() * 2), round(size.height() * 2))
-        if dimensions.width() <= 0 or dimensions.height() <= 0 or dimensions.width() * dimensions.height() > 24_000_000:
-            document.close()
-            raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
-        options = QPdfDocumentRenderOptions()
-        options.setRenderFlags(QPdfDocumentRenderOptions.RenderFlag.Annotations)
-        check_cancel(cancel)
-        image = document.render(page.pdf_index, dimensions, options)
-        document.close()
+        with _read_qt_pdf(page.source) as document:
+            size = document.pagePointSize(page.pdf_index)
+            dimensions = QSize(round(size.width() * 2), round(size.height() * 2))
+            if dimensions.width() <= 0 or dimensions.height() <= 0 or dimensions.width() * dimensions.height() > 24_000_000:
+                raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
+            options = QPdfDocumentRenderOptions()
+            options.setRenderFlags(QPdfDocumentRenderOptions.RenderFlag.Annotations)
+            check_cancel(cancel)
+            image = document.render(page.pdf_index, dimensions, options)
     elif page.source.suffix.lower() in {'.heic', '.heif'}:
         from .heif_codec import read_heif
         image = read_heif(page.source)
     else:
-        reader = QImageReader(str(page.source))
-        reader.setAutoTransform(True)
-        image = reader.read()
+        image = _read_qt_image(page.source)
     if image.isNull():
         raise ValueError('원본 페이지를 렌더링할 수 없습니다.')
     if image.width() * image.height() > 24_000_000:
@@ -238,21 +268,17 @@ def load_pages(paths, cancel=None):
         digest = fingerprint(source, max_bytes=limit, cancel=cancel)
         _check_identity(source, captured)
         if source.suffix.lower() == '.pdf':
-            document = QPdfDocument()
-            error = document.load(str(source))
-            if error != QPdfDocument.Error.None_:
-                raise ValueError(f'PDF를 열 수 없습니다: {error.name}')
-            if document.pageCount() < 1 or len(pages) + document.pageCount() > 200:
-                raise ValueError('PDF와 이미지 전체는 최대 200페이지입니다.')
-            for index in range(document.pageCount()):
-                check_cancel(cancel)
-                size = document.pagePointSize(index)
-                # PDFium applies the effective crop/rotation. Work at 144dpi.
-                pixels = QSize(round(size.width() * 2), round(size.height() * 2))
-                if pixels.width() * pixels.height() > 24_000_000:
-                    raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
-                pages.append(Page(source, digest, None, index, (size.width(), size.height()), source_identity=captured))
-            document.close()
+            with _read_qt_pdf(source) as document:
+                if document.pageCount() < 1 or len(pages) + document.pageCount() > 200:
+                    raise ValueError('PDF와 이미지 전체는 최대 200페이지입니다.')
+                for index in range(document.pageCount()):
+                    check_cancel(cancel)
+                    size = document.pagePointSize(index)
+                    # PDFium applies the effective crop/rotation. Work at 144dpi.
+                    pixels = QSize(round(size.width() * 2), round(size.height() * 2))
+                    if pixels.width() * pixels.height() > 24_000_000:
+                        raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
+                    pages.append(Page(source, digest, None, index, (size.width(), size.height()), source_identity=captured))
         else:
             if len(pages) >= 200:
                 raise ValueError('PDF와 이미지 전체는 최대 200페이지입니다.')
@@ -260,13 +286,7 @@ def load_pages(paths, cancel=None):
                 from .heif_codec import inspect_heif
                 size = QSize(*inspect_heif(source).size)
             else:
-                reader = QImageReader(str(source))
-                reader.setAutoTransform(True)
-                size = reader.size()
-                if reader.transformation() & QImageIOHandler.Transformation.TransformationRotate90:
-                    size = size.transposed()
-                if not reader.canRead():
-                    raise ValueError(f'이미지를 열 수 없습니다: {reader.errorString()}')
+                size = _read_qt_image(source, metadata_only=True)
             if size.width() * size.height() > 24_000_000:
                 raise ValueError('이미지 해상도가 너무 큽니다.')
             pages.append(Page(source, digest, None, point_size=(size.width() / 2, size.height() / 2), source_identity=captured))
