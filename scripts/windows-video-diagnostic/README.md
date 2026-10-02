@@ -1,6 +1,6 @@
 # 합성 MOV 디코더 색 변환 관찰
 
-소스 준비 상태이며 아직 실행하지 않았다. CI9에서 마커/PTS 검사 뒤 기존 RGB SHA 비교가 실패했다. 이 도구는 기존 테스트, SHA 기준, 생산 코드를 변경하지 않고 실제 원시 YUV와 RGB 변환을 분리해 기록한다. 출력 완료는 관찰 완료이며 제품 통과/색상 호환성/시간축 P1 종결이 아니다.
+최초 소스 준비 시점에는 미실행이었다. 이후 두 OS의 관찰을 수행했으며, 현재 증거와 추가 관찰의 상태는 아래에 구분한다. CI9에서 마커/PTS 검사 뒤 기존 RGB SHA 비교가 실패했다. 이 도구는 기존 테스트, SHA 기준, 생산 코드를 변경하지 않고 실제 원시 YUV와 RGB 변환을 분리해 기록한다. 출력 완료는 관찰 완료이며 제품 통과/색상 호환성/시간축 P1 종결이 아니다.
 
 실행은 검토한 Python/PyAV 19.0.0/Pillow 환경에서 저장소 루트를 지정한다. PowerShell 예:
 
@@ -23,6 +23,10 @@ Mac에서도 같은 명령을 실제 승인된 전용 Python으로 실행하면 
 
 각 프레임의 JSON/픽셀은 즉시 배타 저장하므로 실패/timeout 뒤 이미 얻은 관찰을 보존한다. 정상 EOF, native close, fd/path/SHA 최종 검사를 모두 마친 case만 완성 report에 들어간다. 전체 report와 source before/after SHA가 없으면 실패/미완료이다. 입력/스크립트 변경과 crash/timeout을 통과로 취급하지 않는다.
 
-`Interpolation`은 알고리즘과 option flag를 조합할 수 있다. 기본 변환과 같은 BILINEAR에 BITEXACT만 추가하며 ACCURATE_RND, CPU dispatch, threads, 색공간/범위 또는 transfer tag를 조용히 변경하지 않는다. 출력 trc/primaries tag 설정은 색 변환의 증거가 아니므로 사용하지 않는다. 근거: [PyAV 19 reformatter 원문](https://github.com/PyAV-Org/PyAV/blob/v19.0.0/av/video/reformatter.py), [PyAV 19 영상 API](https://pyav.basswood.io/docs/stable/api/video.html).
+`Interpolation`은 알고리즘과 option flag를 조합할 수 있다. 기존 세 번째 변환은 BILINEAR에 BITEXACT만 추가한다. 새 네 번째 변환은 ACCURATE_RND를 명시적으로 더한 독립 관찰이다. CPU dispatch, threads, 색공간/범위 또는 transfer tag 설정은 변경하지 않는다. 출력 trc/primaries tag 설정은 색 변환의 증거가 아니므로 사용하지 않는다. 근거: [PyAV 19 reformatter 원문](https://github.com/PyAV-Org/PyAV/blob/v19.0.0/av/video/reformatter.py), [PyAV 19 영상 API](https://pyav.basswood.io/docs/stable/api/video.html).
 
 두 호스트 report를 exact fixture SHA/PTS/format/color metadata로 짝지어 YUV visible SHA를 먼저 비교한다. YUV가 같고 기본 RGB만 다르면 변환 차이의 근거가 된다. BITEXACT RGB도 별도 대조하며 일치 여부를 미리 가정하지 않는다. YUV부터 다르면 decoder/runtime 경로를 조사한다. 조합별 실제 libav* 버전도 report에 남긴다. 새 수용 tolerance나 기존 oracle 변경은 이 진단에서 결정하지 않는다.
+
+The fourth independent RGB observation combines BILINEAR, BITEXACT and ACCURATE_RND. FFmpeg recommends pairing the last two to avoid rounding differences from platform optimizations ([libswscale 9.0](https://www.ffmpeg.org/doxygen/9.0/group__libsws.html)); PyAV exposes these flags ([VideoReformatter](https://pyav.basswood.io/docs/stable/api/video.html)). This is diagnostic source only. Historical whole RGB SHA checks and the production converter stay unchanged until actual OS byte comparisons and review establish a replacement contract.
+
+Recorded observations: the initial three-variant collection completed on macOS and Windows ([Windows CI 36976267871](https://github.com/piman-code/bluraction/actions/runs/36976267871)). All 61 raw YUV frames and timing/color/rotation metadata were identical; all production RGB frame hashes differed, with a maximum channel-value difference of 2. The fourth accurate-rounding collection has completed on the local Mac for eight cases and 61 frames; its Windows comparison is pending. These facts do not approve a production pixel contract or close application verification.

@@ -156,11 +156,16 @@ def observe_case(repo, output, case):
                 exact = VideoReformatter().reformat(frame, format='rgb24',
                     interpolation=Interpolation.BILINEAR | Interpolation.BITEXACT)
                 exact_rgb = visible_plane(exact.planes[0], 3)
-                if any(len(b) != 192 * 128 * 3 for b in (production_rgb, default_rgb, exact_rgb)):
+                accurate = VideoReformatter().reformat(frame, format='rgb24',
+                    interpolation=Interpolation.BILINEAR | Interpolation.BITEXACT | Interpolation.ACCURATE_RND)
+                accurate_rgb = visible_plane(accurate.planes[0], 3)
+                if any(len(b) != 192 * 128 * 3 for b in (production_rgb, default_rgb, exact_rgb, accurate_rgb)):
                     raise ValueError('RGB visible buffer size mismatch')
                 observation['productionToImageRGB'] = save_bytes(directory, f'{prefix}-production-rgb.bin', production_rgb)
                 observation['defaultRGB24'] = save_bytes(directory, f'{prefix}-default-rgb.bin', default_rgb)
                 observation['bitexactBilinearRGB24'] = save_bytes(directory, f'{prefix}-bitexact-rgb.bin', exact_rgb)
+                observation['accurateBitexactBilinearRGB24'] = save_bytes(directory, f'{prefix}-accurate-rgb.bin', accurate_rgb)
+                observation['accurateFlags'] = int(Interpolation.BILINEAR | Interpolation.BITEXACT | Interpolation.ACCURATE_RND)
                 observation['bitexactFlags'] = int(Interpolation.BILINEAR | Interpolation.BITEXACT)
                 observation['marker'] = marker(production_rgb)
                 matches = [f for f in case['frames'] if rational(f['pts']) == pts]
@@ -172,7 +177,7 @@ def observe_case(repo, output, case):
                     'maxAbsoluteByteDifference': max(abs(a-b) for a, b in zip(default_rgb, exact_rgb))}
                 save_json(directory / f'{prefix}.json', observation)
                 row['frames'].append(observation)
-                del frame, default, exact
+                del frame, default, exact, accurate
             row['completeEOF'] = True
         row['nativeCloseCompleted'] = True
         check()
