@@ -141,7 +141,7 @@ def package_lock(root):
         raise ValueError('finite unique full package closure required')
     for target in PINS['compilerTargets']:
         matches = [x for x in rows if x['name'] == target['name']]
-        if len(matches) != 1 or any(matches[0][k] != target[k] for k in ('filename', 'sha256')):
+        if len(matches) != 1 or any(matches[0][k] != target[k] for k in ('version', 'filename', 'sha256')):
             raise ValueError('known compiler target drifted; do not select a new version silently')
     for row in rows:
         download(root, row)
