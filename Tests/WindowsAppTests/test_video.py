@@ -13,7 +13,9 @@ from fractions import Fraction
 import importlib.util
 from pathlib import Path
 import random
+import struct
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +30,58 @@ HAS_AV = importlib.util.find_spec('av') is not None
 HAS_CV = importlib.util.find_spec('cv2') is not None
 HAS_NUMPY = importlib.util.find_spec('numpy') is not None
 PTS = [2000, 2040, 2130, 2200, 2430]
+
+
+class DisplayMatrixPolicyTests(unittest.TestCase):
+    """Mapping-shaped policy seams; actual decoded rotation is tested below."""
+
+    def frame(self, side_data, rotation=0):
+        return SimpleNamespace(side_data=side_data, rotation=rotation,
+                               to_image=lambda: Image.new('RGB', (16, 12), 'white'))
+
+    def test_missing_matrix_and_unrelated_side_data_keep_unrotated_pixels(self):
+        for mapping in ({}, {'ICC_PROFILE': b'controlled unrelated data'}):
+            with self.subTest(mapping=mapping):
+                result = video._display_image(self.frame(mapping))
+                self.assertEqual((result.width(), result.height()), (16, 12))
+                self.assertEqual(result.pixelColor(8, 6).getRgb(), (255, 255, 255, 255))
+
+    def test_mapping_display_matrix_still_rejects_privacy_unsafe_transforms(self):
+        identity = [65536, 0, 0, 0, 65536, 0, 0, 0, 1 << 30]
+        reflected = identity.copy(); reflected[0] *= -1
+        perspective = identity.copy(); perspective[2] = 1
+        scaled = identity.copy(); scaled[0] *= 2
+        # Both rows have unit length and positive determinant, but their
+        # dot product is nonzero: the original row-length check missed shear.
+        shear = identity.copy(); shear[3:5] = [46341, 46341]
+        cases = [('truncated', b'\0' * 35, '표시 행렬'),
+                 ('reflected', struct.pack('=9i', *reflected), '반사'),
+                 ('perspective', struct.pack('=9i', *perspective), '투시'),
+                 ('scaled', struct.pack('=9i', *scaled), '크기 변환'),
+                 ('unit-row-shear', struct.pack('=9i', *shear), '직교')]
+        for w in (0, -(1 << 30), 1 << 29):
+            unnormalized = identity.copy(); unnormalized[8] = w
+            cases.append((f'homogeneous-{w}', struct.pack('=9i', *unnormalized), '정규화'))
+        for name, payload, message in cases:
+            with self.subTest(transform=name):
+                with self.assertRaisesRegex(video.VideoError, message):
+                    video._display_image(self.frame({'DISPLAYMATRIX': payload}))
+        result = video._display_image(self.frame({'DISPLAYMATRIX': struct.pack('=9i', *identity)}))
+        self.assertEqual((result.width(), result.height()), (16, 12))
+
+    def test_unit_orthogonal_rotation_and_fixed_point_rounding_controls_remain_valid(self):
+        controls = [(0, [65536, 0, 0, 0, 65536, 0, 0, 0, 1 << 30]),
+                    (90, [0, -65536, 0, 65536, 0, 0, 0, 0, 1 << 30]),
+                    (180, [-65536, 0, 0, 0, -65536, 0, 0, 0, 1 << 30]),
+                    (270, [0, 65536, 0, -65536, 0, 0, 0, 0, 1 << 30]),
+                    (0, [65535, 0, 0, 0, 65535, 0, 0, 0, 1 << 30])]
+        for rotation, matrix in controls:
+            with self.subTest(rotation=rotation, matrix=matrix):
+                result = video._display_image(self.frame(
+                    {'DISPLAYMATRIX': struct.pack('=9i', *matrix)}, rotation))
+                expected = (12, 16) if rotation % 180 else (16, 12)
+                self.assertEqual((result.width(), result.height()), expected)
+                self.assertEqual(result.pixelColor(6, 6).getRgb(), (255, 255, 255, 255))
 
 
 @unittest.skipUnless(HAS_AV, 'Approved isolated PyAV 19 runtime is not installed; no decode/export proof')
@@ -117,11 +171,21 @@ class VideoTests(unittest.TestCase):
     def test_actual_container_rotation_is_applied_once_to_decoded_pixels(self):
         rotated = self.folder / 'rotated.mov'
         self.make_source(rotated, rotation=90)
+        original_bytes = rotated.read_bytes()
+        with video._av().open(str(rotated)) as container:
+            decoded = next(container.decode(video=0))
+            matrix = decoded.side_data.get('DISPLAYMATRIX')
+            self.assertIsNotNone(matrix, 'The actual codec fixture must expose its rotation matrix')
+            self.assertEqual(len(bytes(matrix)), 36)
+            self.assertIn(matrix.type, tuple(decoded.side_data), 'PyAV 19 iteration yields Type keys')
         source = video.VideoSource(rotated)
         self.assertEqual((source.page().image.width(), source.page().image.height()), (64, 96))
         unrotated = self.source.frame_at(0)
         expected = unrotated.transformed(QTransform().rotate(-90))
-        self.assertEqual(bytes(source.frame_at(0).constBits()), bytes(expected.constBits()))
+        actual = source.frame_at(0)
+        # constBits is a borrowed view; retain its QImage through the byte copy.
+        self.assertEqual(bytes(actual.constBits()), bytes(expected.constBits()))
+        self.assertEqual(rotated.read_bytes(), original_bytes)
 
     def test_actual_export_drops_rotation_metadata_after_normalizing_pixels(self):
         capability = video.encoder_capability()

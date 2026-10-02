@@ -87,7 +87,8 @@ def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
     Mirrored/scaled/perspective display matrices need dedicated support and fail
     explicitly rather than producing incorrectly aligned privacy masks.
     """
-    matrix = next((side for side in frame.side_data if side.type.name == 'DISPLAYMATRIX'), None)
+    # PyAV 19 side_data is a Mapping: iteration yields Type keys, not values.
+    matrix = frame.side_data.get('DISPLAYMATRIX')
     if matrix is not None:
         raw = bytes(matrix)
         if len(raw) != 36:
@@ -95,8 +96,16 @@ def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
         m = struct.unpack('=9i', raw)
         if m[0] * m[4] - m[1] * m[3] <= 0 or m[2] or m[5]:
             raise VideoError('반사 또는 투시 변환 영상은 표시 위치 검토가 필요합니다.')
+        # FFmpeg stores w in 2.30 fixed point. Rotation-only normalization
+        # cannot represent division by a non-unit homogeneous coordinate.
+        if m[8] != 1 << 30:
+            raise VideoError('정규화되지 않은 영상 표시 행렬은 위치 검토가 필요합니다.')
         if abs(math.hypot(m[0], m[1]) / 65536 - 1) > .001 or abs(math.hypot(m[3], m[4]) / 65536 - 1) > .001:
             raise VideoError('크기 변환이 포함된 영상 표시 행렬은 검토가 필요합니다.')
+        # Unit row lengths alone admit shear. Keep the existing .001 fixed-
+        # point rounding allowance while requiring perpendicular basis rows.
+        if abs(m[0] * m[3] + m[1] * m[4]) * 1000 > 65536 ** 2:
+            raise VideoError('직교하지 않은 영상 표시 행렬은 위치 검토가 필요합니다.')
     angle = frame.rotation
     if matrix is None and not angle:
         rotate = next((v for k, v in (metadata or {}).items() if k.lower() == 'rotate'), 0)
