@@ -4,7 +4,7 @@ macOS에서 영상·이미지의 원하는 부분을 **블러·모자이크·단
 
 현재 Mac 후보의 검수 대상은 macOS 14 이상 arm64입니다. 소스 빌드·내부 검증에는 Swift Command Line Tools가 필요하며, 외부 Swift 패키지는 사용하지 않습니다. 현재 저장소에는 같은 프로젝트 형식을 읽는 Windows Qt 개발 후보도 있습니다. Windows 실제 실행·설치 및 양방향 호환 검수는 진행 중이며, 아직 검수 완료된 Windows 릴리스는 없습니다.
 
-개발 소스는 `codex/multipage-document-blur` 브랜치에 공개하고 있습니다. [최신 실제 CI](https://github.com/piman-code/bluraction/actions/runs/36966564894)는 Windows 시간축 관측·픽셀 공급자와 엔진·저장을 통과했고, 잘못된 PDF 입력의 파일 잠금 검사에서 중단됐습니다. 이미지 입력 잠금은 해소됐으며 PDF 장치 수명을 후속 보완했습니다. Mac의 새 ImageIO 진단은 이전 OS에서 충돌해 단계별 기록을 보완하고 있습니다. 두 OS 설치·사용자 검수와 후속 수정의 실제 CI 결과는 아래 문서에 구분합니다.
+개발 소스는 `codex/multipage-document-blur` 브랜치에 공개하고 있습니다. [실제 CI7](https://github.com/piman-code/bluraction/actions/runs/36967789624)에서 Windows PDF 입력 파일 잠금 수리는 통과했습니다. 이어진 UI 검사에서 고정폭 글꼴 해석 1건이 실패했고, Mac14에서는 HEIC 출력 실패와 별도 진단의 충돌이 남았습니다. 새 영상·PCM 시간축 기반과 합성 자료 8개는 로컬 검수를 거쳤으며 실제 Windows 검사와 앱 연결을 이어갑니다. 두 OS의 설치·사용자 검수와 최종 릴리스는 미완료입니다.
 
 - [플랫폼별 빌드·패키징](docs/플랫폼-빌드-상태.md)
 - [현재 검증 상태](docs/검증-상태.md)

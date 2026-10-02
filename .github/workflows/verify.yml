@@ -9,6 +9,15 @@ on:
     branches: [main, 'codex/**']
   workflow_dispatch:
     inputs:
+      target_platform:
+        description: Required native platform for this development check; all remains the release prerequisite
+        type: choice
+        options: [all, windows, mac]
+        default: all
+      owned_windows_ffmpeg:
+        description: Run the reviewed disposable source build and native MF smoke; evidence only
+        type: boolean
+        default: false
       prepare_windows_candidate:
         description: Build a private Windows candidate after approving runner dependencies
         type: boolean
@@ -22,11 +31,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: verify-${{ github.workflow }}-${{ github.ref }}
+  group: verify-${{ github.workflow }}-${{ github.ref }}-${{ inputs.owned_windows_ffmpeg && 'owned' || 'native' }}
   cancel-in-progress: true
 
 jobs:
   portable-project:
+    if: ${{ !inputs.owned_windows_ffmpeg }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -45,6 +55,7 @@ jobs:
           python -m unittest discover -s Tests/PackagingTests -v
 
   mac-native:
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'windows' }}
     runs-on: macos-14
     timeout-minutes: 45
     env:
@@ -117,6 +128,7 @@ jobs:
         run: ./scripts/build_app.sh --build-only --no-install
 
   windows-native:
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac' }}
     runs-on: windows-2025
     timeout-minutes: 30
     env:
@@ -145,6 +157,11 @@ jobs:
           ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
           & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
+      - name: Observe offscreen and native Windows font backends without windows or OS input
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/windows-font-diagnostic/run_font_diagnostic.py --repository "$PWD" --timeout 30
+          if ($LASTEXITCODE -ne 0) { throw 'Font observation incomplete; preserve the report before changing availability or fixed-width assertions.' }
       - name: Verify model and Qt/media controllers with bounded subprocesses
         shell: pwsh
         run: |
@@ -157,7 +174,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-native-verification
-          path: .build/windows-verification-*/
+          path: |
+            .build/windows-verification-*/
+            .build/windows-font-diagnostic-*/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
@@ -180,6 +199,64 @@ jobs:
           name: windows-candidate-manifest
           path: .build/windows-packages/**/bundle-manifest.json
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  owned-candidate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.owned_windows_ffmpeg }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      RECIPE_DIRECTORY: build-recipes/windows-owned-ffmpeg
+      PYTHONUTF8: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+          architecture: x64
+      - name: Parse the exact PowerShell recipe before any tool acquisition
+        shell: pwsh
+        run: |
+          $tokens=$null; $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/build-recipes/windows-owned-ffmpeg/BuildOwnedCandidate.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Format-List; throw 'Reviewed PowerShell recipe has syntax errors.' }
+      - name: Build only inside a new disposable attempt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $recipe = [IO.Path]::GetFullPath((Join-Path $repo $env:RECIPE_DIRECTORY))
+          if (-not $recipe.StartsWith($repo + [IO.Path]::DirectorySeparatorChar,
+              [StringComparison]::OrdinalIgnoreCase)) { throw 'Recipe must stay inside reviewed checkout.' }
+          $attempt = Join-Path $env:RUNNER_TEMP ('bluraction-owned-ffmpeg-' + [guid]::NewGuid().ToString())
+          "OWNED_CANDIDATE_ROOT=$attempt" >> $env:GITHUB_ENV
+          & (Join-Path $recipe 'BuildOwnedCandidate.ps1') -Repository $repo -Destination $attempt -Python python
+      - name: Preserve synthetic reports and locked source/build provenance
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: owned-ffmpeg-build-evidence
+          # No wheel, DLL, source archive, user media, whole .build or QA upload.
+          path: |
+            ${{ env.OWNED_CANDIDATE_ROOT }}/reports/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/logs/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/candidate-material-manifest.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve candidate binaries only in an actually private repository
+        if: ${{ success() && github.event.repository.private == true }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: unpublished-owned-ffmpeg-candidate
+          path: |
+            ${{ env.OWNED_CANDIDATE_ROOT }}/repaired-wheel/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/downloads/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/candidate-material-manifest.json
           if-no-files-found: error
           retention-days: 14
 
