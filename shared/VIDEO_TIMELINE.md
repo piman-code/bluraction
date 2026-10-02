@@ -87,8 +87,28 @@ capabilities remain explicit gates rather than being inferred from DTO capacity.
 
 The Mac exporter ends its writer session at the source asset's exact CMTime,
 using that movie timescale, so encoder packet padding or an inferred final VFR
-frame duration cannot extend the asset endpoint. This duration contract does not
-establish identical PCM, channel layout or generic format fidelity.
+frame duration cannot extend the asset endpoint. Audio is read and written with
+nil output settings and an audio source format hint, preserving the original
+encoded samples instead of re-encoding everything as 44.1 kHz stereo AAC. Each
+track's enabled flag, preferred volume, language code and extended language tag
+are applied before writer startup. A small internal Objective-C boundary converts
+native metadata setter exceptions into an export error; nonfinite volume fails
+before mutation. Unsupported writer formats fail without dropping audio or
+publishing a partial candidate.
+
+The current macOS27 native regression has 18 synthetic source/output combinations:
+eight pinned timeline MOVs, four AAC MOV/MP4 combinations at 32/48 kHz, a 48 kHz
+PCM 5.1 source, three two-track enabled/disabled permutations with volume and
+Korean language metadata, and two independently authored unique-waveform PCM
+edit-list sources. These compare complete decoded PCM16 SHA/bytes/sample counts,
+exact presentation coverage and asset endpoint, original input preservation,
+format/channel information and track metadata. AAC additionally compares full
+compressed packet bytes and zero-sample timing markers. Positive samples retain
+strict finite-clock validation; raw zero-sample markers carry their actual valid
+or invalid CMTime flags into a separate comparison. This does not prove every
+packet's DTS/attachments, arbitrary containers/codecs, high-depth PCM, alternate
+track associations, actual audio-device playback or macOS14 execution. It also
+does not establish Windows export fidelity or two-host interoperability.
 
 The separate `video-project-roundtrip.yml` workflow transfers only allowlisted
 synthetic sources/projects through three native stages: Mac controller emit,

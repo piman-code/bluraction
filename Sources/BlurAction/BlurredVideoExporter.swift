@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreImage
 import AudioToolbox
+import BlurActionMediaSafety
 
 private final class ExportCancellation: @unchecked Sendable {
     private let lock = NSLock()
@@ -196,14 +197,23 @@ final class BlurredVideoExporter: ObservableObject {
             kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         var audio: [(AVAssetReaderTrackOutput, AVAssetWriterInput)] = []
         for audioTrack in try await asset.loadTracks(withMediaType: .audio) {
-            let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
             let descriptions = try await audioTrack.load(.formatDescriptions)
-            guard let desc = descriptions.first, let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) else {
+            guard let desc = descriptions.first, CMFormatDescriptionGetMediaType(desc) == kCMMediaType_Audio else {
                 throw ExportError.readSampleFailed
             }
-            let channels = min(2, max(1, Int(asbd.pointee.mChannelsPerFrame)))
-            let audioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 44100, AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: 128000])
+            // Editing only changes video pixels. Copy the original audio samples
+            // (including trim attachments and zero-sample edit markers) without
+            // resampling, downmixing or a second lossy encode. The original
+            // format hint is required for passthrough into restricted containers.
+            let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+            let audioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: desc)
+            let enabled = try await audioTrack.load(.isEnabled)
+            let volume = try await audioTrack.load(.preferredVolume)
+            let language = try await audioTrack.load(.languageCode)
+            let extendedLanguage = try await audioTrack.load(.extendedLanguageTag)
+            if let error = BAAudioApplyMetadata(audioIn, enabled, volume, language, extendedLanguage) {
+                throw error
+            }
             guard reader.canAdd(out), writer.canAdd(audioIn) else { throw ExportError.writerInitFailed }
             reader.add(out); writer.add(audioIn)
             audio.append((out, audioIn))

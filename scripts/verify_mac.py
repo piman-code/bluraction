@@ -43,6 +43,7 @@ def source_inputs():
     paths = [ROOT / '.gitattributes', ROOT / 'Package.swift', ROOT / 'Resources/Info.plist',
              ROOT / 'scripts/test.sh', Path(__file__).resolve()]
     paths += sorted((ROOT / 'Sources/BlurAction').glob('*.swift'))
+    paths += sorted(path for path in (ROOT / 'Sources/BlurActionMediaSafety').rglob('*') if path.is_file())
     paths += sorted((ROOT / 'Tests/BlurActionTests').glob('*.swift'))
     return {path.relative_to(ROOT).as_posix(): sha(path) for path in paths}
 
