@@ -448,6 +448,70 @@ class OwnedCanonicalAudioProvider:
         return self._tracks[identity]
 
     def read_samples(self, track_id, time, max_samples=4096):
+        """Original-source-verified query; use only in an IO worker."""
+        return self._read_samples(track_id,time,max_samples,verify_hash=True)
+
+    def read_snapshot_samples(self, track_id, time, max_samples=4096):
+        """Completed private PCM snapshot with metadata/generation guards.
+
+        Build requires full original SHA before/after complete decode/EOF/close.
+        These spools are owned, not lazy reads from the original. Playback reads
+        avoid rehashing GB sources per sample block; every query still checks
+        captured original identity before/after, generation and cancellation.
+        Save/export and explicit source verification must revalidate full SHA.
+        NEVER call this disk-reading API in an audio-device or GUI callback.
+        """
+        return self._read_samples(track_id,time,max_samples,verify_hash=False)
+
+    def validate_source(self):
+        """Explicit full SHA transaction, only on an IO worker."""
+        return self._read(lambda:self._guard(hash_source=True))
+
+    def snapshot_anchor(self, track_id, time):
+        """First scheduled sample at/after an arbitrary seek target.
+
+        This reports an actual sample-grid anchor, never modifies project
+        ranges or pretends a fractional PCM sample exists. Empty edits use
+        their declared start/grid; content uses the observed frame's grid.
+        Missing content or a non-aligned empty edit remains a review hold.
+        """
+        def anchor():
+            track=self._track(track_id)
+            if type(time) is not Fraction or not 0<=time<=self._duration:
+                raise CanonicalAudioReview('exact bounded asset seek required')
+            if time==self._duration: return time
+            segment=next(((i,s,e,m) for i,(s,e,m) in enumerate(track.segments) if s<=time<e),None)
+            if segment is None: return time  # Explicit suffix; no content made.
+            segment_id,start,end,media=segment
+            rate=track.format.sample_rate
+            if media is None:
+                if ((end-start)*rate).denominator!=1:
+                    raise CanonicalAudioReview('empty edit is not on an integer PCM sample grid')
+                units=(time-start)*rate
+                return min(end,start+Fraction(-(-units.numerator//units.denominator),rate))
+            lo,hi=0,track.count
+            while lo<hi:
+                middle=(lo+hi)//2
+                if self._record(track,middle).pts<=time: lo=middle+1
+                else: hi=middle
+            if lo==0: raise CanonicalAudioReview('content has no observed seek sample')
+            row=self._record(track,lo-1)
+            units=(time-row.pts)*rate
+            index=-(-units.numerator//units.denominator)
+            if row.segment_index!=segment_id or index<row.clip_first:
+                raise CanonicalAudioReview('content seek lacks observed PCM presence')
+            if index<row.clip_stop: return row.pts+Fraction(index,rate)
+            boundary=row.pts+Fraction(row.clip_stop,rate)
+            if boundary==end: return boundary
+            if lo>=track.count: raise CanonicalAudioReview('content seek passes complete PCM EOF')
+            following=self._record(track,lo)
+            next_start=following.pts+Fraction(following.clip_first,rate)
+            if following.segment_index!=segment_id or next_start!=boundary:
+                raise CanonicalAudioReview('content seek crosses unobserved PCM')
+            return next_start
+        return self._read(anchor)
+
+    def _read_samples(self, track_id, time, max_samples, *, verify_hash):
         """Read at most one observed frame, <=1MiB, at exact sample boundary.
 
         Silence tags have zero samples/planes; consumers schedule the explicit
@@ -470,7 +534,7 @@ class OwnedCanonicalAudioProvider:
             if kind != 'content':
                 return CanonicalPCM(kind,track_id,time,start,end,None,None,None,0,track.format,(),
                                     self._sha,self._descriptor_sha,self._generation)
-            self._guard(hash_source=True)
+            self._guard(hash_source=verify_hash)
             lo,hi = 0,track.count
             while lo < hi:
                 middle = (lo+hi)//2
@@ -497,7 +561,7 @@ class OwnedCanonicalAudioProvider:
                 data = track.pcm.read(samples*stride)
                 if len(data) != samples*stride: raise CanonicalAudioReview('private PCM data truncated')
                 planes.append(data)
-            self._guard(hash_source=True)
+            self._guard(hash_source=verify_hash)
             return CanonicalPCM('content',track_id,time,time,time+Fraction(samples,track.format.sample_rate),
                 observation.pts,index,first,samples,track.format,tuple(planes),
                 self._sha,self._descriptor_sha,self._generation)

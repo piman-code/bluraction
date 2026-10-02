@@ -22,6 +22,32 @@ class PreviewRequest:
     cancel: threading.Event = field(default_factory=threading.Event)
 
 
+@dataclass
+class ValueRequest:
+    context: object
+    task: object
+    cancel: threading.Event = field(default_factory=threading.Event)
+
+
+class _ValueWorker(QObject):
+    finished = Signal(object)
+
+    def __init__(self, request):
+        super().__init__()
+        self.request = request
+
+    @Slot()
+    def run(self):
+        request = self.request
+        try:
+            check_cancel(request.cancel.is_set)
+            value = request.task(request.cancel.is_set)
+            check_cancel(request.cancel.is_set)
+            self.finished.emit((request, value, None))
+        except Exception as error:
+            self.finished.emit((request, None, error))
+
+
 class _Worker(QObject):
     finished = Signal(object)
 
@@ -115,3 +141,23 @@ class PreviewQueue(QObject):
             self._start(pending)
         elif self.active is None:
             self.idle.emit()
+
+
+class ValueQueue(PreviewQueue):
+    """Same GUI-affine bounded coordinator for PCM IO value transactions.
+
+    Tasks receive cancellation and cannot touch widgets/devices. Native RPC
+    deadlines belong to the owned media session, not a QThread termination.
+    """
+    def _start(self, request):
+        self.active, self._result = request, None
+        thread, worker = QThread(self), _ValueWorker(request)
+        self._thread, self._worker = thread, worker
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._received, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(self._stopped, Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()

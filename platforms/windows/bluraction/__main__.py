@@ -1,4 +1,10 @@
 """Run from the repository root: python -m platforms.windows.bluraction."""
+import multiprocessing
+
+# Frozen child dispatch must run before Qt/application imports.
+if __name__ == '__main__':
+    multiprocessing.freeze_support()
+
 from pathlib import Path
 import sys
 

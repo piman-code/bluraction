@@ -358,6 +358,133 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(tree['regions'][0]['effect']['erasures'][0]['from'], .1)
         self.workspace.video = None
 
+    def asset_source(self):
+        """Synthetic exact asset interface; real decoder/device proof is separate."""
+        from types import SimpleNamespace
+        from platforms.windows.bluraction.video import TimedImage
+        source=self.source
+        class Source:
+            duration=float(Fraction(19,12))
+            first_frame_time=Fraction(1,12)
+            origin=Fraction(0)
+            closed=False
+            def __init__(self):
+                self.asset_session=SimpleNamespace(duration=Fraction(19,12),metadata={'audioTracks':()})
+            def _guard(self):
+                if self.closed: raise ValueError('source closed')
+            def frame_at_timed(self,seconds,cancel=None):
+                from platforms.windows.bluraction.media import check_cancel
+                check_cancel(cancel); self._guard()
+                stamp=Fraction(1,12) if seconds<Fraction(7,12) else Fraction(7,12)
+                image=QImage(160,100,QImage.Format.Format_RGBA8888); image.fill(QColor('white'))
+                return TimedImage(stamp,image)
+            def validate(self,cancel=None): fingerprint(source,cancel=cancel)
+            def close_asset_transport(self):
+                self.closed=True; self.asset_session=None
+        return Source()
+
+    def test_asset_preview_uses_exact_vfr_pts_for_creation_eraser_save_and_ignores_native_clock(self):
+        from platforms.windows.bluraction import renderer
+        self.workspace.video=self.asset_source()
+        self.workspace.time=float(Fraction(1,12))
+        with patch('platforms.windows.bluraction.ui.QMediaPlayer.setSource') as native:
+            self.window.refresh(); self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+            self.assertTrue(all(call.args[0].isEmpty() for call in native.call_args_list))
+            self.window.seek_video(.11); self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        self.assertEqual(self.window._transport_time,.11)
+        self.assertEqual(self.workspace.time,float(Fraction(1,12)))
+        self.assertEqual(self.window.canvas.time,self.workspace.time)
+        self.window.playback_position_changed(900)
+        self.assertEqual(self.window._transport_time,.11)
+        self.window.style.setCurrentIndex(self.window.style.findData('solid'))
+        self.window.feather.setValue(0)
+        self.window.create_item('cover_rectangle',[[.1,.1],[.9,.9]])
+        self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        region=self.workspace.page.state['regions'][0]
+        self.assertEqual(region['effect']['timeRange'],[float(Fraction(1,12)),float(Fraction(19,12))])
+        self.assertEqual(self.window.canvas._preview.pixelColor(80,50),QColor('black'))
+        self.window.erase_from_now.setChecked(True)
+        self.window.erase_points([[.4,.5],[.6,.5]])
+        self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        self.assertEqual(region['effect']['erasures'][0]['from'],float(Fraction(1,12)))
+        destination=Path(self.temp.name)/'canonical-asset-presentation.bluraction'
+        self.workspace.save_project(destination)
+        tree=json.loads(destination.read_text())
+        self.assertEqual(tree['regions'][0]['effect'],region['effect'])
+        self.window.seek_video(.8); self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        self.assertEqual(self.workspace.time,float(Fraction(7,12)))
+        self.assertEqual(self.window.canvas.time,float(Fraction(7,12)))
+        # Same exact->Double conversion drives preview and export rendering.
+        expected=renderer.render(self.window.canvas.image,self.workspace.page.state,float(Fraction(7,12)))
+        self.assertEqual(bytes(expected.constBits()),bytes(self.window.canvas._preview.constBits()))
+
+    def test_asset_play_pending_cancel_is_processed_before_busy_preview_and_old_seek_is_stale(self):
+        self.workspace.video=self.asset_source(); self.workspace.time=float(Fraction(1,12))
+        self.window.refresh(); self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        entered,release=threading.Event(),threading.Event()
+        original=self.workspace.video.frame_at_timed
+        def slow(seconds,cancel=None):
+            entered.set(); release.wait(3)
+            return original(seconds,cancel)
+        with patch.object(self.workspace.video,'frame_at_timed',side_effect=slow):
+            self.window.seek_video(.8,resume=True); self.spin_until(entered.is_set)
+            try:
+                self.assertTrue(self.window.canvas.preview_pending)
+                QTest.mouseClick(self.window.play_button,Qt.MouseButton.LeftButton)
+                self.assertFalse(self.window._play_after_seek)
+                self.assertFalse(self.window._asset_clock.playing)
+                self.window.seek_video(.11)
+            finally: release.set()
+            self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        self.assertEqual(self.workspace.time,float(Fraction(1,12)))
+        self.assertEqual(self.window._transport_time,.11)
+        self.assertFalse(self.window._asset_clock.playing)
+        self.assertFalse(self.window._asset_timer.isActive())
+
+    def test_asset_preparation_hold_preserves_dirty_image_layers_history_and_source(self):
+        from platforms.windows.bluraction.canonical_transport import TransportReview
+        paths,base=self.fake_video_sources()
+        closed=[]
+        class HeldSource(base):
+            def enable_asset_transport(self,cancel=None): raise TransportReview('actual asset descriptor not proven')
+            def close_asset_transport(self): closed.append(self.source)
+        self.workspace.add_cover('rectangle',[[.1,.1],[.5,.5]])
+        self.workspace.add_drawing('line',[[.1,.1],[.9,.9]])
+        self.workspace.undo()
+        before=(self.workspace.page,deepcopy(self.workspace.page.state),deepcopy(self.workspace._undo),
+                deepcopy(self.workspace._redo),set(self.workspace.selection_ids),self.window._video_generation)
+        with patch('platforms.windows.bluraction.video.VideoSource',HeldSource), \
+             patch.object(self.window,'confirm_discard',return_value=True):
+            self.window.open_paths([paths[0]]); self.wait_for_operation()
+        self.assertIs(self.workspace.page,before[0]); self.assertIsNone(self.workspace.video)
+        self.assertEqual((self.workspace.page.state,self.workspace._undo,self.workspace._redo,
+                          self.workspace.selection_ids,self.window._video_generation),before[1:])
+        self.assertTrue(self.workspace.dirty); self.assertEqual(closed,[paths[0]])
+        self.assertEqual(self.source.read_bytes(),self.original)
+        self.warning.assert_called_once(); self.warning.reset_mock()
+
+    def test_borrowed_asset_candidate_failure_does_not_close_operating_session(self):
+        from platforms.windows.bluraction.canonical_transport import TransportReview
+        source=self.asset_source(); self.workspace.video=source
+        self.workspace.time=float(Fraction(1,12))
+        self.workspace.add_drawing('line',[[.1,.1],[.8,.8]])
+        self.window.refresh(); self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
+        snapshot=self.workspace.clone_for_io()
+        before=(self.workspace.page,deepcopy(self.workspace.page.state),deepcopy(self.workspace._undo),
+                set(self.workspace.selection_ids),self.workspace.time)
+        def prepare(candidate,cancel):
+            candidate.__dict__.update(snapshot.__dict__)
+            raise TransportReview('borrowed page preparation failed')
+        self.window._prepare_workspace(prepare,None)
+        self.wait_for_operation()
+        self.assertIs(self.workspace.video,source); self.assertFalse(source.closed)
+        self.assertIsNotNone(source.asset_session)
+        self.assertIs(self.workspace.page,before[0])
+        self.assertEqual((self.workspace.page.state,self.workspace._undo,self.workspace.selection_ids,
+                          self.workspace.time),before[1:])
+        self.assertTrue(self.workspace.dirty)
+        self.warning.assert_called_once(); self.warning.reset_mock()
+
     def test_candidate_first_render_failure_preserves_old_dirty_session(self):
         self.workspace.add_drawing('line', [[.1, .1], [.9, .9]])
         self.window.refresh()

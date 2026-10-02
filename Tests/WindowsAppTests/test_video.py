@@ -32,6 +32,99 @@ HAS_NUMPY = importlib.util.find_spec('numpy') is not None
 PTS = [2000, 2040, 2130, 2200, 2430]
 
 
+class AssetTransportInterfaceTests(unittest.TestCase):
+    """Exact source/UI bridge controls; actual native provider QA is separate."""
+    def source(self,folder):
+        path=Path(folder)/'owned-synthetic.mov'; path.write_bytes(b'owned synthetic metadata')
+        source=object.__new__(video.VideoSource)
+        source.path=path; source.source_sha256=fingerprint(path)
+        source.origin=Fraction(1,10); source.duration=.8; source.first_frame_time=0
+        source._first_image=video.to_qimage(Image.new('RGB',(3,2),'white'))
+        source._guard=lambda:None
+        return source
+
+    def test_opt_in_full_asset_duration_preserves_legacy_origin_and_exact_pts_pixels(self):
+        class Session:
+            duration=Fraction(3,2); first_time=Fraction(1,12)
+            def __init__(self,*args,**kwargs): pass
+            def frame(self,target,cancel=None):
+                return dict(presence='content',time=Fraction(1,12),width=3,height=2,
+                            intervalEnd=Fraction(7,12)),(bytes([19,32,67,255])*6,)
+            def validate(self,cancel=None): pass
+            def close(self): pass
+        with tempfile.TemporaryDirectory() as folder:
+            source=self.source(folder); before=source.path.read_bytes()
+            with patch.object(source,'validate') as original_validation, \
+                 patch('platforms.windows.bluraction.canonical_transport.CanonicalSession',Session):
+                self.assertTrue(source.enable_asset_transport())
+                original_validation.assert_called_once()
+            self.assertEqual(source.origin,Fraction(1,10))
+            self.assertEqual(source.duration,1.5)
+            shown=source.frame_at_timed(.1)
+            self.assertEqual(shown.time,Fraction(1,12))
+            self.assertEqual(shown.image.pixelColor(1,1).getRgb(),(19,32,67,255))
+            self.assertEqual(source.render_time(Fraction(1,12)),Fraction(1,12))
+            self.assertEqual(source.path.read_bytes(),before)
+
+    def test_desktop_constructor_context_uses_owned_process_before_any_parent_native_decode(self):
+        class Session:
+            duration=Fraction(3,2); first_time=Fraction(1,12)
+            metadata={'decoder':dict(streamIndex=0,timeBase=Fraction(1,12),sar=Fraction(1),metadata={},
+                averageRate=Fraction(12),audioCodecs=(),legacyOrigin=Fraction(1,12),videoEnd=Fraction(7,12))}
+            validations=0
+            def __init__(self,*args,**kwargs): pass
+            def frame(self,*args):
+                return dict(presence='content',time=self.first_time,width=3,height=2), (b'\x11\x22\x33\xff'*6,)
+            def validate(self,cancel=None): self.validations+=1
+            def close(self): pass
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'owned.mov'; path.write_bytes(b'controlled native boundary')
+            with patch('platforms.windows.bluraction.canonical_transport.CanonicalSession',Session), \
+                 patch.object(video,'_av',side_effect=AssertionError('unbounded parent decode attempted')):
+                with video.asset_transport_load(): source=video.VideoSource(path)
+            self.assertEqual(source.duration,1.5)
+            self.assertEqual(source.first_frame_time,Fraction(1,12))
+            self.assertEqual(source.origin,Fraction(1,12))
+            self.assertGreaterEqual(source.asset_session.validations,1)
+            self.assertEqual(source.page().image.pixelColor(1,1).getRgb(),(17,34,51,255))
+
+    def test_failed_candidate_pixels_do_not_commit_new_duration_or_session(self):
+        candidates=[]
+        class BadSession:
+            duration=Fraction(3,2); first_time=Fraction(1,12); closed=False
+            def __init__(self,*args,**kwargs): candidates.append(self)
+            def frame(self,*args): return dict(presence='content',width=3,height=2,time=Fraction(1,12)),(b'bad',)
+            def close(self): self.closed=True
+        with tempfile.TemporaryDirectory() as folder:
+            source=self.source(folder); before=bytes(source._first_image.constBits())
+            with patch.object(source,'validate'), \
+                 patch('platforms.windows.bluraction.canonical_transport.CanonicalSession',BadSession):
+                with self.assertRaises(video.VideoError): source.enable_asset_transport()
+            self.assertFalse(hasattr(source,'asset_session')); self.assertEqual(source.duration,.8)
+            self.assertTrue(candidates[0].closed)
+            self.assertEqual(bytes(source._first_image.constBits()),before)
+
+    def test_explicit_absence_keeps_requested_asset_time_and_full_source_validation_is_separate(self):
+        calls=[]
+        class Session:
+            duration=Fraction(3,2)
+            def frame(self,target,cancel=None):
+                return dict(presence='empty',time=None,intervalEnd=Fraction(1,2)),()
+            def validate(self,cancel=None): calls.append('full-source')
+        with tempfile.TemporaryDirectory() as folder:
+            source=self.source(folder); source.asset_session=Session()
+            shown=source.frame_at_timed(Fraction(1,10))
+            self.assertEqual((shown.time,shown.presence,shown.interval_end),
+                             (Fraction(1,10),'empty',Fraction(1,2)))
+            self.assertEqual(shown.image.pixelColor(1,1).alpha(),0)
+            self.assertEqual(calls,[])
+            # Use production full-SHA validate with a captured real identity.
+            from platforms.windows.bluraction.media import _capture_identity
+            source._source_identity=_capture_identity(source.path)
+            source.validate()
+            self.assertEqual(calls,['full-source'])
+
+
 class DisplayMatrixPolicyTests(unittest.TestCase):
     """Mapping-shaped policy seams; actual decoded rotation is tested below."""
 

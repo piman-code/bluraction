@@ -17,6 +17,8 @@ https://docs.opencv.org/4.x/d2/da2/classcv_1_1TrackerCSRT.html
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from fractions import Fraction
 import math
@@ -36,6 +38,53 @@ from .renderer import bounds, positioned, render, shape_points, to_pillow, to_qi
 
 class VideoError(ValueError):
     pass
+
+
+_ASSET_LOAD=ContextVar('bluraction_owned_asset_load',default=False)
+_ASSET_CREATED=ContextVar('bluraction_owned_asset_created',default=None)
+
+
+@contextmanager
+def asset_transport_load():
+    """Desktop prepare-worker opt-in, before ANY native constructor decode.
+
+    Scoped to this worker/context; direct decoder/legacy test callers retain
+    their API. No global process setting or native-player timestamp inference.
+    """
+    token=_ASSET_LOAD.set(True)
+    outer=_ASSET_CREATED.get()
+    created=[]
+    created_token=_ASSET_CREATED.set(created)
+    try:
+        yield
+    except BaseException as primary:
+        # Only successful constructors in THIS transaction are registered.
+        # A candidate can fail before Workspace._replace has assigned video;
+        # retaining it in the context closes that otherwise invisible owner.
+        # Borrowed operating VideoSources are never registered or closed here.
+        failed=[]
+        for source in reversed(created):
+            session=getattr(source,'asset_session',None)
+            if session is None: continue
+            try: session.close()
+            except BaseException as cleanup:
+                if cleanup is not primary:
+                    primary.add_note(f'unadopted asset source cleanup also failed: {cleanup!r}')
+                    primary.__cause__=cleanup
+                failed.append(session)
+            else: source.asset_session=None
+        if failed:
+            def retry():
+                for session in tuple(failed):
+                    session.close()
+                    failed.remove(session)
+            primary.retry_transport_close=retry
+        raise
+    else:
+        if outer is not None: outer.extend(created)
+    finally:
+        _ASSET_CREATED.reset(created_token)
+        _ASSET_LOAD.reset(token)
 
 
 class TrackingLost(VideoError):
@@ -79,6 +128,47 @@ def _signature(path):
     return (str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+PIXEL_CONTRACT_V2 = 'opaque-yuv420p-accurate-rgb24-v2'
+LEGACY_PIXEL_CONTRACT = 'legacy-to-image-rgb-unverified'
+
+
+def pixel_contract(frame):
+    """Only opaque8-bit yuv420p has this two-host RGB byte contract.
+
+    Other formats retain the existing conversion. Their alpha/color/HDR parity
+    remains separate work, not a declaration of support exclusion. Known HDR
+    never receives this SDR contract; provider HDR holds remain unchanged.
+    """
+    supported = (getattr(getattr(frame, 'format', None), 'name', None) == 'yuv420p'
+                 and getattr(frame, 'color_trc', None) not in (16, 18))
+    return PIXEL_CONTRACT_V2 if supported else LEGACY_PIXEL_CONTRACT
+
+
+def _decoded_pixel_image(frame):
+    if pixel_contract(frame) != PIXEL_CONTRACT_V2:
+        return frame.to_image().convert('RGB')
+    from av.video.reformatter import Interpolation, VideoReformatter
+    width, height = frame.width, frame.height
+    if (type(width) is not int or type(height) is not int or not 0 < width <= 16384
+            or not 0 < height <= 16384 or width * height > 33_177_600):
+        raise VideoError('영상 표시 해상도가 지원 범위를 넘습니다.')
+    # Native color metadata stays unchanged. No CPU/global setting or tag
+    # rewrite. BOTH precise flags accompany the existing bilinear conversion.
+    rgb = VideoReformatter().reformat(frame, format='rgb24',
+        interpolation=Interpolation.BILINEAR | Interpolation.BITEXACT | Interpolation.ACCURATE_RND)
+    if rgb.format.name != 'rgb24' or (rgb.width, rgb.height) != (width, height) or len(rgb.planes) != 1:
+        raise VideoError('정확 RGB24 변환 결과의 형식이나 크기가 변경되었습니다.')
+    plane = rgb.planes[0]
+    stride = plane.line_size
+    if type(stride) is not int or stride < width * 3:
+        raise VideoError('RGB24 행 크기가 올바르지 않습니다.')
+    raw = bytes(plane)
+    if len(raw) < stride * height:
+        raise VideoError('RGB24 변환 결과가 잘렸습니다.')
+    tight = b''.join(raw[y * stride:y * stride + width * 3] for y in range(height))
+    return Image.frombytes('RGB', (width, height), tight)
+
+
 def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
     """Decode raw pixels; normalize SAR and display rotation exactly once.
 
@@ -115,7 +205,7 @@ def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
             raise VideoError('영상 회전 정보를 해석할 수 없습니다.') from error
     if not math.isfinite(angle) or abs(angle / 90 - round(angle / 90)) > .00001:
         raise VideoError('직각 이외 회전은 표시 위치 검토가 필요합니다.')
-    image = frame.to_image().convert('RGB')
+    image = _decoded_pixel_image(frame)
     if sample_aspect_ratio <= 0:
         raise VideoError('영상 화소의 종횡비가 올바르지 않습니다.')
     width = round(image.width * sample_aspect_ratio)
@@ -133,6 +223,8 @@ def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
 class TimedImage:
     time: Fraction
     image: QImage
+    presence: str = 'content'
+    interval_end: Fraction | None = None
 
 
 class VideoSource:
@@ -146,6 +238,11 @@ class VideoSource:
         # bounded by the original captured size and reject any growth/change.
         self.source_sha256 = fingerprint(self.path, max_bytes=self._source_identity.metadata[3], cancel=cancel)
         check_cancel(cancel)
+        if _ASSET_LOAD.get() and self.path.suffix.lower() in ('.mov','.mp4','.m4v'):
+            self._load_owned_asset(cancel)
+            created=_ASSET_CREATED.get()
+            if created is not None: created.append(self)
+            return
         av = _av()
         with av.open(str(self.path)) as container:
             videos = list(container.streams.video)
@@ -203,7 +300,41 @@ class VideoSource:
             self._first_image = _display_image(first, self.sample_aspect_ratio, self.metadata)
         self.validate(cancel)
 
+    def _load_owned_asset(self,cancel):
+        from .canonical_transport import CanonicalSession
+        candidate=CanonicalSession(self.path,self.source_sha256,cancel=cancel)
+        try:
+            meta=candidate.metadata['decoder']
+            if (type(meta['timeBase']) is not Fraction or meta['timeBase']<=0
+                    or type(meta['sar']) is not Fraction or meta['sar']<=0
+                    or type(meta['legacyOrigin']) is not Fraction):
+                raise VideoError('완료된 asset decoder metadata 검토가 필요합니다.')
+            pixels,buffers=candidate.frame(candidate.first_time,cancel)
+            image=self._asset_image(pixels,buffers)
+            if pixels['presence']!='content' or image.isNull():
+                raise VideoError('첫 실제 asset 프레임을 준비하지 못했습니다.')
+            self._guard(); check_cancel(cancel)
+            self.stream_index=meta['streamIndex']; self.time_base=meta['timeBase']
+            self.sample_aspect_ratio=meta['sar']; self.metadata=dict(meta['metadata'])
+            self.average_rate=meta['averageRate']; self.audio_codecs=meta['audioCodecs']
+            self.origin=meta['legacyOrigin']  # v1 compatibility hold ONLY.
+            self.video_end=meta['videoEnd']; self.asset_duration=candidate.duration
+            self.duration=float(candidate.duration); self.first_frame_time=candidate.first_time
+            self._first_image=image; self.asset_session=candidate
+            self.validate(cancel)
+        except BaseException as primary:
+            self.asset_session=None
+            try: candidate.close()
+            except BaseException as cleanup:
+                if cleanup is not primary:
+                    primary.add_note(f'owned source load cleanup also failed: {cleanup!r}')
+                    primary.__cause__=cleanup
+                primary.retry_transport_close=candidate.close
+            raise
+
     def _guard(self):
+        if getattr(getattr(self,'asset_session',None),'_closed',False):
+            raise VideoError('asset 디코더 세션이 무효화되었습니다. 원본을 다시 열어 주세요.')
         try:
             _check_identity(self.path, self._source_identity)
         except ValueError as error:
@@ -218,10 +349,64 @@ class VideoSource:
             raise VideoError('원본 영상 지문이 바뀌었습니다. 기존 편집을 자동 적용하지 않습니다.')
         self._guard()
         check_cancel(cancel)
+        session=getattr(self,'asset_session',None)
+        if session is not None: session.validate(cancel)
 
     def page(self):
         self._guard()
         return Page(self.path, self.source_sha256, self._first_image.copy(), source_identity=self._source_identity)
+
+    def enable_asset_transport(self, cancel=None):
+        """UI load-worker transaction; preserve the legacy origin/save guard.
+
+        Standalone decoder callers retain their existing API. The desktop opts
+        into the verified MOV descriptor/complete EOF provider before commit.
+        No v3 project binding or legacy producer is invented here.
+        """
+        if self.path.suffix.lower() not in ('.mov', '.mp4', '.m4v'):
+            return False  # Existing other formats continue their explicit path.
+        if getattr(self, 'asset_session', None) is not None: return True
+        from .canonical_transport import CanonicalSession
+        self.validate(cancel)
+        candidate=CanonicalSession(self.path,self.source_sha256,cancel=cancel)
+        try:
+            metadata,buffers=candidate.frame(candidate.first_time,cancel)
+            image=self._asset_image(metadata,buffers)
+            if metadata['presence']!='content' or image.isNull():
+                raise VideoError('asset 첫 실제 프레임을 확인하지 못했습니다.')
+            self._guard(); check_cancel(cancel)
+        except BaseException as primary:
+            try: candidate.close()
+            except BaseException as cleanup:
+                if cleanup is not primary:
+                    primary.add_note(f'asset candidate cleanup also failed: {cleanup!r}')
+                    primary.__cause__=cleanup
+                primary.retry_transport_close=candidate.close
+            raise
+        self.asset_session=candidate
+        self.asset_duration=candidate.duration
+        self.duration=float(candidate.duration)
+        self.first_frame_time=candidate.first_time
+        self._first_image=image
+        return True
+
+    @staticmethod
+    def _asset_image(metadata,buffers):
+        if metadata['presence']!='content': return QImage()
+        width,height=metadata.get('width'),metadata.get('height')
+        if (type(width) is not int or type(height) is not int or not 0<width<=16384 or
+                not 0<height<=16384 or width*height>33_177_600 or len(buffers)!=1 or
+                len(buffers[0])!=width*height*4):
+            raise VideoError('asset 프레임의 실제 크기 또는 pixel bytes가 올바르지 않습니다.')
+        return QImage(buffers[0],width,height,width*4,QImage.Format.Format_RGBA8888).copy()
+
+    def close_asset_transport(self):
+        session=getattr(self,'asset_session',None)
+        self.asset_session=None
+        if session is not None: session.close_async()
+
+    def render_time(self, stamp):
+        return stamp if getattr(self,'asset_session',None) is not None else stamp-self.origin
 
     def frame_at(self, time, cancel=None):
         """Backwards-compatible image-only wrapper; new previews use actual PTS."""
@@ -229,6 +414,22 @@ class VideoSource:
 
     def frame_at_timed(self, time, cancel=None):
         """Frame displayed at time: hold preceding actual PTS, not nearest frame/FPS."""
+        session=getattr(self,'asset_session',None)
+        if session is not None:
+            from .canonical_transport import exact_time
+            stamp=exact_time(time)
+            if stamp>session.duration: raise VideoError('asset 영상 구간 밖입니다.')
+            self._guard()
+            metadata,buffers=session.frame(stamp,cancel)
+            image=self._asset_image(metadata,buffers)
+            if metadata['presence']!='content':
+                # Explicit absence, NOT a decoded frame or a guessed held image.
+                # The canvas shows its normal blank background at asset time.
+                image=QImage(self._first_image.size(),QImage.Format.Format_RGBA8888)
+                image.fill(0)
+            self._guard(); check_cancel(cancel)
+            return TimedImage(metadata['time'] if metadata['time'] is not None else stamp,
+                              image,metadata['presence'],metadata.get('intervalEnd'))
         if not math.isfinite(time):
             raise VideoError('재생 시각이 올바르지 않습니다.')
         target = self.origin + Fraction(str(max(0, min(self.duration, time))))
@@ -298,7 +499,7 @@ class VideoSource:
                 if previous is not None and stamp <= previous:
                     raise VideoError('영상 프레임 PTS가 증가하지 않습니다.')
                 previous = stamp
-                time = stamp - self.origin
+                time = self.render_time(stamp)
                 if time > Fraction(str(end)):
                     break
                 if time >= Fraction(str(start)):
@@ -352,7 +553,7 @@ def export_video(source, state, path, cancel=None, progress=None):
             reported = 0.0
             def report(stamp):
                 nonlocal reported
-                reported = max(reported, min(.98, max(0, float(stamp - source.origin) / source.duration)))
+                reported = max(reported, min(.98, max(0, float(source.render_time(stamp)) / source.duration)))
                 if progress:
                     progress(reported)
                 check_cancel(cancel)
@@ -376,7 +577,7 @@ def export_video(source, state, path, cancel=None, progress=None):
                 if duration <= 0:
                     raise VideoError('원래 프레임의 길이를 보존할 수 없습니다.')
                 image = _display_image(frame, source.sample_aspect_ratio, source.metadata)
-                flattened = render(image, state, time=float(stamp - source.origin))
+                flattened = render(image, state, time=float(source.render_time(stamp)))
                 converted = av.VideoFrame.from_image(to_pillow(flattened).convert('RGB'))
                 converted.pts, converted.time_base = frame.pts, frame.time_base
                 converted.duration = max(1, round(duration / frame.time_base))

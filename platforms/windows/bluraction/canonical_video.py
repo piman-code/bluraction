@@ -10,6 +10,10 @@ handles, one cached normalized image and at most one live decoded frame. Caller
 retains path authorization, source-policy evidence and a native decode deadline.
 All decoder opens use captured, bounded descriptors; no pathname is given to
 the pixel decoder. Exact Fractions are never converted to an inferred origin.
+
+The shared display converter uses pixel-contract-v2 accurate RGB24 only for
+opaque8-bit yuv420p. Other formats retain legacy/unverified conversion. Existing
+HDR/high-depth/SAR/matrix holds stay in force; this is not all-format parity.
 """
 from __future__ import annotations
 

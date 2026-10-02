@@ -10,10 +10,12 @@ from pathlib import Path
 import threading
 import math
 import weakref
+from fractions import Fraction
+import time as transport_time
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QUrl, Signal, Slot, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontDatabase, QFontInfo, QImage, QKeySequence, QPainter, QPen, QTransform
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat, QMediaDevices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox,
     QAbstractItemView, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
@@ -23,7 +25,8 @@ from PySide6.QtWidgets import (
 
 from . import renderer
 from .media import Cancelled, Page, export_documents, export_image, safe_stem
-from .preview_worker import PreviewQueue, PreviewRequest
+from .preview_worker import PreviewQueue, PreviewRequest, ValueQueue, ValueRequest
+from .canonical_transport import AssetClock, PCMBuffer, PCMPlaybackPlan, TransportReview, exact_time
 
 
 TOOLS = (
@@ -389,6 +392,127 @@ class _OperationReceiver(QObject):
             window.operation_stopped()
 
 
+class _AssetAudio(QObject):
+    """GUI device owner; only bounded completed-spool jobs run off thread.
+
+    QAudioSink push mode copies already prepared bytes into its native buffer.
+    There is no Python device callback, native decode, hash or source IO here.
+    https://doc.qt.io/qt-6/qaudiosink.html#start
+    """
+    started = Signal(object)
+    ended = Signal(object)
+    failed = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.queue=ValueQueue(self)
+        self.queue.completed.connect(self._completed)
+        self.timer=QTimer(self); self.timer.setInterval(20)
+        self.timer.timeout.connect(self._tick)
+        self.buffer=PCMBuffer(262144)
+        self.epoch=0; self.wanted=False; self.sink=None; self.output=None
+        self.plan=None; self._pending=b''; self._finished=False; self._written=0
+        self._active_seen=False
+
+    def stop(self):
+        self.epoch+=1; self.wanted=False; self.timer.stop()
+        self.queue.discard_pending(cancel_active=True)
+        self.buffer.reset(); self._pending=b''; self.plan=None
+        if self.sink is not None:
+            self.sink.reset(); self.sink.deleteLater()
+        self.sink=self.output=None
+
+    def start(self, session, target, volume=1.0):
+        self.stop(); self.wanted=True; self.volume=volume
+        epoch=self.epoch
+        def prepare(cancel):
+            plan=PCMPlaybackPlan(session,target,cancel)
+            data,next_time,finished=plan.next_block(cancel)
+            return plan,data,next_time,finished
+        self.queue.submit(ValueRequest(epoch,prepare))
+
+    def shutdown(self):
+        self.stop(); self.queue.shutdown()
+
+    @property
+    def running(self): return self.sink is not None and self.wanted
+
+    def position(self):
+        if not self.running: return None
+        return min(self.plan.cursor,self.plan.anchor+Fraction(self.sink.processedUSecs(),1_000_000))
+
+    @Slot(object)
+    def _completed(self, result):
+        request,value,error=result
+        if request.context!=self.epoch or not self.wanted: return
+        if error is not None:
+            self.stop(); self.failed.emit(error); return
+        plan,data,next_time,finished=value
+        first=self.plan is None
+        self.plan=plan; self._finished=finished
+        self.buffer.append(self.buffer.epoch,data)
+        if first:
+            if finished and not data:
+                position=plan.anchor; self.stop(); self.ended.emit(position); return
+            fmt=QAudioFormat()
+            names={'u8':QAudioFormat.SampleFormat.UInt8,'s16':QAudioFormat.SampleFormat.Int16,
+                   's32':QAudioFormat.SampleFormat.Int32,'flt':QAudioFormat.SampleFormat.Float}
+            fmt.setSampleRate(plan.format['sample_rate'])
+            fmt.setChannelCount(len(plan.format['channels']))
+            fmt.setSampleFormat(names[plan.format['name'].removesuffix('p')])
+            device=QMediaDevices.defaultAudioOutput()
+            if device.isNull() or not device.isFormatSupported(fmt):
+                self.stop(); self.failed.emit(TransportReview('장치에서 이 정확 PCM 형식의 재생을 지원하지 않습니다.')); return
+            self.sink=QAudioSink(device,fmt,self)
+            self.sink.stateChanged.connect(self._device_state)
+            self.sink.setVolume(self.volume)
+            self.sink.setBufferSize(min(262144,plan.format['sample_rate']*fmt.bytesPerFrame()//2))
+            self.output=self.sink.start()
+            if self.output is None or self.sink.error().value!=0:
+                self.stop(); self.failed.emit(TransportReview('오디오 출력 장치를 시작하지 못했습니다.')); return
+            self._written=0; self._device_deadline=transport_time.monotonic()+5
+            self._active_seen=False
+            self._tick()
+            if self.running:
+                self.timer.start(); self.started.emit(plan.anchor)
+        self._prefetch()
+
+    def _prefetch(self):
+        if not self.wanted or self._finished or self.queue.busy or self.buffer.size()>=131072: return
+        plan,epoch=self.plan,self.epoch
+        def read(cancel):
+            data,next_time,finished=plan.next_block(cancel)
+            return plan,data,next_time,finished
+        self.queue.submit(ValueRequest(epoch,read))
+
+    @Slot(object)
+    def _device_state(self,state):
+        if state.name=='ActiveState': self._active_seen=True
+
+    @Slot()
+    def _tick(self):
+        if not self.running: return
+        if self.sink.error().value!=0:
+            self.stop(); self.failed.emit(TransportReview('오디오 장치 오류로 재생을 멈췄습니다.')); return
+        if not self._active_seen and transport_time.monotonic()>self._device_deadline:
+            self.stop(); self.failed.emit(TransportReview('오디오 장치가 제한 시간 안에 PCM 재생을 시작하지 않았습니다.')); return
+        free=self.sink.bytesFree()
+        if free>0:
+            if not self._pending: self._pending=self.buffer.read(min(free,65536))
+            if self._pending:
+                written=self.output.write(self._pending[:free])
+                if written<0:
+                    self.stop(); self.failed.emit(TransportReview('PCM 장치 쓰기에 실패했습니다.')); return
+                self._written+=written; self._pending=self._pending[written:]
+        idle=self.sink.state().name=='IdleState'
+        if self.sink.state().name=='ActiveState': self._active_seen=True
+        if idle and self._active_seen and not self._pending and self.buffer.size()==0 and self._written:
+            if self._finished:
+                end=self.plan.cursor; self.stop(); self.ended.emit(end); return
+            self.stop(); self.failed.emit(TransportReview('PCM 준비가 재생을 따라가지 못해 멈췄습니다. 원본 내용 대신 무음을 만들지 않습니다.')); return
+        self._prefetch()
+
+
 class BlurActionWindow(QMainWindow):
     def __init__(self, workspace=None):
         super().__init__()
@@ -424,6 +548,15 @@ class BlurActionWindow(QMainWindow):
         self._native_seek_sent = False
         self._deferred_operation = None
         self._closing = False
+        self._asset_clock = None
+        self._asset_timer = QTimer(self)
+        self._asset_timer.setInterval(30)
+        self._asset_timer.timeout.connect(self._asset_tick)
+        self._asset_audio = _AssetAudio(self)
+        self._asset_audio.started.connect(self._asset_audio_started)
+        self._asset_audio.ended.connect(self._asset_audio_ended)
+        self._asset_audio.failed.connect(self._asset_audio_failed)
+        self._asset_audio.queue.idle.connect(self.preview_idle)
         self._operation_label = '새 파일 저장'
         self.audio = QAudioOutput(self)
         self._create_video_player()
@@ -829,6 +962,8 @@ class BlurActionWindow(QMainWindow):
             return
         # A committed engine source, even at the same path, starts a separate
         # playback pipeline. Queued old sink/player callbacks cannot paint it.
+        previous=self._video_source
+        self._pause_asset()
         self._video_source = video
         self._video_source_path = path
         self._video_image = QImage()
@@ -839,7 +974,67 @@ class BlurActionWindow(QMainWindow):
         self._paused_seek = False
         self._seek_target = None
         self._play_after_seek = False
-        self._replace_video_player(path)
+        session=getattr(video,'asset_session',None)
+        self._asset_clock=AssetClock(session.duration) if session is not None else None
+        if self._asset_clock is not None:
+            self._asset_clock.seek(video.first_frame_time)
+            self._transport_time=float(self._asset_clock.anchor)
+        self._replace_video_player(None if session is not None else path)
+        if previous is not None and previous is not video:
+            close=getattr(previous,'close_asset_transport',None)
+            if close is not None: close()
+
+    def _pause_asset(self):
+        clock=self._asset_clock
+        if clock is not None:
+            position=self._asset_audio.position()
+            if position is None: position=clock.position()
+            clock.seek(min(clock.duration,position))
+            self._transport_time=float(clock.anchor)
+        self._asset_timer.stop(); self._asset_audio.stop()
+
+    @Slot(object)
+    def _asset_audio_started(self,anchor):
+        if self._asset_clock is None or not self._play_after_seek or self._closing: return
+        self._asset_clock.seek(anchor); self._asset_clock.play()
+        self._play_after_seek=False; self._paused_seek=False
+        self._asset_timer.start(); self.play_button.setText('⏸ 일시정지')
+
+    @Slot(object)
+    def _asset_audio_ended(self,position):
+        if self._asset_clock is None or self._closing or self.workspace.busy: return
+        # The track's exact scheduled end is not the video's asset end.
+        self._asset_clock.seek(position); self._asset_clock.play()
+        self._play_after_seek=False; self._paused_seek=False
+        self._asset_timer.start(); self.play_button.setText('⏸ 일시정지')
+
+    @Slot(object)
+    def _asset_audio_failed(self,error):
+        self._play_after_seek=False
+        self._pause_asset()
+        self.play_button.setText('▶ 재생')
+        self.statusBar().showMessage(str(error))
+
+    @Slot()
+    def _asset_tick(self):
+        clock=self._asset_clock
+        if clock is None or not clock.playing or self.workspace.busy or self._closing: return
+        try:
+            self.workspace.video._guard()  # Metadata only; source SHA stays in IO transactions.
+            position=self._asset_audio.position()
+            if position is None: position=clock.position()
+            position=min(clock.duration,position)
+            self._transport_time=float(position)
+            if not self.scrubber.isSliderDown(): self.scrubber.setValue(round(self._transport_time*1000))
+            self.time_label.setText(f'{self._transport_time:.2f} / {self.workspace.video.duration:.2f} 초')
+            if not self.canvas.preview_queue.busy:
+                self.canvas.preview_context=(self._video_generation,id(self.workspace.page),self._seek_epoch)
+                self.canvas.request_video_seek(self.workspace.video,position,self.workspace.page.state,
+                                               self.workspace.selection_ids)
+            if position==clock.duration:
+                self._pause_asset(); self.play_button.setText('▶ 재생')
+        except Exception as error:
+            self._asset_audio_failed(error)
 
     def _replace_video_player(self, path):
         # A backwards seek makes timestamp-only rejection ambiguous. A fresh
@@ -861,11 +1056,13 @@ class BlurActionWindow(QMainWindow):
             self.player.setSource(QUrl.fromLocalFile(path))
 
     def _request_native_seek(self, seconds):
+        if self._asset_clock is not None: return
         self._native_seek_ms = round(seconds * 1000)
         self._native_seek_sent = False
         self._apply_native_seek(self._video_generation)
 
     def playback_media_status_changed(self, status, generation):
+        if self._asset_clock is not None: return
         if generation != self._video_generation or self._closing:
             return
         self._native_loaded = status in (QMediaPlayer.MediaStatus.LoadedMedia,
@@ -896,6 +1093,18 @@ class BlurActionWindow(QMainWindow):
         self._try_start_playback()
 
     def _try_start_playback(self):
+        if self._asset_clock is not None:
+            if (not self._play_after_seek or self._closing or self.workspace.busy
+                    or self._seek_target is not None or self.canvas.preview_pending): return
+            session=self.workspace.video.asset_session
+            if session.metadata['audioTracks']:
+                if not self._asset_audio.wanted:
+                    self._asset_audio.start(session,self._asset_clock.anchor,self.audio.volume())
+            else:
+                self._play_after_seek=False; self._paused_seek=False
+                self._asset_clock.play(); self._asset_timer.start()
+                self.play_button.setText('⏸ 일시정지')
+            return
         if (not self._play_after_seek or self._closing or self.workspace.busy
                 or not self.workspace.video or not self._native_loaded
                 or self._native_seek_ms is not None or self._seek_target is not None
@@ -1064,28 +1273,36 @@ class BlurActionWindow(QMainWindow):
         from .media import check_cancel, page_image, validate_source_identities
         if self.workspace.busy:
             return
+        operating_video=self.workspace.video
 
         def task(cancel, progress):
             candidate = Workspace()
-            prepare(candidate, cancel)
-            check_cancel(cancel)
-            # Keep only the displayed page alive across worker/cache handoff.
-            # GUI refresh must not perform a lazy decode or full hash itself.
-            if candidate.page:
-                candidate.page._image = page_image(candidate.page, cancel)
-                image = candidate.page._image
-                time = float(candidate.video.first_frame_time) if candidate.video else None
-                if time is not None and (not math.isfinite(time) or not 0 <= time < candidate.video.duration):
-                    raise ValueError('첫 프레임의 실제 PTS가 올바르지 않습니다.')
-                pixels = renderer.render(image, candidate.page.state, time)
+            try:
+                from .video import asset_transport_load
+                with asset_transport_load(): prepare(candidate, cancel)
                 check_cancel(cancel)
-                validate_source_identities(candidate.pages)
-                if candidate.video:
-                    candidate.video.validate(cancel)
-            else:
-                raise ValueError('표시할 첫 페이지가 없습니다.')
-            check_cancel(cancel)
-            return candidate, image, pixels, time
+                enable=getattr(candidate.video,'enable_asset_transport',None)
+                if enable is not None: enable(cancel)
+                # Keep only the displayed page alive across worker/cache handoff.
+                if candidate.page:
+                    if getattr(candidate.video,'asset_session',None) is not None:
+                        candidate.page._image=candidate.video._first_image.copy()
+                    else: candidate.page._image = page_image(candidate.page, cancel)
+                    image = candidate.page._image
+                    time = float(candidate.video.first_frame_time) if candidate.video else None
+                    if time is not None and (not math.isfinite(time) or not 0 <= time < candidate.video.duration):
+                        raise ValueError('첫 프레임의 실제 PTS가 올바르지 않습니다.')
+                    pixels = renderer.render(image, candidate.page.state, time)
+                    check_cancel(cancel)
+                    validate_source_identities(candidate.pages)
+                    if candidate.video: candidate.video.validate(cancel)
+                else: raise ValueError('표시할 첫 페이지가 없습니다.')
+                check_cancel(cancel)
+                return candidate, image, pixels, time
+            except BaseException:
+                close=getattr(candidate.video,'close_asset_transport',None)
+                if close is not None and candidate.video is not operating_video: close()
+                raise
 
         def commit(prepared):
             candidate, image, pixels, time = prepared
@@ -1098,6 +1315,8 @@ class BlurActionWindow(QMainWindow):
             self._video_pts = time
             self._transport_time = time or 0.0
             if candidate.video:
+                if self._asset_clock is not None:
+                    self._asset_clock.seek(candidate.video.first_frame_time)
                 self._request_native_seek(self._transport_time)
             context = (self._video_generation, id(candidate.page), self._seek_epoch)
             self.canvas.accept_prepared(image, candidate.page.state, pixels, time, context)
@@ -1314,12 +1533,14 @@ class BlurActionWindow(QMainWindow):
         self.progress.setRange(0, 0 if self._discard_cancelled_result else 100)
         self.progress.setValue(0)
         self.cancel_button.setEnabled(True)
+        self._play_after_seek=False
+        self._pause_asset()
         self.player.pause()
         self._set_editing_enabled(False)
         self.refresh()
         # Do not run a second full-resolution renderer/decode alongside preview.
         self.canvas.preview_queue.discard_pending(cancel_active=True)
-        if self.canvas.preview_queue.busy:
+        if self.canvas.preview_queue.busy or self._asset_audio.queue.busy:
             self._deferred_operation = task
             self._operation_cancelled = threading.Event()
             return
@@ -1341,6 +1562,7 @@ class BlurActionWindow(QMainWindow):
 
     @Slot()
     def preview_idle(self):
+        if self.canvas.preview_queue.busy or self._asset_audio.queue.busy: return
         if self._deferred_operation is not None:
             task, self._deferred_operation = self._deferred_operation, None
             if self._operation_cancelled is not None and self._operation_cancelled.is_set():
@@ -1399,6 +1621,9 @@ class BlurActionWindow(QMainWindow):
     def operation_stopped(self):
         result, error = self._outcome or (None, RuntimeError('작업 결과를 받지 못했습니다.'))
         if self._discard_cancelled_result and self._operation_cancelled is not None and self._operation_cancelled.is_set():
+            if isinstance(result,tuple) and result and hasattr(result[0],'video'):
+                close=getattr(result[0].video,'close_asset_transport',None)
+                if close is not None and result[0].video is not self.workspace.video: close()
             result, error = None, Cancelled('원본 준비를 취소했습니다.')
         self.workspace.busy = False
         self._set_editing_enabled(True)
@@ -1419,6 +1644,9 @@ class BlurActionWindow(QMainWindow):
                 after(result)
             except Exception as exception:
                 error = exception
+                if isinstance(result,tuple) and result and hasattr(result[0],'video') and self.workspace.video is not result[0].video:
+                    close=getattr(result[0].video,'close_asset_transport',None)
+                    if close is not None: close()
         if self.workspace.busy:
             return  # A GUI continuation started the next preparation worker.
         self.refresh()
@@ -1454,6 +1682,17 @@ class BlurActionWindow(QMainWindow):
     def toggle_playback(self):
         if self.workspace.busy or not self.workspace.video:
             return
+        if self._asset_clock is not None:
+            if self._asset_clock.playing or self._play_after_seek:
+                self._play_after_seek=False; self._pause_asset()
+                self.play_button.setText('▶ 재생')
+            elif not self.canvas.preview_pending:
+                if self._asset_clock.anchor>=self._asset_clock.duration:
+                    self.seek_video(0,resume=True)
+                else:
+                    self._play_after_seek=True; self.play_button.setText('재생 준비 중…')
+                    self._try_start_playback()
+            return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self._play_after_seek = False
             self.player.pause()
@@ -1472,6 +1711,7 @@ class BlurActionWindow(QMainWindow):
             self._apply_native_seek(self._video_generation)
 
     def playback_position_changed(self, milliseconds, generation=None):
+        if self._asset_clock is not None: return
         if generation is not None and generation != self._video_generation:
             return
         if not self.workspace.video or self.workspace.busy or self._closing:
@@ -1488,6 +1728,7 @@ class BlurActionWindow(QMainWindow):
         self._try_start_playback()
 
     def video_frame_changed(self, frame, generation=None):
+        if self._asset_clock is not None: return
         if generation is not None and generation != self._video_generation:
             return
         if not frame.isValid() or not self.workspace.video or self.workspace.busy or self._closing:
@@ -1527,6 +1768,17 @@ class BlurActionWindow(QMainWindow):
         if not math.isfinite(seconds):
             return
         seconds = max(0, min(self.workspace.video.duration, seconds))
+        if self._asset_clock is not None:
+            self._pause_asset()
+            self._asset_clock.seek(exact_time(seconds))
+            self._video_generation+=1; self._seek_epoch+=1
+            self._play_after_seek=resume; self._paused_seek=True
+            self._transport_time=seconds; self._seek_target=seconds
+            self.play_button.setText('재생 준비 중…' if resume else '▶ 재생')
+            self.canvas.preview_context=(self._video_generation,id(self.workspace.page),self._seek_epoch)
+            self.canvas.request_video_seek(self.workspace.video,seconds,self.workspace.page.state,
+                                           self.workspace.selection_ids)
+            return
         self.player.pause()
         self._seek_epoch += 1
         self._replace_video_player(self._video_source_path)
@@ -1611,7 +1863,7 @@ class BlurActionWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self._closing:
-            if self.workspace.busy or self.canvas.preview_queue.busy:
+            if self.workspace.busy or self.canvas.preview_queue.busy or self._asset_audio.queue.busy:
                 event.ignore()
             else:
                 event.accept()
@@ -1628,9 +1880,12 @@ class BlurActionWindow(QMainWindow):
         self._video_generation += 1
         self._native_seek_ms = None
         self._play_after_seek = False
+        self._pause_asset(); self._asset_audio.shutdown()
+        close=getattr(self.workspace.video,'close_asset_transport',None)
+        if close is not None: close()
         self.player.stop()
         self.canvas.preview_queue.shutdown()
-        if self.canvas.preview_queue.busy:
+        if self.canvas.preview_queue.busy or self._asset_audio.queue.busy:
             event.ignore()
         else:
             event.accept()

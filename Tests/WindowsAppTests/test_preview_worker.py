@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
 from platforms.windows.bluraction import renderer
-from platforms.windows.bluraction.preview_worker import PreviewQueue, PreviewRequest
+from platforms.windows.bluraction.preview_worker import PreviewQueue, PreviewRequest, ValueQueue, ValueRequest
 from platforms.windows.bluraction.ui import EditorCanvas
 
 APP = QApplication.instance() or QApplication([])
@@ -57,6 +57,31 @@ class PreviewWorkerTests(unittest.TestCase):
 
     def request(self, key, color='white', state=None, time_=None):
         return PreviewRequest(key, image(color), deepcopy(state or {'regions': [], 'drawings': []}), time_)
+
+    def test_pcm_value_queue_retains_one_latest_seek_and_gui_result_affinity(self):
+        queue=ValueQueue(); receiver=Receiver()
+        queue.completed.connect(receiver.received)
+        entered=threading.Event(); release=threading.Event(); calls=[]
+        def first(cancel):
+            calls.append(('old',QThread.currentThread())); entered.set()
+            release.wait(3)
+            from platforms.windows.bluraction.media import check_cancel
+            check_cancel(cancel)
+            return b'old-source-pcm'
+        try:
+            queue.submit(ValueRequest('old',first))
+            self.spin(entered.is_set)
+            queue.submit(ValueRequest('middle',lambda cancel:b'wrong-seek'))
+            queue.discard_pending(cancel_active=True)
+            queue.submit(ValueRequest('latest',lambda cancel:(calls.append(('new',QThread.currentThread())),b'exact-pcm')[1]))
+            release.set(); self.spin(lambda:not queue.busy)
+            self.assertEqual([row[0] for row in calls],['old','new'])
+            self.assertEqual(receiver.results[-1][0].context,'latest')
+            self.assertEqual(receiver.results[-1][1],b'exact-pcm')
+            self.assertTrue(all(thread is APP.thread() for thread in receiver.threads))
+            self.assertTrue(all(thread is not APP.thread() for _,thread in calls))
+        finally:
+            release.set(); queue.shutdown(); self.spin(lambda:not queue.busy)
 
     def test_actual_full_resolution_worker_matches_same_renderer_and_gui_affinity(self):
         for style in ['blur', 'mosaic', 'solid']:

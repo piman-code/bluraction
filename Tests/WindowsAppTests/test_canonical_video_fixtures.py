@@ -1,7 +1,8 @@
 """Actual owned decode of eight authored MOVs; not desktop/audio/P1 proof.
 
 Source hashes, asset descriptors and known-marker PTS bind independent historical
-AVFoundation observations. RGB hashes separately bind the original PyAV decode.
+AVFoundation observations. Historical RGB bytes remain in manifest.json; the
+explicit pixel-contract-v2 record binds exact accurateRGB bytes from BOTH hosts.
 All inputs are public synthetic fixtures with no user media or private paths.
 The family runner owns native-call deadlines and process-tree cleanup.
 """
@@ -15,6 +16,7 @@ from PySide6.QtGui import QImage
 from platforms.windows.bluraction.canonical_video import DecoderAccess, OwnedCanonicalVideoProvider
 from platforms.windows.bluraction.frame_inventory import FrameInventory, InventoryLimits
 from platforms.windows.bluraction.local_decoder import open_local_decoder
+from platforms.windows.bluraction.video import PIXEL_CONTRACT_V2
 from shared.video_timeline import rational
 from platforms.windows.bluraction.canonical_frames import descriptor_sha256
 
@@ -23,6 +25,7 @@ FIXTURES = Path(__file__).resolve().parents[2] / 'shared/fixtures/video-timeline
 KINDS = ('gap0-vfr', 'nonzero-origin', 'audio-earlier-gap', 'audio-later-gap',
          'video0-audio-negative-quarter', 'video-negative-twelfth-audio0',
          'video-negative-twelfth-audio-negative-quarter', 'video-negative-twelfth-noaudio')
+PIXEL_RECORD_SHA256 = '3b061a506b408e90de384b159215d6101f950b5829610315fab82d0017d1eb74'
 
 
 def expected_at(query, case):
@@ -94,9 +97,33 @@ class CanonicalVideoFixtureTests(unittest.TestCase):
         manifest_path = FIXTURES / 'manifest.json'
         manifest_before = manifest_path.read_bytes()
         manifest = json.loads(manifest_before)
+        pixel_path = FIXTURES / 'manifest-v2.json'
+        self.assertFalse(pixel_path.is_symlink())
+        pixel_before = pixel_path.read_bytes()
+        self.assertEqual(hashlib.sha256(pixel_before).hexdigest(), PIXEL_RECORD_SHA256)
+        pixel_manifest = json.loads(pixel_before)
+        self.assertEqual(pixel_manifest['schemaVersion'], 2)
+        self.assertIs(pixel_manifest['syntheticOnly'], True)
+        self.assertEqual(pixel_manifest['historicalManifestSHA256'], hashlib.sha256(manifest_before).hexdigest())
+        self.assertEqual(pixel_manifest['pixelContract']['id'], PIXEL_CONTRACT_V2)
+        self.assertEqual(pixel_manifest['pixelContract']['inputFormat'], 'yuv420p')
+        self.assertEqual(pixel_manifest['pixelContract']['interpolationFlags'], 786434)
+        self.assertEqual([c['kind'] for c in pixel_manifest['cases']], list(KINDS))
+        self.assertEqual(sum(len(c['frames']) for c in pixel_manifest['cases']), 61)
         self.assertIs(manifest['syntheticOnly'], True)
         self.assertEqual([c['kind'] for c in manifest['cases']], list(KINDS))
         case = next(c for c in manifest['cases'] if c['kind'] == kind)
+        pixel_case = next(c for c in pixel_manifest['cases'] if c['kind'] == kind)
+        self.assertEqual((pixel_case['file'], pixel_case['sourceSHA256']), (case['file'], case['sourceSHA256']))
+        self.assertEqual(len(pixel_case['frames']), len(case['frames']))
+        pixels_by_index = {}
+        for historical, precise in zip(case['frames'], pixel_case['frames']):
+            for key in ('index', 'pts', 'duration', 'markerCode'):
+                self.assertEqual(precise[key], historical[key])
+            self.assertEqual(precise['historicalMacRGB8SHA256'], historical['visibleRGB8SHA256'])
+            self.assertEqual(precise['visibleRGBBytes'], 192 * 128 * 3)
+            self.assertNotIn(precise['index'], pixels_by_index)
+            pixels_by_index[precise['index']] = precise
         self.assertIs(case['nativeKnownMarkerPTSConfirmed'], True)
         self.assertEqual(case['file'], kind + '.mov')
         source = FIXTURES / case['file']
@@ -159,7 +186,10 @@ class CanonicalVideoFixtureTests(unittest.TestCase):
                             pixels = image_bytes(result.image)
                             self.assertEqual(classify(pixels), frame['markerCode'])
                             rgb = b''.join(pixels[i:i + 3] for i in range(0, len(pixels), 4))
-                            self.assertEqual(hashlib.sha256(rgb).hexdigest(), frame['visibleRGB8SHA256'])
+                            # Explicit algorithm change, not a tolerance or
+                            # mutation of the original Mac-only RGB oracle.
+                            self.assertEqual(hashlib.sha256(rgb).hexdigest(),
+                                             pixels_by_index[frame['index']]['visibleRGB8SHA256'])
                             result.image.fill(0)
                             self.assertEqual(image_bytes(provider.frame_at(query).image), pixels)
                 self.assertEqual(tuple(inventory), before)
@@ -170,6 +200,7 @@ class CanonicalVideoFixtureTests(unittest.TestCase):
                 inventory.close()
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(manifest_path.read_bytes(), manifest_before)
+            self.assertEqual(pixel_path.read_bytes(), pixel_before)
 
 
 def case_test(kind):
