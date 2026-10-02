@@ -1,0 +1,29 @@
+[
+  {
+    "name": "cmake",
+    "version": "4.4.3",
+    "filename": "cmake-4.4.3-py3-none-macosx_10_10_universal2.whl",
+    "url": "https://files.pythonhosted.org/packages/da/2e/78cc0dab93ad407e4b126ab6a3c8a6fc3df89011b49e910c5a5e9bda78a6/cmake-4.4.3-py3-none-macosx_10_10_universal2.whl",
+    "sha256": "6c95b37116bb5c714656e4f76931ebdcb739209a1aee91cf51408ccfe137694e",
+    "bytes": 54406608,
+    "metadataURL": "https://pypi.org/pypi/cmake/4.4.3/json"
+  },
+  {
+    "name": "pkgconf",
+    "version": "3.0.7.post0",
+    "filename": "pkgconf-3.0.7.post0-py3-none-macosx_10_9_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/df/ea/3d7f83f95f53190d1b9abb9f67b5dfdc3ece092110a0bc1fc60115dcfad9/pkgconf-3.0.7.post0-py3-none-macosx_10_9_x86_64.whl",
+    "sha256": "3a688f02e12602b4a2be79d9a54ed598d5c44fc2fe042a7501aae53054e4688d",
+    "bytes": 65321,
+    "metadataURL": "https://pypi.org/pypi/pkgconf/3.0.7.post0/json"
+  },
+  {
+    "name": "pkgconf",
+    "version": "3.0.7.post0",
+    "filename": "pkgconf-3.0.7.post0-py3-none-macosx_11_0_arm64.whl",
+    "url": "https://files.pythonhosted.org/packages/bf/67/fcd20a9e78fd6bba952e982a86e98e0240a95a216143eab389cbef045d43/pkgconf-3.0.7.post0-py3-none-macosx_11_0_arm64.whl",
+    "sha256": "47cbf6889d84297b9a4e1741ae016daa4e198f3ec8bab7ce74554cc50b77cce4",
+    "bytes": 63377,
+    "metadataURL": "https://pypi.org/pypi/pkgconf/3.0.7.post0/json"
+  }
+]

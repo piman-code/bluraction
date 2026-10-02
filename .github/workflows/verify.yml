@@ -12,7 +12,7 @@ on:
       target_platform:
         description: Required native platform for this development check; all remains the release prerequisite
         type: choice
-        options: [all, windows, mac]
+        options: [all, windows, mac, windows-video-diagnostic, mac-heic-cpu]
         default: all
       owned_windows_ffmpeg:
         description: Run the reviewed disposable source build and native MF smoke; evidence only
@@ -31,12 +31,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: verify-${{ github.workflow }}-${{ github.ref }}-${{ inputs.owned_windows_ffmpeg && 'owned' || 'native' }}
+  group: verify-${{ github.workflow }}-${{ github.ref }}-${{ inputs.owned_windows_ffmpeg && 'owned' || inputs.target_platform == 'mac-heic-cpu' && 'heic-cpu' || 'native' }}
   cancel-in-progress: true
 
 jobs:
   portable-project:
-    if: ${{ !inputs.owned_windows_ffmpeg }}
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac-heic-cpu' && inputs.target_platform != 'windows-video-diagnostic' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -55,7 +55,7 @@ jobs:
           python -m unittest discover -s Tests/PackagingTests -v
 
   mac-native:
-    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'windows' }}
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'windows' && inputs.target_platform != 'windows-video-diagnostic' && inputs.target_platform != 'mac-heic-cpu' }}
     runs-on: macos-14
     timeout-minutes: 45
     env:
@@ -128,7 +128,7 @@ jobs:
         run: ./scripts/build_app.sh --build-only --no-install
 
   windows-native:
-    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac' }}
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac' && inputs.target_platform != 'mac-heic-cpu' }}
     runs-on: windows-2025
     timeout-minutes: 30
     env:
@@ -150,6 +150,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows wheels unavailable; do not silently downgrade or skip a media feature.' }
           & .ci-venv/Scripts/python.exe -m pip freeze
       - name: Check required native media capabilities
+        if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
         shell: pwsh
         run: |
           & .ci-venv/Scripts/python.exe scripts/diagnose_source_identity.py
@@ -158,11 +159,13 @@ jobs:
           & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
       - name: Observe default and system-font offscreen backends without windows or OS input
+        if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
         shell: pwsh
         run: |
           & .ci-venv/Scripts/python.exe scripts/windows-font-diagnostic/run_font_diagnostic.py --repository "$PWD" --timeout 30
           if ($LASTEXITCODE -ne 0) { throw 'Font observation incomplete; preserve the report before changing availability or fixed-width assertions.' }
       - name: Verify model and Qt/media controllers with bounded subprocesses
+        if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
         shell: pwsh
         run: |
           # The offscreen FreeType DB needs actual system fonts; native Windows
@@ -173,6 +176,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
           & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300
           if ($LASTEXITCODE -ne 0) { throw 'A required isolated Windows test family failed, timed out or did not complete.' }
+      - name: Observe authored raw YUV and independent RGB conversions
+        if: ${{ inputs.target_platform == 'windows-video-diagnostic' }}
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/windows-video-diagnostic/run_video_diagnostic.py --repository "$PWD"
+          if ($LASTEXITCODE -ne 0) { throw 'Video decoder observation incomplete; preserve exact pixels before changing product or hash assertions.' }
       - name: Retain synthetic Windows family logs and input hashes
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -181,6 +190,7 @@ jobs:
           path: |
             .build/windows-verification-*/
             .build/windows-font-diagnostic-*/
+            .build/video-decoder-diagnostic-*/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
@@ -267,3 +277,44 @@ jobs:
 # This workflow proves only the stages it actually executes. Explorer drag/drop,
 # OS dialogs, clean-user installation, packaged HEIC codecs, signed distribution and user
 # acceptance require the manual-OS checklist and specific candidate evidence.
+
+  mac-heic-cpu:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.owned_windows_ffmpeg && inputs.target_platform == 'mac-heic-cpu' }}
+    runs-on: macos-14
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Compile pinned CPU HEIC candidate and inspect six authored outputs
+        run: |
+          sw_vers
+          uname -m
+          test -d "$DEVELOPER_DIR"
+          python build-recipes/macos-heic-cpu/verify_candidate.py --repository "$PWD"
+      - name: Retain synthetic HEIC checks and build provenance only
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: mac-heic-cpu-evidence
+          path: |
+            .build/mac-heic-cpu-verification-*/execution.json
+            .build/mac-heic-cpu-verification-*/tool-acquisition.json
+            .build/mac-heic-cpu-verification-*/*.log
+            .build/mac-heic-cpu-verification-*/source-build/reports/*.json
+            .build/mac-heic-cpu-verification-*/source-build/logs/*
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/summary.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/execution.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/report.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/*.rgba
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/candidate.heic
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/*
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
