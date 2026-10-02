@@ -26,12 +26,17 @@ def sha(path):
 
 
 def completed_count(output, suite, exit_code):
-    finals = re.findall(r'Test run with (\d+) tests? in (\d+) suites? passed after', output)
-    suite_ends = re.findall(r'Suite ' + re.escape(suite) + r' passed after', output)
-    if exit_code != 0 or len(finals) != 1 or len(suite_ends) != 1:
+    # Swift Testing102 has no suite count in its final summary. It still must
+    # finish exactly the selected suite and the complete positive test run.
+    finals = re.findall(r'Test run with (\d+) tests?(?: in (\d+) suites?)? passed after', output)
+    suite_ends = re.findall(r'Suite ([^\n]+?) passed after', output)
+    if exit_code != 0 or len(finals) != 1 or suite_ends != [suite]:
         return None
-    count, suite_count = map(int, finals[0])
-    return count if count > 0 and suite_count == 1 else None
+    count, suite_count = finals[0]
+    if suite_count:
+        return int(count) if int(count) > 0 and int(suite_count) == 1 else None
+    suite_starts = re.findall(r'Suite ([^\n]+?) started\.', output)
+    return int(count) if int(count) > 0 and suite_starts == [suite] else None
 
 
 def source_inputs():

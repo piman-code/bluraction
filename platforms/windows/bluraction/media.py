@@ -8,10 +8,11 @@ import math
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import threading
 
-from PySide6.QtCore import QMarginsF, QSize
+from PySide6.QtCore import QFile, QIODevice, QMarginsF, QSize
 from PySide6.QtGui import QImage, QImageIOHandler, QImageReader, QImageWriter, QPainter, QPageLayout, QPageSize, QPdfWriter
 from PySide6.QtPdf import QPdfDocument, QPdfDocumentRenderOptions
 
@@ -357,6 +358,17 @@ def save_bytes_new(path, data, cancel=None):
         Path(name).unlink(missing_ok=True)
 
 
+def _cleanup_preserving_primary(action, description):
+    """Retain an active export failure if releasing its owned resource fails."""
+    primary = sys.exception()
+    try:
+        action()
+    except BaseException as cleanup_error:
+        if primary is None:
+            raise
+        primary.add_note(f'{description}: {type(cleanup_error).__name__}: {cleanup_error}')
+
+
 def export_image(page, path, format='png', quality=95, cancel=None):
     validate_sources([page], cancel)
     target = fresh_target(path)
@@ -375,15 +387,39 @@ def export_image(page, path, format='png', quality=95, cancel=None):
                 output.flush()
                 os.fsync(output.fileno())
         else:
-            writer = QImageWriter(name, format.encode('ascii'))
-            writer.setQuality(quality)
-            if not writer.write(image):
-                raise ValueError('이미지 저장 실패: ' + writer.errorString())
+            _write_qt_image_candidate(name, image, format, quality)
         validate_sources([page], cancel)
         check_cancel(cancel)
         publish_new(name, target)
     finally:
-        Path(name).unlink(missing_ok=True)
+        _cleanup_preserving_primary(lambda: Path(name).unlink(missing_ok=True),
+                                    '이미지 임시 파일 정리 실패')
+
+
+def _write_qt_image_candidate(name, image, format, quality):
+    """Close the owned Qt file before validation, publication or temp cleanup.
+
+    QImageWriter controls its device exclusively until destroyed. A filename
+    writer keeps that handle open on Windows, so lifetime must not extend into
+    export_image's publish/finally phase. External QFile gives deterministic
+    close even when the writer or an image plugin fails.
+    https://doc.qt.io/qt-6/qimagewriter.html
+    """
+    device = QFile(name)
+    writer = None
+    try:
+        if not device.open(QIODevice.OpenModeFlag.WriteOnly | QIODevice.OpenModeFlag.Truncate):
+            raise ValueError('이미지 저장 파일 열기 실패: ' + device.errorString())
+        writer = QImageWriter(device, format.encode('ascii'))
+        writer.setQuality(quality)
+        if not writer.write(image):
+            raise ValueError('이미지 저장 실패: ' + writer.errorString())
+        writer = None
+        if not device.flush():
+            raise ValueError('이미지 저장 마무리 실패: ' + device.errorString())
+    finally:
+        writer = None
+        _cleanup_preserving_primary(device.close, '이미지 저장 장치 닫기 실패')
 
 
 def export_pdf(pages, path, cancel=None, progress=None):
@@ -395,9 +431,25 @@ def export_pdf(pages, path, cancel=None, progress=None):
         raise ValueError('PDF 출력은 전체 5억 화소 이하로 나누어 저장하세요.')
     fd, name = tempfile.mkstemp(prefix='.bluraction-', suffix='.pdf', dir=target.parent)
     os.close(fd)
+    try:
+        _write_qt_pdf_candidate(name, pages, sizes, cancel, progress)
+        validate_sources(pages, cancel)
+        check_cancel(cancel)
+        publish_new(name, target)
+    finally:
+        _cleanup_preserving_primary(lambda: Path(name).unlink(missing_ok=True),
+                                    'PDF 임시 파일 정리 실패')
+
+
+def _write_qt_pdf_candidate(name, pages, sizes, cancel, progress):
+    """End painting and release QPdfWriter before closing its owned QFile."""
+    device = QFile(name)
+    writer = None
     painter = None
     try:
-        writer = QPdfWriter(name)
+        if not device.open(QIODevice.OpenModeFlag.WriteOnly | QIODevice.OpenModeFlag.Truncate):
+            raise ValueError('PDF 저장 파일 열기 실패: ' + device.errorString())
+        writer = QPdfWriter(device)
         writer.setResolution(144)
         writer.setTitle('BlurAction 평탄화 결과')
         for index, page in enumerate(pages):
@@ -418,15 +470,20 @@ def export_pdf(pages, path, cancel=None, progress=None):
             if progress:
                 progress((index + 1) / len(pages))
         if painter:
-            painter.end()
+            if not painter.end():
+                raise ValueError('PDF 저장 마무리 실패')
             painter = None
-        validate_sources(pages, cancel)
-        check_cancel(cancel)
-        publish_new(name, target)
+        writer = None
+        if not device.flush():
+            raise ValueError('PDF 저장 마무리 실패: ' + device.errorString())
     finally:
-        if painter:
-            painter.end()
-        Path(name).unlink(missing_ok=True)
+        try:
+            if painter:
+                _cleanup_preserving_primary(painter.end, 'PDF 그리기 장치 마무리 실패')
+        finally:
+            painter = None
+            writer = None
+            _cleanup_preserving_primary(device.close, 'PDF 저장 장치 닫기 실패')
 
 
 def _page_point_size(page):

@@ -28,6 +28,25 @@ class NativeCompletionTests(unittest.TestCase):
         self.assertIsNone(module.completed_count(output, 'DemoTests', 1))
         self.assertIsNone(module.completed_count(output, 'DemoTests', None))
 
+    def test_swift_testing_102_summary_requires_one_started_and_completed_suite(self):
+        output = ('◇ Suite DemoTests started.\n'
+                  '✔ Suite DemoTests passed after 1 second.\n'
+                  '✔ Test run with 3 tests passed after 1 second.')
+        self.assertEqual(module.completed_count(output, 'DemoTests', 0), 3)
+        self.assertIsNone(module.completed_count(output, 'OtherTests', 0))
+        self.assertIsNone(module.completed_count(output.replace('3 tests', '0 tests'), 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output.replace('◇ Suite DemoTests started.\n', ''), 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output + '\n◇ Suite OtherTests started.', 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output + '\n✔ Suite OtherTests passed after 1 second.', 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output + output, 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output, 'DemoTests', 1))
+
+    def test_mixed_old_new_and_multiple_suite_summaries_cannot_pass(self):
+        output = 'Suite DemoTests passed after 1 second.\nTest run with 2 tests in 1 suite passed after 1 second.'
+        self.assertIsNone(module.completed_count(output + '\nTest run with 2 tests passed after 1 second.', 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output.replace('1 suite', '2 suites'), 'DemoTests', 0))
+        self.assertIsNone(module.completed_count(output + '\nSuite OtherTests passed after 1 second.', 'DemoTests', 0))
+
     def test_all_existing_sources_have_unique_suite_inventory(self):
         names = module.native_suites()
         self.assertEqual(len(names), len(set(names)))
