@@ -20,7 +20,8 @@
   "compilerTargets": [
     {"name":"mingw-w64-x86_64-gcc","version":"16.2.0-4","filename":"mingw-w64-x86_64-gcc-16.2.0-4-any.pkg.tar.zst","sha256":"7928a168fe0827e6ba41ea672a9957a5bfa47f732f6922e86cf0f24dd61e5d0c","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-gcc"},
     {"name":"mingw-w64-x86_64-nasm","version":"3.02-1","filename":"mingw-w64-x86_64-nasm-3.02-1-any.pkg.tar.zst","sha256":"63493c3f1ee2ea71727acfc338c53a6f5a18d1c2c21cdb5d39dea227756e2fe4","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-nasm"},
-    {"name":"mingw-w64-x86_64-pkgconf","version":"1~3.0.7-1","filename":"mingw-w64-x86_64-pkgconf-1~3.0.7-1-any.pkg.tar.zst","sha256":"37b97f372409fa7cf54d709bab892f34e9c62d2658230a09f783a89a55ae590e","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-pkgconf"}
+    {"name":"mingw-w64-x86_64-pkgconf","version":"1~3.0.7-1","filename":"mingw-w64-x86_64-pkgconf-1~3.0.7-1-any.pkg.tar.zst","sha256":"37b97f372409fa7cf54d709bab892f34e9c62d2658230a09f783a89a55ae590e","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-pkgconf"},
+    {"name":"diffutils","version":"3.12-1","filename":"diffutils-3.12-1-x86_64.pkg.tar.zst","sha256":"7902c8ce3d4dd69a0f5e98dc9d5c83c17b23314ba486169db57ef6e2835ce3b6","evidence":"https://packages.msys2.org/packages/diffutils"}
   ],
   "transitiveCompilerPolicy":"resolve from official pacman db, capture exact all-package name/version/url/SHA plus signatures before installation; replays must use acquired lock and archived packages, never re-resolve",
   "msvcPolicy":"record actual runner MSVC tool version and cl/link/lib executable SHA before use; reject change during build; compiler identity is acquired-run evidence, not an invented historical vendor pin",

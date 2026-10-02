@@ -10,6 +10,7 @@ separate from these exact bytes. Unsupported cases remain visible review holds.
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from fractions import Fraction
+import json
 import math
 import multiprocessing
 from multiprocessing.reduction import ForkingPickler
@@ -27,6 +28,36 @@ class TransportReview(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class VideoAssetBinding:
+    """Immutable completed-source descriptor; public dicts are never authority.
+
+    Construction validates a child observation, not arbitrary saved metadata.
+    The owning session still performs full source validation before returning it.
+    """
+    source_sha256: str
+    descriptor_sha256: str
+    _timeline_json: bytes
+
+    @classmethod
+    def observed(cls, metadata, source_sha256, duration):
+        from shared.video_timeline import validate_timeline, rational
+        from .canonical_frames import descriptor_sha256
+        timeline=metadata.get('timeline')
+        validate_timeline(timeline)
+        digest=descriptor_sha256(timeline)
+        if (metadata.get('sha256') != source_sha256 or
+                metadata.get('descriptorSHA256') != digest or
+                rational(timeline['assetDuration']) != duration):
+            raise TransportReview('completed source/timeline binding changed')
+        frozen=json.dumps(timeline,sort_keys=True,separators=(',', ':'),ensure_ascii=True).encode('ascii')
+        return cls(source_sha256,digest,frozen)
+
+    @property
+    def timeline(self):
+        return json.loads(self._timeline_json)
+
+
 class _TransportChannel:
     """Private socket framing; deadlines cover header AND every body byte.
 
@@ -36,10 +67,16 @@ class _TransportChannel:
     """
     def __init__(self, sock):
         self.socket = sock
+        # A plain process-local bool is spawn-pickleable. Only the parent
+        # channel's own shutdown interrupts its worker; no Event/global state
+        # is shared with a decoder or an unrelated session.
+        self._interrupted = False
 
     def fileno(self): return self.socket.fileno()
 
     def _timeout(self, deadline, cancel=None):
+        if self._interrupted:
+            raise TransportReview('owned decoder channel interrupted')
         check_cancel(cancel)
         remaining = None if deadline is None else deadline - time.monotonic()
         if remaining is not None and remaining <= 0:
@@ -84,6 +121,9 @@ class _TransportChannel:
 
     def interrupt(self):
         # May be called without the RPC lock to wake a partial-body read/send.
+        # Windows shutdown may fail/not wake the current receive. Each bounded
+        # timeout/chunk observes this latch regardless of native wake behavior.
+        self._interrupted = True
         try: self.socket.shutdown(socket.SHUT_RDWR)
         except OSError: pass
 
@@ -323,6 +363,10 @@ class CanonicalSession:
             if (type(self.duration) is not Fraction or type(self.first_time) is not Fraction
                     or not 0<=self.first_time<self.duration):
                 raise TransportReview('canonical candidate exact duration/PTS invalid')
+            # Synthetic deadline seams intentionally have no source descriptor.
+            # They can exercise IPC but can never provide a project binding.
+            self._asset_binding=(VideoAssetBinding.observed(self.metadata,sha,self.duration)
+                if 'timeline' in self.metadata or 'descriptorSHA256' in self.metadata else None)
             self._guard(); check_cancel(cancel)
         except BaseException as primary:
             try: self.close()
@@ -391,6 +435,16 @@ class CanonicalSession:
         return meta['time']
 
     def validate(self,cancel=None): self._rpc('validate',cancel=cancel)
+
+    def verified_asset_binding(self,cancel=None):
+        """IO-worker only: validate actual completed decoder and original SHA."""
+        with self._lock:
+            self.validate(cancel)
+            self._guard(); check_cancel(cancel)
+            binding=self._asset_binding
+            if binding is None:
+                raise TransportReview('completed exact asset descriptor unavailable')
+            return binding
 
     def close(self):
         self._closed=True

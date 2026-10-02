@@ -14,7 +14,7 @@
 
 build-tool wheel7개(Python pip26.2.1/setuptools82.0.0/Cython3.3.0/wheel0.46.3/packaging26.3/delvewheel1.13.1/pefile2024.8.26)는 공식 PyPI 파일 URL/SHA로 고정했다. `--no-index --no-deps`로 새 venv에 설치하여 backend build isolation이 별도 version을 고르지 못하게 한다. 이 버전들은 아직 actual 빌드로 검증되지 않았다.
 
-GCC transitive dependency versions는 지어내지 않았다. SHA 고정 base에서 공식 repo만 사용하여 pacman closure의 name/version/filename/URL/SHA를 먼저 보존하고 아래의 mandatory signature 정책으로 서명 bytes·출처를 freeze한다. top3 drift·필수 서명 부재·unknown server는 거부한다. 모든 acquired 파일은 hash 검증, native installer의 Required signature 확인 뒤 **offline config**로만 설치한다. replay는 이 lock+package archives를 재사용해야 하며 현재 draft가 다른 날의 새 repository closure를 같은 빌드라고 부르지 않는다.
+GCC transitive dependency versions는 지어내지 않았다. SHA 고정 base에서 공식 repo만 사용하여 pacman closure의 name/version/filename/URL/SHA를 먼저 보존하고 아래의 mandatory signature 정책으로 서명 bytes·출처를 freeze한다. top4(GCC/NASM/pkgconf/diffutils) drift·필수 서명 부재·unknown server는 거부한다. 모든 acquired 파일은 hash 검증, native installer의 Required signature 확인 뒤 **offline config**로만 설치한다. replay는 이 lock+package archives를 재사용해야 하며 현재 draft가 다른 날의 새 repository closure를 같은 빌드라고 부르지 않는다.
 
 PyAV Cython extension의 MSVC는 disposable GitHub worker에 이미 있는 native tool을 이용한다. VsDevCmd에서 허용 env 필드만 현재 process에 적용하고 실제 VCTools/SDK 버전·cl/link/lib SHA를 build 전에 freeze, 뒤에 재확인한다. runner 이미지가 바뀌면 이 acquired compiler lock도 다르다. **원래 vendor compiler 재현이나 cross-run 고정 완료가 아니며**, 첫 실제 lock을 선별·보존한 뒤 같은 compiler package/source를 확보해 replay pin을 보완해야 한다. MSYS/VS/Python을 사용자의 전역 환경에 설치하지 않는다.
 
@@ -33,7 +33,7 @@ $attempt = Join-Path $env:RUNNER_TEMP ('bluraction-owned-ffmpeg-' + [guid]::NewG
 
 ## 실제 성공 조건
 
-1. source SHA 획득, top3 compiler package 및 transitive locked packages의 실제 서명 검증/설치 완료.
+1. source SHA 획득, top4 compiler/build-tool package 및 transitive locked packages의 실제 서명 검증/설치 완료.
 2. stock FFmpeg GPL3/shared/MF compile; actual DLL export에서 생성한 MSVC `.def/.lib`와 source-built PyAV19 wheel SHA 기록.
 3. pefile의 일반+delay imports를 추적해 필요한 MinGW runtime만 copy; unresolved DLL이면 실패. 이후 delvewheel1.13.1 repair의 exact command·새 wheel SHA 기록. 데이터 변경은 새로운 후보의 repair 결과이며 옛15DLL 일치 주장 없음.
 4. 실제 `h264_mf` **software** open/encode→MOV VFR `[0,1,3,6]/24` decode의 exact Fraction PTS와 증가하는 authored 밝기, 실제 PCM4000samples, 원본 SHA 보존. 같은 encoded packet의 MP4 remux와 decoded exact PTS 확인. 평균FPS/epsilon/기간 변경·다른 encoder fallback 없음. encoder가 VFR을 바꾸거나 software unavailable이면 그대로 실패한다.
@@ -62,7 +62,7 @@ $attempt = Join-Path $env:RUNNER_TEMP ('bluraction-owned-ffmpeg-' + [guid]::NewG
 
 실제 CI11에서 name-only와 SHA 출력은 같은24-package closure로 성공하고 `%g`만139로 실패했다. 보존된 mingw64 DB의23개 선택 항목에는 `%PGPSIG%`가 없고 msys make1개에는 있었다. 이번 source는 nullable `%g`를 다시 호출하지 않고 안전한5field `%n|%v|%f|%h|%l`만 요청한다. core stack 없이 정확한 C crash instruction을 입증했다고 하지 않는다.
 
-copied `msys.db`/`mingw64.db`를 디스크 extraction 없이 bounded tar-image로 읽어 선택 항목의 name/version/filename/SHA를 정확히 대조한다. DB64MiB·100000 members·expanded512MiB·desc64KiB·plan1MiB·closure160개 제한이며 duplicate/unsafe/unknown/mismatched rows는 acquisition 전에 실패한다. top3 pin과 모든 archive expectedSHA는 유지한다.
+copied `msys.db`/`mingw64.db`를 디스크 extraction 없이 bounded tar-image로 읽어 선택 항목의 name/version/filename/SHA를 정확히 대조한다. DB64MiB·100000 members·expanded512MiB·desc64KiB·plan1MiB·closure160개 제한이며 duplicate/unsafe/unknown/mismatched rows는 acquisition 전에 실패한다. 기존 top3 pin과 모든 archive expectedSHA는 유지한다. CI15 수리에서 exact diffutils를 네 번째 필수 pin으로 추가했다.
 
 실제 CI14 copied DB는 Zstandard magic `28b52ffd`였다. 이전12개 authored gzip 검사의 성공은 이 실제 압축 형식 지원을 검증하지 못했고, 기존 parser는 이를 plain tar로 전달하여 실패했다. 이제 gzip·Zstandard·plain tar 경로 모두 tar/PAX 해석 전에 expanded512MiB+1 한도로 읽고 초과 시 실패한다. Zstandard는 Python3.14 표준 `compression.zstd.ZstdFile`을 사용하며 decoder history window도512MiB로 제한한다. 이 optional stdlib 모듈이 없는 interpreter에서는 실패하며 외부 decoder 설치나 무제한 fallback은 없다. compressed DB bytes의 SHA/identity 검사는 유지하며 signature/HTTP/pacman Required trust 규칙은 변경하지 않는다. 실제 copied DB 재검증과 Windows CI 결과는 별도 증거로 기록한다.
 
@@ -73,3 +73,12 @@ copied `msys.db`/`mingw64.db`를 디스크 extraction 없이 bounded tar-image�
 lock에는 full planSHA·각 DB SHA·package expectedSHA·signature bytes/SHA/sourceType(URL 포함)를 기록한다. DB/plan이 acquisition 중 바뀌면 install lock을 발행하지 않는다. `install_compiler.sh`의 offline `SigLevel=Required`, `LocalFileSigLevel=Required`, 모든 package+sig 존재 검사와 `pacman -U`는 그대로다. **전체 native PGP/trust/content 검증과 설치가 성공하기 전 다음 compiler/build command는 실행하지 않는다.** 파일을 받거나 구조를 읽은 것만으로 signatureVerified/releaseApproved를 표시하지 않는다.
 
 새 offline unit `Tests/PackagingTests/test_owned_recipe_signatures.py`는 CI11의 공개24-row metadata로 authored DB를 만들고 missing23/embedded1 경로, plan/DB/pin mismatch, malformed signatures, HTTP/redirect/size 실패, acquisition 중 DB 변경을 검사한다. 테스트의 synthetic signature packet은 crypto 검증 자료가 아니다. 저자는 AST 정적검사만 수행하며 root가 unit/Windows/PGP/build를 실행한다. 대응 source/license/최종 bundle과 전체 Goal은 계속 미완료다.
+
+
+## CI15 stock MF 컴파일 및 configure 도구 수리
+
+CI15에서 실제 Zstandard DB 처리·24패키지 mandatory offline `pacman -U` 설치는 성공했고 FFmpeg9.0.2 stock compile에서 D3D11 타입이 정의되지 않아 실패했다. 고정 archive의 `mfenc.c`는 `CONFIG_D3D11VA`일 때만 D3D11 header를 포함하지만 `MFContext`의 D3D11 타입은 무조건 사용한다. `--disable-autodetect`는 유지하고 `--enable-d3d11va`를 명시한다. configure 후 실제 `CONFIG_D3D11VA`, `CONFIG_MEDIAFOUNDATION`, `CONFIG_H264_MF_ENCODER`가 모두1인지 확인하고 config 자료를 make 전에 보존한다. 실패하면 빌드를 진행하지 않는다. upstream source patch·MF 제외·hardware encoder 강제는 없다. [공식 MF 문서](https://ffmpeg.org/ffmpeg-all.html#MediaFoundation)와 고정 소스의 `hw_encoding` 기본값0 및 conditional hardware 경로를 유지하며 기존 software smoke의 옵션도 바꾸지 않는다. 실제 새 compile/software smoke 결과는 아직 대기다.
+
+같은 configure stderr의 `cmp: command not found`는 stock configure가 `cmp -s`를 사용하는 데서 발생했다. [공식 diffutils package](https://packages.msys2.org/packages/diffutils)와 CI15 copied `msys.db`의 exact `diffutils=3.12-1`, `diffutils-3.12-1-x86_64.pkg.tar.zst`, SHA `7902c8ce3d4dd69a0f5e98dc9d5c83c17b23314ba486169db57ef6e2835ce3b6`를 네 번째 필수 pin으로 넣는다. `/usr/bin/cmp.exe`가 해당 패키지에 속하는지/설치 version/command path를 확인하고 실제 cmp version·파일 SHA를 configure 전에 기록한다. 새 패키지와 모든 새 transitive 항목도 기존 full closure lock·DB 대조·expectedSHA·mandatory signature/offline Required trust 검증을 그대로 거친다. CI15 DB의 diffutils에는 embeddedPGPSIG가 있지만 다른 날 필드가 없으면 기존 동일한 공식 URL `.sig` 규칙만 허용한다.
+
+공개 unit 자료의 기존24개 metadata 원문은 보존하고, 별도 diffutils row를 추가한25-row authored control로 검사를 확장한다. 이는 다음 실제 dependency closure가25개라고 가정하지 않는다. 역사24만으로는 새 필수 pin이 누락되어 거부해야 한다. 새 exact-pin/DB mismatch/invalid-present-signature/no-fallback/lock-binding 회귀는 offline structural 검사이며 crypto·실제 Windows compile·software encode 성공 증거로 쓰지 않는다. `recipe_support.py`와 `install_compiler.sh`의 보안 경로는 변경하지 않았다.

@@ -330,5 +330,47 @@ class CanonicalTransportTests(unittest.TestCase):
                 session.close()
                 self.assertEqual(path.read_bytes(),before)
 
+    def test_partial_read_close_latch_survives_noop_or_failed_native_shutdown(self):
+        class ShutdownSocket:
+            def __init__(self, owned, fails): self.owned=owned; self.fails=fails; self.calls=0
+            def __getattr__(self, name): return getattr(self.owned, name)
+            def shutdown(self, how):
+                self.calls+=1
+                if self.fails: raise OSError('controlled native shutdown failure')
+                # Deliberately leave the actual socket and peer open.
+        for fails in (False, True):
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as folder:
+                path=Path(folder)/'synthetic.bin'; path.write_bytes(b'owned latched-close input')
+                before=path.read_bytes()
+                session=CanonicalSession(path,fingerprint(path),build_timeout=10,query_timeout=30,
+                                         _decoder_target=_partial_chunk_decoder)
+                pid=session._process.pid; directory=Path(session._directory.name)
+                wrapper=ShutdownSocket(session._connection.socket,fails)
+                session._connection.socket=wrapper
+                errors=[]
+                def query():
+                    try: session.frame(F(0))
+                    except BaseException as error: errors.append(error)
+                worker=threading.Thread(target=query,daemon=True)
+                try:
+                    worker.start(); deadline=time.monotonic()+2
+                    while not (directory/'partial-written').is_file() and time.monotonic()<deadline:
+                        threading.Event().wait(.01)
+                    self.assertTrue((directory/'partial-written').is_file())
+                    self.assertTrue(worker.is_alive())
+                    session.close_async(); worker.join(3)
+                    self.assertFalse(worker.is_alive(),'explicit latch must not depend on shutdown wake')
+                    session.close()
+                    self.assertGreater(wrapper.calls,0)
+                    self.assertTrue(errors)
+                    self.assertIsInstance(errors[0],TransportReview)
+                    self.assertIn('interrupted',str(errors[0]))
+                    self.assertIsNone(session._process)
+                    self.assertFalse(directory.exists())
+                    self.assertNotIn(pid,[child.pid for child in multiprocessing.active_children()])
+                finally:
+                    session.close()
+                    self.assertEqual(path.read_bytes(),before)
+
 
 if __name__=='__main__': unittest.main()

@@ -21,6 +21,7 @@ targets=(
   'mingw-w64-x86_64-gcc=16.2.0-4'
   'mingw-w64-x86_64-nasm=3.02-1'
   'mingw-w64-x86_64-pkgconf=1~3.0.7-1'
+  'diffutils=3.12-1'
   mingw-w64-x86_64-zlib make
 )
 # %g is nullable in the captured mingw64 DB and crashes this pacman build.
