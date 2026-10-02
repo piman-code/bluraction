@@ -73,10 +73,15 @@ jobs:
           fixture_bin="$(brew --prefix ffmpeg@7)/bin/ffmpeg"
           fixture_version="$("$fixture_bin" -version)"
           printf '%s\n' "$fixture_version"
-          [[ "${fixture_version%%$'\n'*}" =~ ^ffmpeg\ version\ 7\.1\.5([\ -]|$) ]]
-          test ! -e /opt/homebrew/bin/ffmpeg
-          test ! -L /opt/homebrew/bin/ffmpeg
-          ln -s "$fixture_bin" /opt/homebrew/bin/ffmpeg
+          case "${fixture_version%%$'\n'*}" in
+            "ffmpeg version 7.1.5 "*|"ffmpeg version 7.1.5-"*) ;;
+            *) echo '::error::Unexpected synthetic fixture ffmpeg version'; exit 1 ;;
+          esac
+          # Select this exact tool for tests. Existing runner prefix files and
+          # symlinks are left intact, including previously dangling links.
+          test -x "$fixture_bin"
+          printf 'BLURACTION_FFMPEG=%s\n' "$fixture_bin" >> "$GITHUB_ENV"
+          printf 'Synthetic fixture tool selected: %s\n' "$fixture_bin"
           shasum -a 256 "$fixture_bin"
           brew info --json=v2 ffmpeg@7
       - name: Native Mac regression checks
@@ -87,6 +92,7 @@ jobs:
         with:
           name: mac-native-verification
           path: .build/mac-verification-*/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
       - name: Build candidate without operating installation
@@ -124,8 +130,19 @@ jobs:
       - name: Verify model and Qt/media controllers with bounded subprocesses
         shell: pwsh
         run: |
-          & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/WindowsAppTests','-v'],check=True,timeout=900)"
+          & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/VerificationRunnerTests','-v'],check=True,timeout=120)"
           if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
+          & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300
+          if ($LASTEXITCODE -ne 0) { throw 'A required isolated Windows test family failed, timed out or did not complete.' }
+      - name: Retain synthetic Windows family logs and input hashes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-native-verification
+          path: .build/windows-verification-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
       - name: Prepare onedir candidate only
         if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
         shell: pwsh
@@ -144,6 +161,7 @@ jobs:
         with:
           name: windows-candidate-manifest
           path: .build/windows-packages/**/bundle-manifest.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 

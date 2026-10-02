@@ -461,6 +461,11 @@ class Workspace:
             payload = b''.join(chunks)
         check_cancel(cancel)
         project = decode_project(payload)
+        if project.version == 3:
+            # Shared v3 metadata can round-trip, but this host's decoder clock
+            # is still origin-relative. Never misread its top-level video as
+            # pages or silently apply asset-time edits before the adapter proof.
+            raise ValueError('영상 v3의 실제 시간축 연결 검수가 아직 끝나지 않았습니다. 현재 편집은 보존됩니다.')
         reviews = validate_host_reviews(project)
         if allow_legacy_pdf:
             reviews = tuple(reason for reason in reviews if not re.fullmatch(

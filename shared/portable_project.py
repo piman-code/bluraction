@@ -1,7 +1,8 @@
-"""Lossless v1/v2 project JSON validation; no renderer and no implicit media reads.
+"""Lossless v1/v2 and explicit video v3 JSON; no renderer or implicit media reads.
 
 Read COMPATIBILITY.md before using this as an application boundary. A valid JSON
 contract does not mean sources exist, PDF geometry is safe, or export is approved.
+Video v3 metadata is an asset descriptor, not evidence of any host decoder clock.
 """
 from __future__ import annotations
 
@@ -14,9 +15,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
+from .video_timeline import VideoTimelineError, validate_video_metadata
 
 MAX_V1_BYTES = 20 * 1024 * 1024
 MAX_V2_BYTES = 50 * 1024 * 1024
+MAX_V3_BYTES = 20 * 1024 * 1024
 MAX_PAGES = 200
 JSONValue = Any
 
@@ -272,7 +275,7 @@ def validate_project(data: Mapping[str, JSONValue]) -> tuple[str, ...]:
     reviews: list[str] = []
     if not isinstance(data, dict):
         _fail("$", "expected object")
-    _integer(data.get("version"), "$.version", 1, 2)
+    _integer(data.get("version"), "$.version", 1, 3)
     if data["version"] == 1:
         fields = {"version", "mediaPath", "regions", "drawings"}
         _object(data, "$", fields, fields | {"sourceSHA256"}, reviews)
@@ -280,7 +283,7 @@ def validate_project(data: Mapping[str, JSONValue]) -> tuple[str, ...]:
             _fail("$.sourceSHA256", "expected lowercase SHA-256")
         _text(data["mediaPath"], "$.mediaPath", 4096, reviews, nonempty=True, no_nul=True)
         _edits(data, "$", reviews)
-    else:
+    elif data["version"] == 2:
         fields = {"version", "title", "currentIndex", "pages"}
         _object(data, "$", fields, fields, reviews)
         _text(data["title"], "$.title", 255, reviews, nonempty=True)
@@ -303,6 +306,18 @@ def validate_project(data: Mapping[str, JSONValue]) -> tuple[str, ...]:
             _edits(page, path, reviews)
             if page.get("pdfPageIndex") is not None and page.get("pdfGeometryVersion") is None and (page["regions"] or page["drawings"]):
                 reviews.append(path + ": legacy edited PDF requires host crop/rotation geometry check before render/export")
+    else:
+        fields = {"version", "mediaKind", "mediaPath", "sourceSHA256", "producer", "timeline", "regions", "drawings"}
+        _object(data, "$", fields, fields, reviews)
+        # The new envelope requires exact integer versions and mandatory source
+        # metadata. Unknown envelope/edit keys survive with review; unknown clock
+        # fields inside producer/timeline cannot be silently interpreted.
+        try:
+            validate_video_metadata(data)
+        except VideoTimelineError as error:
+            _fail("$", str(error))
+        _text(data["mediaPath"], "$.mediaPath", 4096, reviews, nonempty=True, no_nul=True)
+        _edits(data, "$", reviews)
     return tuple(reviews)
 
 
@@ -321,7 +336,7 @@ class PortableProject:
         self.required_reviews = validate_project(self._data)
 
     @property
-    def version(self) -> Literal[1, 2]:
+    def version(self) -> Literal[1, 2, 3]:
         return int(self._data["version"])
 
     def to_dict(self) -> dict:
@@ -329,7 +344,11 @@ class PortableProject:
 
     @property
     def sources(self) -> tuple[SourceReference, ...]:
-        pages = [self._data] if self.version == 1 else self._data["pages"]
+        if self.version == 3:
+            # A reviewed unknown PDF/page field on a video is retained JSON,
+            # never permission to reinterpret the mandatory video media kind.
+            return (SourceReference(self._data["mediaPath"], expected_sha256=self._data["sourceSHA256"]),)
+        pages = [self._data] if self.version in (1, 3) else self._data["pages"]
         return tuple(SourceReference(p["mediaPath"], int(p["pdfPageIndex"]) if p.get("pdfPageIndex") is not None else None,
             p.get("sourceSHA256"), int(p["pdfGeometryVersion"]) if p.get("pdfGeometryVersion") is not None else None) for p in pages)
 
@@ -341,6 +360,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict:
             _fail("$", "duplicate JSON key: " + key)
         result[key] = value
     return result
+
+
+def _maximum_project_bytes(version: int) -> int:
+    return {1: MAX_V1_BYTES, 2: MAX_V2_BYTES, 3: MAX_V3_BYTES}[version]
 
 
 def load_project(payload: bytes | str) -> PortableProject:
@@ -355,7 +378,7 @@ def load_project(payload: bytes | str) -> PortableProject:
         project = PortableProject(data)
     except (UnicodeError, json.JSONDecodeError, RecursionError, OverflowError) as error:
         raise ProjectError("invalid bounded UTF-8 JSON") from error
-    if len(raw) > (MAX_V1_BYTES if project.version == 1 else MAX_V2_BYTES):
+    if len(raw) > _maximum_project_bytes(project.version):
         raise ProjectError("project exceeds version byte limit")
     return project
 
@@ -367,7 +390,7 @@ def dump_project(project: PortableProject) -> bytes:
         payload = (json.dumps(data, ensure_ascii=False, allow_nan=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
     except (ValueError, UnicodeError, RecursionError) as error:
         raise ProjectError("invalid JSON output") from error
-    if len(payload) > (MAX_V1_BYTES if project.version == 1 else MAX_V2_BYTES):
+    if len(payload) > _maximum_project_bytes(project.version):
         raise ProjectError("encoded project exceeds version byte limit")
     return payload
 

@@ -29,7 +29,20 @@ final class VideoExportTests {
     }
 
     func ffmpeg(_ args: [String]) throws {
-        guard let executable = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { throw NSError(domain: "Synthetic fixture generation requires ffmpeg", code: 1) }
+        let executable: String
+        if let selected = ProcessInfo.processInfo.environment["BLURACTION_FFMPEG"] {
+            // An explicitly selected CI tool must exist; do not silently run a
+            // different prefix executable when its preparation was incomplete.
+            guard selected.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: selected) else {
+                throw NSError(domain: "Selected synthetic fixture ffmpeg is unavailable", code: 1)
+            }
+            executable = selected
+        } else {
+            guard let available = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"].first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+                throw NSError(domain: "Synthetic fixture generation requires ffmpeg", code: 1)
+            }
+            executable = available
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["-hide_banner", "-loglevel", "error", "-nostdin"] + args

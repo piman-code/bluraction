@@ -4,6 +4,8 @@ This folder provides shared **data foundations**, not a Mac or Windows applicati
 
 Authoritative current implementation: `ProjectFile.swift`, `MultiPageProjectFile.swift`, `RegionShape.swift`, `DrawingAnnotation.swift`, `PageWorkspace.swift` and `RegionEditing.swift` in `Sources/BlurAction/`. `bluraction-project.schema.json` documents JSON Schema draft 2020-12 structure; `portable_project.py` performs additional semantic checks. Schema validation alone is insufficient. Schema tooling is optional and is not installed or used by this foundation.
 
+The experimental v3 video metadata contract is described in [VIDEO_TIMELINE.md](VIDEO_TIMELINE.md). The shared reader preserves it; application loaders still require exact native source/decoder-clock integration before accepting it. Its existence does not certify playback, audio, export or legacy-video migration.
+
 ## Containers and geometry
 
 | Format | Required fields | Bound |

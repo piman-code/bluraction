@@ -200,7 +200,7 @@ def relink_media(project: PortableProject, old_reference: str, new_reference: st
         elif checked.state != "unverified" or not allow_unverified_reviewed_source:
             raise ProjectError("relink blocked: no baseline; explicit source review required")
     data = project.to_dict()
-    pages = [data] if project.version == 1 else data["pages"]
+    pages = [data] if project.version in (1, 3) else data["pages"]
     for page in pages:
         if page["mediaPath"] == old_reference:
             page["mediaPath"] = new_reference

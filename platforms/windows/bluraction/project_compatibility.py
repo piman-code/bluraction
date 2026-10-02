@@ -61,7 +61,7 @@ def grapheme_count(text: str, stop_after: int | None = None) -> int:
 
 def _known_text_fields(tree):
     """Known Swift String.count paths/limits, not evaluation of JSONPath text."""
-    if tree['version'] == 1:
+    if tree['version'] in (1, 3):
         pages = [('$', tree)]
     else:
         yield '$.title', tree['title'], 255

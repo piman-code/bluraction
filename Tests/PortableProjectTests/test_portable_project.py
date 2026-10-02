@@ -171,13 +171,63 @@ class PortableProjectTests(unittest.TestCase):
             destination = Path(folder) / 'rival.bluraction'
             rival = Path(folder) / 'replacement'
             rival.write_bytes(b'preserve rival')
+            replacement = []
             def failure(_):
-                os.replace(rival, destination)
-                raise OSError('synthetic write failure after public replacement')
-            with patch('shared.portable_project.os.fsync', side_effect=failure):
-                with self.assertRaises(IncompleteProjectError):
+                try:
+                    os.replace(rival, destination)
+                except PermissionError:
+                    # Windows normally denies replacement while this CRT fd is
+                    # open. This is preservation, not a published rival path.
+                    replacement.append('blocked-while-open')
+                else:
+                    replacement.append('published-rival')
+                raise OSError('synthetic write failure after native replacement attempt')
+            with patch('shared.portable_project.os.fsync', side_effect=failure), \
+                 patch('shared.portable_project.os.unlink', side_effect=AssertionError('public cleanup must not unlink')):
+                with self.assertRaises(IncompleteProjectError) as result:
                     save_project_new(PortableProject(fixture()), destination)
-            self.assertEqual(destination.read_bytes(), b'preserve rival')
+            self.assertEqual(result.exception.partial_output, destination)
+            self.assertEqual(len(replacement), 1, 'The native replacement attempt must run')
+            self.assertIs(type(result.exception.__cause__), OSError)
+            self.assertEqual(str(result.exception.__cause__), 'synthetic write failure after native replacement attempt')
+            print('NATIVE_REPLACEMENT_JSON=' + json.dumps({'phase': 'while-open', 'outcome': replacement[0], 'bothInputsPreserved': replacement[0] == 'blocked-while-open'}))
+            if replacement == ['published-rival']:
+                self.assertEqual(destination.read_bytes(), b'preserve rival')
+                self.assertFalse(rival.exists())
+            else:
+                self.assertEqual(replacement, ['blocked-while-open'])
+                self.assertEqual(destination.read_bytes(), dump_project(PortableProject(fixture())))
+                self.assertEqual(rival.read_bytes(), b'preserve rival')
+
+    def test_failed_close_leaves_actual_replaced_destination_intact_on_each_os(self):
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / 'rival-after-close.bluraction'
+            rival = Path(folder) / 'replacement'
+            rival.write_bytes(b'preserve actual rival after close')
+            real_fdopen = os.fdopen
+            replaced = []
+            class CloseThenReplace:
+                def __init__(self, stream): self.stream = stream
+                def __enter__(self): return self.stream.__enter__()
+                def __exit__(self, kind, value, traceback):
+                    self.stream.__exit__(kind, value, traceback)
+                    self_closed = self.stream.closed
+                    if not self_closed: raise AssertionError('Replacement must follow actual fd close')
+                    os.replace(rival, destination)
+                    replaced.append(True)
+                    raise OSError('synthetic failure after close and actual public replacement')
+            def wrapped_fdopen(fd, mode): return CloseThenReplace(real_fdopen(fd, mode))
+            with patch('shared.portable_project.os.fdopen', side_effect=wrapped_fdopen), \
+                 patch('shared.portable_project.os.unlink', side_effect=AssertionError('public cleanup must not unlink')):
+                with self.assertRaises(IncompleteProjectError) as result:
+                    save_project_new(PortableProject(fixture()), destination)
+            self.assertEqual(result.exception.partial_output, destination)
+            self.assertEqual(replaced, [True])
+            self.assertIs(type(result.exception.__cause__), OSError)
+            self.assertEqual(str(result.exception.__cause__), 'synthetic failure after close and actual public replacement')
+            print('NATIVE_REPLACEMENT_JSON=' + json.dumps({'phase': 'after-close', 'outcome': 'published-rival', 'rivalPreserved': True}))
+            self.assertEqual(destination.read_bytes(), b'preserve actual rival after close')
+            self.assertFalse(rival.exists())
 
     def test_existing_controlled_mac_v2_json_fixtures_load_without_source_reads(self):
         repository = Path(__file__).resolve().parents[2]

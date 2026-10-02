@@ -42,21 +42,11 @@ print('Actual libheif/codec inventory (not redistribution approval):', info)
 '@
     & $Python -c "import subprocess,sys; subprocess.run([sys.executable,'-c',sys.argv[1]],check=True,timeout=60)" $RuntimeCheck
     if ($LASTEXITCODE -ne 0) { throw "Required PDF/HEIF backend missing or different from the reviewed pins." }
-    $RequiredTests = @'
-import sys, unittest
-sys.path.insert(0, 'Tests/WindowsAppTests')
-suite = unittest.TestSuite()
-for name in ('test_pdf_legacy_geometry.ActualPDFMetadataTests', 'test_heif_codec.ActualHeifCodecTests'):
-    required = unittest.defaultTestLoader.loadTestsFromName(name)
-    if not required.countTestCases():
-        raise SystemExit('Missing mandatory actual backend tests: ' + name)
-    suite.addTests(required)
-result = unittest.TextTestRunner(verbosity=2).run(suite)
-if not result.testsRun or result.skipped or not result.wasSuccessful():
-    raise SystemExit('Required actual PDF/HEIF tests failed or skipped; not a verified candidate')
-'@
-    & $Python -c "import subprocess,sys; subprocess.run([sys.executable,'-c',sys.argv[1]],check=True,timeout=300)" $RequiredTests
-    if ($LASTEXITCODE -ne 0) { throw "Mandatory actual PDF/HEIF tests failed, skipped or timed out." }
+    # Each mandatory backend owns a fresh Qt application process. The runner
+    # requires a positive completed summary, no backend skips, and a private
+    # Windows Job Object deadline; it does not install or automate OS input.
+    & $Python (Join-Path $RepoRoot "scripts/verify_windows.py") --required-backends-only --timeout 300
+    if ($LASTEXITCODE -ne 0) { throw "Mandatory actual PDF/HEIF families failed, skipped or timed out. Inspect the preserved runner report." }
 }
 
 if ($VerifyRuntimeOnly) {
@@ -202,8 +192,8 @@ if ($FinalizeReviewedBundle) {
         if ($LASTEXITCODE -ne 0) { throw "Portable project tests failed or timed out." }
         [Environment]::SetEnvironmentVariable('QT_QPA_PLATFORM', 'offscreen', 'Process')
         Assert-PinnedMediaRuntime
-        & $Python -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/WindowsAppTests','-v'],check=True,timeout=900)"
-        if ($LASTEXITCODE -ne 0) { throw "Windows engine/controller tests failed or timed out." }
+        & $Python (Join-Path $RepoRoot "scripts/verify_windows.py") --timeout 300
+        if ($LASTEXITCODE -ne 0) { throw "Windows engine/controller families failed, skipped or incomplete. Inspect the preserved runner report." }
         # Official helpers collect package resources and delvewheel's sibling
         # .libs DLL directory. No dedicated pillow-heif hook was assumed present.
         # https://pyinstaller.org/en/stable/hooks.html#PyInstaller.utils.hooks.collect_delvewheel_libs_directory
