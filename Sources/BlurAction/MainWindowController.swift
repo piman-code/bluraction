@@ -2097,7 +2097,8 @@ final class MainWindowController: NSWindowController {
 
     private var selectedTextFont: String? {
         let index = textFontPopup.indexOfSelectedItem
-        return index <= 0 ? nil : textFontPopup.titleOfSelectedItem
+        guard index > 0 else { return nil }
+        return textFontPopup.selectedItem?.representedObject as? String ?? textFontPopup.titleOfSelectedItem
     }
 
     private var selectedTextBackground: RGBAColor? {
@@ -2136,10 +2137,16 @@ final class MainWindowController: NSWindowController {
     /// Font, weight and background controls: set the next text and restyle a selected text.
     @objc private func textStyleChanged(_ sender: Any?) {
         guard !isExporting, let id = selectedDrawingID, let index = annotations.firstIndex(where: { $0.id == id }),
-              annotations[index].kind == .text else { return }
-        var updated = annotations[index].withText(annotations[index].text, fontName: .some(selectedTextFont),
-                                                  bold: textBoldCheckbox.state == .on)
-        updated.textBackground = selectedTextBackground
+              annotations[index].kind == .text, !annotations[index].locked,
+              let control = sender as? NSControl else { return }
+        var updated = annotations[index]
+        if control === textFontPopup {
+            updated = updated.withText(updated.text, fontName: .some(selectedTextFont))
+        } else if control === textBoldCheckbox {
+            updated = updated.withText(updated.text, bold: textBoldCheckbox.state == .on)
+        } else if control === textBackgroundPopup {
+            updated.textBackground = selectedTextBackground
+        } else { return }
         guard updated != annotations[index] else { return }
         checkpoint()
         annotations[index] = updated
@@ -2148,8 +2155,23 @@ final class MainWindowController: NSWindowController {
 
     private func showTextStyle(_ drawing: DrawingAnnotation) {
         guard drawing.kind == .text else { return }
-        if let font = drawing.fontName, textFontPopup.itemTitles.contains(font) { textFontPopup.selectItem(withTitle: font) }
-        else { textFontPopup.selectItem(at: 0) }
+        textFontPopup.removeAllItems()
+        textFontPopup.addItems(withTitles: ["시스템 글꼴"] + DrawingAnnotation.availableFontFamilies)
+        if let font = drawing.fontName {
+            if !font.isEmpty, let index = textFontPopup.itemTitles.dropFirst().firstIndex(of: font) {
+                textFontPopup.selectItem(at: index)
+            } else {
+                textFontPopup.addItem(withTitle: font.isEmpty ? "시스템 글꼴" : font)
+                textFontPopup.lastItem?.representedObject = font
+                textFontPopup.selectItem(at: textFontPopup.numberOfItems - 1)
+            }
+            textFontPopup.toolTip = DrawingAnnotation.fontIsAvailable(font, bold: drawing.bold, size: drawing.textFontSize)
+                ? "글꼴"
+                : "이 Mac에 없는 글꼴: \(font). 원래 이름을 보존합니다. 출력 전에 설치된 글꼴을 선택하세요."
+        } else {
+            textFontPopup.selectItem(at: 0)
+            textFontPopup.toolTip = "글꼴"
+        }
         textBoldCheckbox.state = drawing.bold ? .on : .off
         let options: [RGBAColor?] = [nil, RGBAColor(red: 0, green: 0, blue: 0, alpha: 0.55), RGBAColor(red: 0, green: 0, blue: 0, alpha: 1),
                                      RGBAColor(red: 1, green: 1, blue: 1, alpha: 0.7), RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)]
@@ -2158,8 +2180,12 @@ final class MainWindowController: NSWindowController {
 
     /// Text controls show in text mode or while a text drawing is selected.
     private func refreshTextControls() {
-        let selectedText = selectedDrawingID.flatMap { id in annotations.first { $0.id == id } }?.kind == .text
+        let selected = selectedDrawingID.flatMap { id in annotations.first { $0.id == id } }
+        let selectedText = selected?.kind == .text
         textTools.isHidden = !(toolSegment.selectedSegment == 1 && (canvasMode == .drawText || selectedText))
+        for control in [textFontPopup, textBoldCheckbox, textBackgroundPopup] as [NSControl] {
+            control.isEnabled = !isExporting && !(selected?.locked ?? false)
+        }
     }
 
     private func editText(_ id: UUID) {
@@ -2960,6 +2986,10 @@ final class MainWindowController: NSWindowController {
     }
 
     private func refreshSelectedEditor() {
+        if let id = selectedDrawingID, let drawing = annotations.first(where: { $0.id == id }) {
+            showTextStyle(drawing)
+        }
+        refreshTextControls()
         timeRangeEditor.isHidden = !doc.hasVideo
         motionTools.isHidden = !doc.hasVideo
         let canEditRange = doc.hasVideo && hasSelection && !isExporting

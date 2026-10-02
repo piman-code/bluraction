@@ -47,6 +47,40 @@ extension does not change the v1 video/media structure into a v2 page workspace.
 
 Supported region cover styles are `blur`, `mosaic`, `solid`. Drawing kinds are `rectangle`, `ellipse`, `line`, `freehand`, `arrow`, `text`. Unknown enum cases are rejected; future fields on otherwise known records are retained and flagged for host review. A region's hidden state is `enabled=false`; it has no `hidden` JSON property. A drawing has a separate `hidden` flag. Locked items still render but cannot be directly picked/erased. Do not conflate those states or discard group, name, font, color or erasure metadata.
 
+### Font requests across platforms
+
+Keep `fontName` exactly as stored, including case, an explicit empty string and
+nil/omitted defaults. Selecting text or changing its weight/background must not
+replace its family. Only an explicit font choice changes the stored request.
+An imported named font outside the Mac's suggested list appears as its original
+name; missing named fonts remain stored and visible output is refused until the
+person chooses an available font. Hidden text does not block output; locking
+does not authorize missing-font output or a style change.
+
+Both hosts resolve the following ASCII generic requests, including uppercase
+and mixed-case ASCII spellings. No whitespace trimming or partial-name matching
+converts a named request to a generic one. Availability and rendering use the
+same native resolver on each host. Non-ASCII case-fold equivalents remain an
+open cross-host check: Windows currently uses `casefold()`, while Mac uses
+`lowercased()`. The stored request is preserved in either case.
+
+| Request | Mac native resolution | Windows native resolution |
+| --- | --- | --- |
+| nil, empty, `System`, `Sans Serif`, `sans-serif` | Weighted system font | Qt general/sans-serif font |
+| `Monospace` | Weighted monospaced system font | Verified fixed-pitch system or installed family |
+| `Serif` | System descriptor with serif design | Qt serif style hint |
+| `Cursive` | First available Apple Chancery, Snell Roundhand, Zapfino | Qt cursive style hint |
+| `Fantasy` | First available Papyrus, Herculanum, Copperplate | Qt fantasy style hint |
+
+If a requested Mac generic design/family cannot be created, it is unavailable;
+the output gate must not approve a system-font replacement. Old-file previews
+may use a fallback while retaining the original request. These mappings are
+platform choices, not promises of identical glyphs or line widths. In particular,
+the Mac monospaced system font fixes Latin/ASCII widths; Korean fallback glyphs
+may have other widths. Exact cross-host layout needs the same installed named
+font and actual output comparison on both OSes. This policy does not install or
+bundle any fonts.
+
 `blurRadius` and `featherRadius` are 0…500, `lineWidth` and eraser `width` are greater than 0 and at most 16, colors and fill opacity are 0…1. Arrays of points/keyframes cap at 100,000; erasures cap at 10,000. Numeric values must be finite. Time range is `[lower,upper]` with finite nonnegative bounds and lower ≤ upper. `[0,0]` is the whole-video sentinel; another equal interval is not that sentinel. Keyframe and erasure-start times are finite/nonnegative. The Mac JSON validator does not require sorted/unique keyframe times; this loader preserves those arrays instead of silently retiming them.
 
 Video motion applies keyframes to the base shape at the playhead. Still images/PDF pages render with `time=nil`: base geometry, all time ranges ignored, and erasure `from` ignored. Erasure points remain in their item's base coordinate geometry and move with that item. Actual interpolation, clipping, alpha/fill composition, text layout, mosaic/blur and export must be verified against the native renderer before a Windows editor can claim matching behavior.

@@ -194,7 +194,7 @@ struct VideoProjectFile {
     static func requireAvailableFonts(_ drawings: [DrawingAnnotation]) throws {
         let missing = Set(drawings.filter { $0.kind == .text && !$0.hidden }.compactMap { item -> String? in
             guard let name = item.fontName else { return nil }
-            if NSFont(name: name, size: 12) != nil || NSFontManager.shared.availableMembers(ofFontFamily: name) != nil { return nil }
+            if DrawingAnnotation.fontIsAvailable(name, bold: item.bold, size: item.textFontSize) { return nil }
             return name
         })
         if !missing.isEmpty { throw Review(reason: "이 Mac에 없는 글꼴: " + missing.sorted().joined(separator: ", ") + ". 설치된 글꼴로 명시 변경한 프로젝트가 필요합니다.", originalData: Data()) }
