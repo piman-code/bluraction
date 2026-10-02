@@ -23,27 +23,8 @@ targets=(
   'mingw-w64-x86_64-pkgconf=1~3.0.7-1'
   mingw-w64-x86_64-zlib make
 )
-# Diagnostic-only separation: nullable metadata print paths must not be
-# replaced by guessed hashes/signatures. Any failed field keeps install blocked.
-if pacman -Sp --debug --print-format '%n' "${targets[@]}" \
-  > "$work/reports/pacman-name-control.txt" 2> "$work/logs/pacman-name-control.stderr"; then
-  printf 'name-control=0\n' > "$work/reports/pacman-fields.txt"
-else
-  result=$?
-  printf 'name-control=%s\n' "$result" > "$work/reports/pacman-fields.txt"
-  exit "$result"
-fi
-failed=0
-for field in h g; do
-  if pacman -Sp --debug --print-format "%n|%$field" "${targets[@]}" \
-    > "$work/reports/pacman-field-$field.txt" 2> "$work/logs/pacman-field-$field.stderr"; then
-    printf '%s=0\n' "$field" >> "$work/reports/pacman-fields.txt"
-  else
-    result=$?
-    printf '%s=%s\n' "$field" "$result" >> "$work/reports/pacman-fields.txt"
-    failed=1
-  fi
-done
-[[ "$failed" == 0 ]]
-pacman -Sp --debug --print-format '%n|%v|%f|%h|%l|%g' "${targets[@]}" \
+# %g is nullable in the captured mingw64 DB and crashes this pacman build.
+# Five nonnullable fields only; package_lock cross-checks the copied DB and
+# obtains every mandatory signature before the existing offline PGP installer.
+pacman -Sp --debug --print-format '%n|%v|%f|%h|%l' "${targets[@]}" \
   > "$work/pacman-plan.txt" 2> "$work/logs/pacman-plan.stderr"
