@@ -40,7 +40,7 @@ def main():
             digest = hashlib.sha256()
             with path.open('rb') as stream:
                 while block := stream.read(65536): digest.update(block)
-            result[str(path.relative_to(repo))] = digest.hexdigest()
+            result[path.relative_to(repo).as_posix()] = digest.hexdigest()
         return result
     before = snapshot()
     if before['scripts/verify_windows.py'] != RUNNER_SHA:
