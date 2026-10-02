@@ -1401,11 +1401,47 @@ class BlurActionWindow(QMainWindow):
     def import_items_dialog(self):
         if self.workspace.busy or not self.workspace.page:
             return
-        def load():
+        try:
             chosen = self.choose_item_project()
             if chosen:
-                self.workspace.import_project_items(chosen[0], chosen[1])
-        self.perform(load)
+                self.import_item_project(chosen[0], chosen[1])
+        except Exception as error:
+            self.show_error(error)
+
+    def import_item_project(self, path, page_index=0):
+        """Worker-owned verification; a single prepared edit transaction.
+
+        Source is borrowed: success/failure must not retire the playing session.
+        Existing exact presented time, histories and source identity survive.
+        """
+        if self.workspace.busy or not self.workspace.page:
+            return
+        from .media import check_cancel, validate_source_identities
+        operating_video=self.workspace.video
+        candidate=self.workspace.clone_for_io()
+        candidate._undo=deepcopy(self.workspace._undo)
+        candidate._redo=deepcopy(self.workspace._redo)
+        candidate.selection_ids=set(self.workspace.selection_ids)
+        candidate.record_motion=self.workspace.record_motion
+        # Own a Qt value copy; never cause a GUI-thread cache-miss decode.
+        candidate.page._image=QImage(self.canvas.image)
+
+        def prepare(cancel, progress):
+            candidate.import_project_items(path,page_index,cancel=cancel)
+            validate_source_identities(candidate.pages)
+            check_cancel(cancel)
+            return candidate
+
+        def commit(prepared):
+            if self.workspace.video is not operating_video:
+                raise ValueError('항목 준비 중 원본 작업이 변경되었습니다.')
+            validate_source_identities(prepared.pages)
+            self.workspace.adopt(prepared)
+
+        self._after_operation=commit
+        self._discard_cancelled_result=True
+        self._operation_label='프로젝트 항목 가져오기'
+        self.start_export(prepare)
 
     def template_dialog(self):
         if self.workspace.busy or not self.confirm_discard():

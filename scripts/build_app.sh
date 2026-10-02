@@ -4,21 +4,35 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 build_only=0
 install_app=1
+heic_cpu_root=""
 for arg in "$@"; do
     case "$arg" in
         --build-only) build_only=1 ;;
         --no-install) install_app=0 ;;
-        *) printf 'Unknown option: %s (use --build-only or --no-install)\n' "$arg" >&2; exit 64 ;;
+        --heic-cpu-root=*) heic_cpu_root="${arg#*=}" ;;
+        *) printf 'Unknown option: %s (use --build-only, --no-install or --heic-cpu-root=PATH)\n' "$arg" >&2; exit 64 ;;
     esac
 done
 export CLANG_MODULE_CACHE_PATH="$repo_root/.build/clang-cache"
 swift build --disable-sandbox --cache-path "$repo_root/.build/cache" -c release
 binary_dir="$(swift build --disable-sandbox --cache-path "$repo_root/.build/cache" -c release --show-bin-path)"
 bundle="$repo_root/.build/BlurAction.app"
+# Preserve the previous candidate before writing a fresh bundle. This also
+# prevents stale helper libraries/Info keys from a different build surviving.
+if [[ -e "$bundle" ]]; then
+    candidate_backup="$repo_root/.build/backups/Candidate-BlurAction-$(date '+%Y%m%d-%H%M%S')-$$.bundle-backup"
+    mkdir -p "$(dirname "$candidate_backup")"
+    mv "$bundle" "$candidate_backup"
+fi
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp "$binary_dir/BlurAction" "$bundle/Contents/MacOS/BlurAction"
 cp Resources/Info.plist "$bundle/Contents/Info.plist"
 cp Resources/AppIcon.icns "$bundle/Contents/Resources/AppIcon.icns"
+if [[ -n "$heic_cpu_root" ]]; then
+    python3 scripts/bundle_heic_cpu.py --bundle "$bundle" --owned-root "$heic_cpu_root"
+else
+    printf 'HEIC CPU helper omitted from this candidate; native HEIC only, CPU fallback unverified.\n' >&2
+fi
 # Local ad-hoc signature; this does not publish or notarize the app.
 codesign --force --sign - "$bundle"
 codesign --verify --strict "$bundle"

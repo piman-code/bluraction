@@ -24,6 +24,8 @@ final class DocumentModel: ObservableObject {
     @Published var currentCGImage: CGImage?
     @Published var errorMessage: String?
     private(set) var sourceSHA256: String?
+    private(set) var videoProjectBinding: VideoProjectSourceBinding?
+    private(set) var videoProjectReview: String?
 
     /// Called once after the latest load succeeds or fails, on the main actor.
     /// Image loads can complete synchronously; install this before calling load.
@@ -196,7 +198,7 @@ final class DocumentModel: ObservableObject {
         requestID = UUID()
     }
 
-    func load(url: URL, expectedSourceSHA256: String? = nil) {
+    func load(url: URL, expectedSourceSHA256: String? = nil, videoProject: VideoProjectFile? = nil) {
         loadTask?.cancel()
         loadTask = nil
         let id = UUID()
@@ -218,8 +220,10 @@ final class DocumentModel: ObservableObject {
         currentCGImage = nil
         errorMessage = nil
         sourceSHA256 = nil
+        videoProjectBinding = nil
+        videoProjectReview = nil
 
-        if Self.isImage(url: url) {
+        if videoProject == nil && Self.isImage(url: url) {
             do {
                 let digest = try PageWorkspace.digest(of: url)
                 if let expectedSourceSHA256, digest != expectedSourceSHA256 {
@@ -238,15 +242,22 @@ final class DocumentModel: ObservableObject {
             return
         }
         let loader = videoLoader
+        let requiresVideoBinding = videoProject != nil || !usesInjectedVideoLoader
         let permitsSyntheticSource = usesInjectedVideoLoader && expectedSourceSHA256 == nil
             && !FileManager.default.fileExists(atPath: url.path)
         loadTask = Task { [weak self] in
             do {
                 try Task.checkCancellation()
                 let digest: String?
+                let captured: VideoProjectSourceBinding.Source?
                 if permitsSyntheticSource {
                     digest = nil
+                    captured = nil
+                } else if requiresVideoBinding {
+                    captured = try await VideoProjectSourceBinding.capture(url)
+                    digest = captured?.sha256
                 } else {
+                    captured = nil
                     digest = try await Task.detached { try PageWorkspace.digest(of: url) }.value
                 }
                 try Task.checkCancellation()
@@ -255,9 +266,29 @@ final class DocumentModel: ObservableObject {
                 }
                 let metadata = try await loader(url)
                 try Task.checkCancellation()
+                var binding: VideoProjectSourceBinding?
+                var bindingReview: String?
+                if let captured {
+                    do {
+                        let observed = try await VideoProjectSourceBinding.observe(url: url)
+                        guard observed.source == captured else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                        if let videoProject { try videoProject.verify(binding: observed) }
+                        binding = observed
+                    } catch {
+                        try Task.checkCancellation()
+                        if videoProject != nil || !(error is VideoAssetTimeline.ReadError) { throw error }
+                        // Keep existing native formats readable. Their unbound
+                        // clock cannot be silently promoted to a v3 descriptor.
+                        bindingReview = "이 영상의 정확한 프로젝트 시간축은 추가 검토가 필요합니다. 기존 영상 형식으로 저장됩니다."
+                    }
+                }
                 if let digest {
                     let after = try await Task.detached { try PageWorkspace.digest(of: url) }.value
                     guard after == digest else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                }
+                if let captured {
+                    let finalSource = try await VideoProjectSourceBinding.capture(url)
+                    guard finalSource == captured else { throw PageWorkspace.WorkspaceError.sourceChanged }
                 }
                 guard let self, self.requestID == id, !Task.isCancelled else { return }
                 try Self.validateVideoDimensions(size: metadata.size, transform: metadata.transform)
@@ -274,6 +305,8 @@ final class DocumentModel: ObservableObject {
                 self.hasAudio = metadata.hasAudio
                 self.hasVideo = true
                 self.sourceSHA256 = digest
+                self.videoProjectBinding = binding
+                self.videoProjectReview = bindingReview
                 self.loadTask = nil
                 self.onLoad?()
             } catch {
@@ -307,6 +340,8 @@ final class DocumentModel: ObservableObject {
         currentCGImage = image
         errorMessage = nil
         sourceSHA256 = nil // Multi-page source integrity is checked by PageWorkspace.
+        videoProjectBinding = nil
+        videoProjectReview = nil
         onLoad?()
     }
 
@@ -317,6 +352,12 @@ final class DocumentModel: ObservableObject {
         if let url, let sourceSHA256, try PageWorkspace.digest(of: url) != sourceSHA256 {
             throw PageWorkspace.WorkspaceError.sourceChanged
         }
+        if let videoProjectBinding { try videoProjectBinding.source.validate() }
+    }
+
+    func validatedVideoProjectBinding() async throws -> VideoProjectSourceBinding {
+        guard let binding = videoProjectBinding else { throw ProjectFile.ProjectError.invalidContent }
+        return try await binding.revalidated()
     }
 
     /// Decode frame zero and bake all eight EXIF orientations into the pixels.

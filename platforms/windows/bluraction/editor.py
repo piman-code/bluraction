@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import wraps
 import json
 import math
 import os
@@ -14,6 +15,20 @@ from shared.source_relink import resolve_reference
 from .media import Page, load_pages, save_bytes_new, fingerprint, check_cancel, validate_source_identities
 from .renderer import bounds, shape_points, positioned, map_point, rect_at
 from .project_compatibility import validate_host_reviews, bounded_name_with_suffix
+
+
+def _owned_asset_transaction(operation):
+    """Own newly constructed sessions even before a candidate assigns video.
+
+    Failed/cancelled preparation closes only this context's new sources; an
+    operating or IO-snapshot video is borrowed and never registered here.
+    """
+    @wraps(operation)
+    def prepare(*args, **kwargs):
+        from .video import asset_transport_load
+        with asset_transport_load():
+            return operation(*args, **kwargs)
+    return prepare
 
 
 class MissingSources(ValueError):
@@ -461,11 +476,6 @@ class Workspace:
             payload = b''.join(chunks)
         check_cancel(cancel)
         project = decode_project(payload)
-        if project.version == 3:
-            # Shared v3 metadata can round-trip, but this host's decoder clock
-            # is still origin-relative. Never misread its top-level video as
-            # pages or silently apply asset-time edits before the adapter proof.
-            raise ValueError('영상 v3의 실제 시간축 연결 검수가 아직 끝나지 않았습니다. 현재 편집은 보존됩니다.')
         reviews = validate_host_reviews(project)
         if allow_legacy_pdf:
             reviews = tuple(reason for reason in reviews if not re.fullmatch(
@@ -476,17 +486,22 @@ class Workspace:
                              + '\n'.join(reviews))
         return project
 
-    def import_project_items(self, path, page_index=0):
+    def import_project_items(self, path, page_index=0, cancel=None):
         self._available()
-        project = self._read_project(path)
+        project = self._read_project(path, cancel=cancel)
         tree = project.to_dict()
-        entry = tree if project.version == 1 else tree['pages'][page_index]
+        entry = tree if project.version in (1, 3) else tree['pages'][page_index]
         if self.video and project.version == 1:
             from .video_project_compatibility import require_legacy_video_timing_compatible
             require_legacy_video_timing_compatible(entry, getattr(self.video, 'origin', None))
+        elif self.video and project.version == 3:
+            # Explicit import targets the operating source, not the old SHA.
+            # Its edits remain asset numbers; target clock must be observed.
+            self.video.verified_asset_binding(cancel)
         groups, additions = {}, {'regions': [], 'drawings': []}
         for key, region in [('regions', True), ('drawings', False)]:
             for original in entry[key]:
+                check_cancel(cancel)
                 item = deepcopy(original)
                 identifier = str(uuid.uuid4()).upper()
                 if region:
@@ -503,18 +518,21 @@ class Workspace:
                 additions[key].append(item)
         if not any(additions.values()):
             return
+        validate_source_identities(self.pages)
+        check_cancel(cancel)
         self._checkpoint()
         self.selection_ids.clear()
         for key, region in [('regions', True), ('drawings', False)]:
             self.page.state[key].extend(additions[key])
             self.selection_ids.update(self.item_id(item, region) for item in additions[key])
 
+    @_owned_asset_transaction
     def apply_project_template(self, path, media_paths, page_index=0, cancel=None):
         if self.busy:
             raise ValueError('진행 중인 작업이 끝난 뒤 템플릿을 여세요.')
         project = self._read_project(path, cancel=cancel)
         tree = project.to_dict()
-        entry = tree if project.version == 1 else tree['pages'][page_index]
+        entry = tree if project.version in (1, 3) else tree['pages'][page_index]
         # Explicit template use applies normalized edits to intentionally different
         # media. Load into a temporary workspace so failure retains current edits.
         candidate = Workspace()
@@ -522,6 +540,8 @@ class Workspace:
         if candidate.video and project.version == 1:
             from .video_project_compatibility import require_legacy_video_timing_compatible
             require_legacy_video_timing_compatible(entry, getattr(candidate.video, 'origin', None))
+        elif candidate.video and project.version == 3:
+            candidate.video.verified_asset_binding(cancel)
         for page in candidate.pages:
             check_cancel(cancel)
             page.state = {key: deepcopy(entry[key]) for key in ('regions', 'drawings')}
@@ -566,13 +586,25 @@ class Workspace:
         destination = Path(path).absolute()
         from .media import validate_sources
         validate_sources(self.pages, cancel)
-        if self.video:
+        binding=None
+        if self.video and getattr(self.video,'asset_session',None) is not None:
+            binding=self.video.verified_asset_binding(cancel)
+            if (Path(self.video.path) != self.page.source or
+                    binding.source_sha256 != self.page.source_sha256):
+                raise ValueError('현재 페이지와 영상 프로젝트 원본 바인딩이 다릅니다.')
+        elif self.video:
             from .video_project_compatibility import require_legacy_video_timing_compatible
             require_legacy_video_timing_compatible(self.page.state, getattr(self.video, 'origin', None))
         tree = deepcopy(self._project_tree) if self._project_tree else {}
         def reference(page):
             return page.source.name if page.source.parent == destination.parent else str(page.source)
-        if self.video or (tree.get('version') == 1 and len(self.pages) == 1):
+        if binding is not None:
+            from . import __version__
+            tree.update(version=3, mediaKind='video', mediaPath=reference(self.page),
+                sourceSHA256=binding.source_sha256,
+                producer={'name':'BlurAction','platform':'windows','version':__version__},
+                timeline=binding.timeline, **deepcopy(self.page.state))
+        elif self.video or (tree.get('version') == 1 and len(self.pages) == 1):
             tree.update(version=1, mediaPath=reference(self.page), **deepcopy(self.page.state))
             # Optional extension is lossless in portable readers; legacy Mac ignores it.
             tree['sourceSHA256'] = self.page.source_sha256
@@ -591,12 +623,27 @@ class Workspace:
                 output.append(entry)
             tree.update(version=2, title=self.title[:255], currentIndex=self.index, pages=output)
         payload = dump_project(PortableProject(tree))
+        reviews=validate_host_reviews(PortableProject(tree))
+        if reviews:
+            raise ValueError('프로젝트 호환 검토가 필요합니다:\n'+'\n'.join(reviews))
         validate_sources(self.pages, cancel)
+        if binding is not None:
+            if self.video.verified_asset_binding(cancel) != binding:
+                raise ValueError('저장 중 영상 원본 또는 시간축이 변경되었습니다.')
         check_cancel(cancel)
-        save_bytes_new(destination, payload, cancel=cancel)
+        def before_publication():
+            # Closing/flushing the private payload can take time. Keep the
+            # borrowed operating session and reject changed sources before
+            # the first exclusive creation of the public destination.
+            validate_sources(self.pages,cancel)
+            if binding is not None and self.video.verified_asset_binding(cancel)!=binding:
+                raise ValueError('저장 직전 영상 원본 또는 시간축이 변경되었습니다.')
+            check_cancel(cancel)
+        save_bytes_new(destination,payload,cancel=cancel,prepublish=before_publication)
         self._project_tree = tree
         self.dirty = False
 
+    @_owned_asset_transaction
     def load_project(self, path, relinks=None, acknowledged_unverified=None, cancel=None):
         if self.busy:
             raise ValueError('진행 중인 작업이 끝난 뒤 프로젝트를 여세요.')
@@ -604,7 +651,7 @@ class Workspace:
         project_path = Path(path).absolute()
         project = self._read_project(project_path, allow_legacy_pdf=True, cancel=cancel)
         tree = project.to_dict()
-        entries = [tree] if project.version == 1 else tree['pages']
+        entries = [tree] if project.version in (1, 3) else tree['pages']
         relinks = relinks or {}
         native = 'windows' if os.name == 'nt' else 'macos'
         resolved, missing, unverified = [], [], []
@@ -631,7 +678,7 @@ class Workspace:
         for source in resolved:
             check_cancel(cancel)
             size = source.stat().st_size
-            video_source = source.suffix.lower() in {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm'}
+            video_source = project.version == 3 or source.suffix.lower() in {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm'}
             limit = max(1, size) if video_source else (512 if source.suffix.lower() == '.pdf' else 128) * 1024 ** 2
             if size > limit:
                 raise ValueError('원본 파일이 읽기 용량 한도를 넘습니다.')
@@ -654,18 +701,25 @@ class Workspace:
         video = None
         for entry, source in zip(entries, resolved):
             check_cancel(cancel)
-            is_video = source.suffix.lower() in {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm'}
-            is_pdf = entry.get('pdfPageIndex') is not None
+            is_video = project.version == 3 or source.suffix.lower() in {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm'}
+            is_pdf = project.version == 2 and entry.get('pdfPageIndex') is not None
             if project.version == 2 and ((is_video) or (is_pdf != (source.suffix.lower() == '.pdf'))):
                 raise ValueError('페이지 프로젝트의 미디어 종류가 원래 저장 정보와 다릅니다.')
             if project.version == 1 and source.suffix.lower() == '.pdf':
                 raise ValueError('단일 프로젝트의 PDF는 페이지 형식으로 다시 열어 주세요.')
             if source not in decoded:
-                if source.suffix.lower() in {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm'}:
+                if is_video:
                     from .video import VideoSource
-                    video = VideoSource(source, cancel=cancel)
-                    from .video_project_compatibility import require_legacy_video_timing_compatible
-                    require_legacy_video_timing_compatible(entry, getattr(video, 'origin', None))
+                    if project.version == 3:
+                        video = VideoSource(source, cancel=cancel, require_asset_presentation=True)
+                        from shared.video_timeline import verify_asset_descriptor
+                        binding=video.verified_asset_binding(cancel)
+                        verify_asset_descriptor(tree,source_sha256=binding.source_sha256,
+                                                observed_timeline=binding.timeline)
+                    else:
+                        video = VideoSource(source, cancel=cancel)
+                        from .video_project_compatibility import require_legacy_video_timing_compatible
+                        require_legacy_video_timing_compatible(entry, getattr(video, 'origin', None))
                     decoded[source] = [video.page()]
                 else:
                     decoded[source] = load_pages([source], cancel=cancel) if cancel is not None else load_pages([source])
@@ -696,6 +750,10 @@ class Workspace:
         _ = pages[selected_index].image
         from .media import validate_sources
         validate_sources(pages, cancel)
+        if video is not None and project.version == 3:
+            final_binding=video.verified_asset_binding(cancel)
+            verify_asset_descriptor(tree,source_sha256=final_binding.source_sha256,
+                                    observed_timeline=final_binding.timeline)
         check_cancel(cancel)
         self._replace(pages, tree.get('title', project_path.stem[:255]), video)
         self.index = selected_index

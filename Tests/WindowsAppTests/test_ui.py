@@ -359,16 +359,40 @@ class WindowTests(unittest.TestCase):
         self.workspace.video = None
 
     def asset_source(self):
-        """Synthetic exact asset interface; real decoder/device proof is separate."""
+        """Authored exact asset adapter; real decoder/device proof is separate.
+
+        Its source is this test's PNG and its timeline is declared, not native
+        metadata evidence. Production v3 checks use actual spawned MOV sources
+        in test_video_project_v3_host; this seam tests UI PTS/edit persistence.
+        """
         from types import SimpleNamespace
         from platforms.windows.bluraction.video import TimedImage
+        from platforms.windows.bluraction.canonical_transport import VideoAssetBinding
+        from platforms.windows.bluraction.canonical_frames import descriptor_sha256
+        from shared.video_timeline import encode_rational
         source=self.source
+        expected_sha=fingerprint(source)
+        timeline={'version':1,'basis':'asset-presentation',
+            'assetDuration':encode_rational(Fraction(19,12)),
+            'tracks':[{'id':1,'kind':'video','mediaTimescale':12,'segments':[
+                {'assetStart':encode_rational(Fraction(0)),
+                 'assetDuration':encode_rational(Fraction(1,12)),
+                 'mediaStart':None,'rate':encode_rational(Fraction(1))},
+                {'assetStart':encode_rational(Fraction(1,12)),
+                 'assetDuration':encode_rational(Fraction(3,2)),
+                 'mediaStart':encode_rational(Fraction(0)),
+                 'rate':encode_rational(Fraction(1))}]}]}
+        binding=VideoAssetBinding.observed(
+            {'sha256':expected_sha,'timeline':timeline,
+             'descriptorSHA256':descriptor_sha256(timeline)},expected_sha,Fraction(19,12))
         class Source:
             duration=float(Fraction(19,12))
             first_frame_time=Fraction(1,12)
             origin=Fraction(0)
             closed=False
             def __init__(self):
+                self.path=source
+                self.source_sha256=expected_sha
                 self.asset_session=SimpleNamespace(duration=Fraction(19,12),metadata={'audioTracks':()})
             def _guard(self):
                 if self.closed: raise ValueError('source closed')
@@ -378,7 +402,13 @@ class WindowTests(unittest.TestCase):
                 stamp=Fraction(1,12) if seconds<Fraction(7,12) else Fraction(7,12)
                 image=QImage(160,100,QImage.Format.Format_RGBA8888); image.fill(QColor('white'))
                 return TimedImage(stamp,image)
-            def validate(self,cancel=None): fingerprint(source,cancel=cancel)
+            def validate(self,cancel=None):
+                self._guard()
+                if fingerprint(source,cancel=cancel)!=self.source_sha256:
+                    raise ValueError('authored adapter source changed')
+            def verified_asset_binding(self,cancel=None):
+                self.validate(cancel)
+                return binding
             def close_asset_transport(self):
                 self.closed=True; self.asset_session=None
         return Source()
@@ -410,6 +440,9 @@ class WindowTests(unittest.TestCase):
         destination=Path(self.temp.name)/'canonical-asset-presentation.bluraction'
         self.workspace.save_project(destination)
         tree=json.loads(destination.read_text())
+        self.assertEqual(tree['version'],3)
+        self.assertEqual(tree['sourceSHA256'],fingerprint(self.source))
+        self.assertEqual(tree['timeline'],self.workspace.video.verified_asset_binding().timeline)
         self.assertEqual(tree['regions'][0]['effect'],region['effect'])
         self.window.seek_video(.8); self.spin_until(lambda:not self.window.canvas.preview_queue.busy)
         self.assertEqual(self.workspace.time,float(Fraction(7,12)))
@@ -1341,7 +1374,10 @@ class WindowTests(unittest.TestCase):
                    return_value=(str(project), 'BlurAction 프로젝트 (*.bluraction)')), \
              patch('platforms.windows.bluraction.ui.QInputDialog.getInt', return_value=(2, True)) as page_panel:
             self.window.actions['import_items'].trigger()
+            self.wait_for_operation()
         page_panel.assert_called_once()
+        self.assertFalse(self.workspace.busy)
+        self.assertEqual(len(self.workspace._undo[self.workspace.index]),1)
         self.assertEqual(len(self.workspace.page.state['drawings']), 1)
         imported = self.workspace.page.state['drawings'][0]
         self.assertEqual(imported['kind'], 'arrow')

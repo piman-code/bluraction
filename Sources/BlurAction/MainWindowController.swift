@@ -72,6 +72,13 @@ final class MainWindowController: NSWindowController {
     private var eraseFromNow = true
     /// A project waiting for its media to finish loading before its items are applied.
     private var pendingProject: ProjectFile?
+    private var pendingVideoProject: VideoProjectFile?
+    private var pendingTemplate = false
+    private var videoProjectBaseline: VideoProjectFile?
+    private var videoProjectNativeBaseline: ProjectFile?
+    private var projectSaveTask: Task<Void, Never>?
+    private var projectImportID: UUID?
+    private var imageExportID: UUID?
     private var pendingDocument: DocumentModel?
     private var pendingWorkspace: PageWorkspace?
     private var pendingWorkspaceNavigation = false
@@ -402,6 +409,12 @@ final class MainWindowController: NSWindowController {
                 self.gestureSnapshot = RegionEditing.scaled(snapshot, from: old, to: new)
             }
             self.gestureAnnotations = self.gestureAnnotations?.map { $0.scaled(from: old, to: new) }
+            if var baseline = self.videoProjectNativeBaseline {
+                baseline.regions = RegionEditing.scaled(baseline.regions.map { ($0.shape, $0.effect) }, from: old, to: new)
+                    .map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }
+                baseline.drawings = baseline.drawings.map { $0.scaled(from: old, to: new) }
+                self.videoProjectNativeBaseline = baseline
+            }
         }
         canvas.modeBinding = { [weak self] in self?.canvasMode ?? .rectangle }
         canvas.modeUpdate = { [weak self] m in self?.canvasMode = m }
@@ -1210,7 +1223,12 @@ final class MainWindowController: NSWindowController {
 
     @objc private func exportTapped() {
         guard !isExporting, doc.mediaKind != .none, let input = doc.url else { return }
-        do { try doc.validateSourceUnchanged() }
+        do {
+            try validateExportFonts()
+            // Image snapshot worker performs cancellable original verification.
+            // Do not repeat its full file hash on the GUI actor before the panel.
+            if doc.mediaKind != .image || pageWorkspace != nil { try doc.validateSourceUnchanged() }
+        }
         catch { showError(error.localizedDescription); return }
         if pageWorkspace != nil {
             endGesture()
@@ -1267,6 +1285,13 @@ final class MainWindowController: NSWindowController {
                 }
             })
             await MainActor.run { self.exportFinished() }
+        }
+    }
+
+    func validateExportFonts() throws {
+        try VideoProjectFile.requireAvailableFonts(annotations)
+        if let workspace = pageWorkspace {
+            for page in workspace.pages { try VideoProjectFile.requireAvailableFonts(page.drawings) }
         }
     }
 
@@ -1363,11 +1388,14 @@ final class MainWindowController: NSWindowController {
     }
 
     @objc private func cancelTapped() {
-        if pendingDocument != nil { cancelPendingMediaLoad() }
+        if let projectSaveTask { projectSaveTask.cancel() }
+        else if pendingDocument != nil { cancelPendingMediaLoad() }
         else if let pageExportCancellation { pageExportCancellation.cancel() }
         else if let trackingCancellation { trackingCancellation.cancel() }
         else { exporter.cancel() }
     }
+    func cancelCurrentOperation() { cancelTapped() }
+    var projectSaveInProgress: Bool { projectSaveTask != nil }
 
     // MARK: - Automatic tracking (Vision)
 
@@ -1511,20 +1539,59 @@ final class MainWindowController: NSWindowController {
         let type = types[max(0, imageFormatPopup.indexOfSelectedItem)]
         let panel = ImageSavePanel.make(original: original, type: type)
         guard panel.runModal() == .OK, let output = panel.url else { return }
-        do {
-            let compression: Double
-            switch quality { case .original: compression = 1; case .high: compression = 0.92; case .medium: compression = 0.75; case .low: compression = 0.5 }
-            try BlurredImageExporter.export(source: cgImage, pairs: pairs, canvasSize: canvas.bounds.size,
-                                            inputURL: original, outputURL: output, type: type, quality: compression,
-                                            annotations: annotations, expectedSourceSHA256: doc.sourceSHA256)
-            progressLabel.stringValue = "저장 완료: \(output.lastPathComponent)"
-            let alert = NSAlert()
-            alert.messageText = "저장 완료"
-            alert.informativeText = output.lastPathComponent
-            alert.addButton(withTitle: "확인")
-            alert.addButton(withTitle: "Finder에서 보기")
-            if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([output]) }
-        } catch { showError(error.localizedDescription) }
+        let compression: Double
+        switch quality { case .original: compression = 1; case .high: compression = 0.92; case .medium: compression = 0.75; case .low: compression = 0.5 }
+        do { try exportImageSnapshot(cgImage: cgImage, to: output, type: type, compression: compression) }
+        catch { showError(error.localizedDescription) }
+    }
+
+    /// Testable worker entrypoint; panels are only the outer destination chooser.
+    /// No original decode/hash or CPU helper wait runs on the GUI thread.
+    func exportImageSnapshot(cgImage: CGImage, to output: URL, type: UTType, compression: Double,
+                             heicCPUHelper: HEICCPUEncoder.Helper? = nil,
+                             completion: ((Result<URL, Error>) -> Void)? = nil) throws {
+        guard !isExporting, let original = doc.url, let expected = doc.sourceSHA256 else {
+            throw ProjectFile.ProjectError.invalidContent
+        }
+        try VideoProjectFile.requireAvailableFonts(annotations)
+        let operating = doc, size = canvas.bounds.size
+        let regions = pairs, drawings = annotations
+        let id = UUID(); imageExportID = id
+        let cancellation = PageExportCancellation(); pageExportCancellation = cancellation
+        setExporting(true); progressIndicator.isIndeterminate = true
+        progressIndicator.isHidden = false; cancelButton.isHidden = false
+        progressLabel.stringValue = "이미지를 새 파일로 만드는 중…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result: Result<URL, Error> = Result {
+                let captured = try VideoProjectSourceBinding.Source.capture(original) {
+                    if cancellation.isCancelled { throw BlurredImageExporter.ExportError.cancelled }
+                }
+                guard captured.sha256 == expected else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                try BlurredImageExporter.export(source: cgImage, pairs: regions, canvasSize: size,
+                    inputURL: original, outputURL: output, type: type, quality: compression,
+                    annotations: drawings, expectedSourceSHA256: expected,
+                    cancel: { cancellation.isCancelled }, heicCPUHelper: heicCPUHelper)
+                return output
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.imageExportID == id, self.doc === operating else { return }
+                self.imageExportID = nil; self.pageExportCancellation = nil
+                self.progressIndicator.isHidden = true; self.progressIndicator.isIndeterminate = false
+                self.cancelButton.isHidden = true; self.setExporting(false)
+                if let completion { completion(result); return }
+                switch result {
+                case .success(let saved):
+                    self.progressLabel.stringValue = "저장 완료: \(saved.lastPathComponent)"
+                    let alert = NSAlert(); alert.messageText = "저장 완료"; alert.informativeText = saved.lastPathComponent
+                    alert.addButton(withTitle: "확인"); alert.addButton(withTitle: "Finder에서 보기")
+                    if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([saved]) }
+                case .failure(let error):
+                    self.progressLabel.stringValue = ""
+                    if cancellation.isCancelled { self.workflowHint.stringValue = "이미지 저장을 취소했습니다. 기존 작업은 유지됩니다." }
+                    else { self.showError(error.localizedDescription) }
+                }
+            }
+        }
     }
 
     @objc private func undoTapped() {
@@ -2227,6 +2294,11 @@ final class MainWindowController: NSWindowController {
     /// Hidden = left out of preview and export (regions use `enabled`). Internal for tests.
     func setLayerHidden(_ id: UUID, _ hidden: Bool) {
         guard !isExporting else { return }
+        if !hidden, var drawing = annotations.first(where: { $0.id == id }) {
+            drawing.hidden = false
+            do { try VideoProjectFile.requireAvailableFonts([drawing]) }
+            catch { showError(error.localizedDescription); return }
+        }
         endGesture()
         if let index = pairs.firstIndex(where: { $0.shape.id == id }), pairs[index].effect.enabled == hidden {
             checkpoint()
@@ -2361,7 +2433,7 @@ final class MainWindowController: NSWindowController {
     // MARK: - Project save / open
 
     /// The session as a project, geometry normalized to a 1×1 canvas. Internal for tests.
-    func projectData(projectURL: URL? = nil) throws -> Data {
+    func projectData(projectURL: URL? = nil, producerVersion: String? = nil) throws -> Data {
         guard let media = doc.url, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
             throw ProjectFile.ProjectError.invalidContent
         }
@@ -2369,8 +2441,29 @@ final class MainWindowController: NSWindowController {
         let regions = RegionEditing.scaled(pairs, from: canvas.bounds.size, to: unit).map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }
         let drawings = annotations.map { $0.scaled(from: canvas.bounds.size, to: unit) }
         try doc.validateSourceUnchanged()
+        if let binding = doc.videoProjectBinding {
+            let version = try Self.projectProducerVersion(producerVersion)
+            let reference = ProjectFile.mediaReference(for: media, projectURL: projectURL)
+            if let baseline = videoProjectBaseline, let nativeBaseline = videoProjectNativeBaseline {
+                let current = ProjectFile(mediaPath: reference,
+                    regions: pairs.map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }, drawings: annotations)
+                let normalized = ProjectFile(mediaPath: reference, regions: regions, drawings: drawings)
+                return try baseline.updated(mediaPath: reference, binding: binding, producerVersion: version,
+                    baseline: nativeBaseline, current: current, normalized: normalized).encoded()
+            }
+            return try VideoProjectFile.make(mediaPath: reference, binding: binding, producerVersion: version,
+                regions: regions, drawings: drawings).encoded()
+        }
         return try ProjectFile(mediaPath: ProjectFile.mediaReference(for: media, projectURL: projectURL),
                                regions: regions, drawings: drawings, sourceSHA256: doc.sourceSHA256).encoded()
+    }
+
+    private static func projectProducerVersion(_ supplied: String?) throws -> String {
+        guard let version = supplied ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              VideoProjectFile.validProducerVersion(version) else {
+            throw ProjectFile.ProjectError.invalidContent
+        }
+        return version
     }
 
     @objc private func saveProjectTapped() {
@@ -2390,11 +2483,65 @@ final class MainWindowController: NSWindowController {
         do {
             if pageWorkspace != nil {
                 try saveWorkspaceProject(to: url)
+            } else if doc.videoProjectBinding != nil {
+                try saveVideoProject(to: url)
+                return
             } else {
                 try writeNewProject(projectData(projectURL: url), to: url)
             }
             workflowHint.stringValue = "프로젝트를 저장했습니다: \(url.lastPathComponent)"
         } catch { showError(error.localizedDescription) }
+    }
+
+    /// Native source reinspection, SHA and publication run on owned workers.
+    /// The supplied version is a test-only direct API; production uses Bundle Info.
+    func saveVideoProject(to url: URL, producerVersion: String? = nil) throws {
+        guard !isExporting, let binding = doc.videoProjectBinding,
+              let media = doc.url, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
+            throw ProjectFile.ProjectError.invalidContent
+        }
+        let version = try Self.projectProducerVersion(producerVersion)
+        let size = canvas.bounds.size, unit = CGSize(width: 1, height: 1)
+        let reference = ProjectFile.mediaReference(for: media, projectURL: url)
+        let current = ProjectFile(mediaPath: reference,
+            regions: pairs.map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }, drawings: annotations)
+        let normalized = ProjectFile(mediaPath: reference,
+            regions: RegionEditing.scaled(pairs, from: size, to: unit).map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) },
+            drawings: annotations.map { $0.scaled(from: size, to: unit) })
+        let project: VideoProjectFile
+        if let baseline = videoProjectBaseline, let native = videoProjectNativeBaseline {
+            project = try baseline.updated(mediaPath: reference, binding: binding, producerVersion: version,
+                baseline: native, current: current, normalized: normalized)
+        } else {
+            project = try VideoProjectFile.make(mediaPath: reference, binding: binding, producerVersion: version,
+                regions: normalized.regions, drawings: normalized.drawings)
+        }
+        let data = try project.encoded()
+        let operating = doc
+        setExporting(true); cancelButton.isHidden = false
+        progressIndicator.isIndeterminate = true; progressIndicator.isHidden = false
+        progressLabel.stringValue = "프로젝트 원본과 시간축을 확인하는 중…"
+        projectSaveTask = Task { [weak self] in
+            do {
+                let verified = try await binding.revalidated()
+                try Task.checkCancellation()
+                let publication = Task.detached {
+                    try VideoProjectPublication.write(data, to: url, source: verified.source) { try Task.checkCancellation() }
+                }
+                try await withTaskCancellationHandler { try await publication.value } onCancel: { publication.cancel() }
+                guard let self, self.doc === operating else { return }
+                self.window?.isDocumentEdited = false
+                self.workflowHint.stringValue = "프로젝트를 저장했습니다: \(url.lastPathComponent)"
+            } catch {
+                guard let self, self.doc === operating else { return }
+                if !(error is CancellationError) { self.showError(error.localizedDescription) }
+                else { self.workflowHint.stringValue = "프로젝트 저장을 취소했습니다. 기존 작업은 유지됩니다." }
+            }
+            guard let self else { return }
+            self.projectSaveTask = nil; self.progressIndicator.isHidden = true
+            self.progressIndicator.isIndeterminate = false; self.cancelButton.isHidden = true
+            self.progressLabel.stringValue = ""; self.setExporting(false)
+        }
     }
 
     /// Persists the visible page before encoding a multi-page session.
@@ -2426,7 +2573,7 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Asks for a `.bluraction` file and decodes it (validated). Returns the project and its URL.
-    private func chooseProject(message: String? = nil) -> (ProjectFile, URL)? {
+    private func chooseProject(message: String? = nil) -> (ProjectFile, VideoProjectFile?, URL)? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [ProjectFile.contentType]
         panel.allowsMultipleSelection = false
@@ -2434,10 +2581,12 @@ final class MainWindowController: NSWindowController {
         if let message { panel.message = message }
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
-            let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-            guard values.isRegularFile == true else { throw ProjectFile.ProjectError.invalidContent }
-            guard (values.fileSize ?? 0) <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
-            return (try ProjectFile.decode(Data(contentsOf: url)), url)
+            let data = try VideoProjectFile.read(at: url, maximumBytes: ProjectFile.maximumBytes)
+            if try VideoProjectFile.version(of: data) == 3 {
+                let project = try VideoProjectFile.decode(data)
+                return (project.edits, project, url)
+            }
+            return (try VideoProjectFile.decodeLegacy(data), nil, url)
         } catch {
             showError(error.localizedDescription)
             return nil
@@ -2478,18 +2627,13 @@ final class MainWindowController: NSWindowController {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-            guard values.isRegularFile == true,
-                  (values.fileSize ?? 0) <= MultiPageProjectFile.maximumBytes else {
-                throw ProjectFile.ProjectError.tooLarge
+            let data = try VideoProjectFile.read(at: url)
+            switch try VideoProjectFile.version(of: data) {
+            case 2: try openWorkspaceProject(MultiPageProjectFile.decode(data), relativeTo: url)
+            case 1: openSingleProject(try VideoProjectFile.decodeLegacy(data), projectURL: url)
+            case 3: openVideoProjectFile(try VideoProjectFile.decode(data), projectURL: url)
+            default: throw ProjectFile.ProjectError.unsupportedVersion
             }
-            let data = try Data(contentsOf: url)
-            if let multi = try? MultiPageProjectFile.decode(data) {
-                try openWorkspaceProject(multi, relativeTo: url)
-                return
-            }
-            let project = try ProjectFile.decode(data)
-            openSingleProject(project, projectURL: url)
         } catch { showError(error.localizedDescription) }
     }
 
@@ -2531,18 +2675,86 @@ final class MainWindowController: NSWindowController {
         openProject(project, media: media)
     }
 
+    private func openVideoProjectFile(_ project: VideoProjectFile, projectURL url: URL) {
+        let reference = project.edits
+        var media = reference.mediaURL(relativeTo: url)
+        if reference.needsPlatformRelink || !FileManager.default.fileExists(atPath: media.path) {
+            guard let replacement = chooseMedia(message: "프로젝트 원본(\(ProjectFile.portableFileName(project.mediaPath)))을 다시 연결하세요. 저장된 지문과 정확한 시간축이 모두 같아야 편집을 적용합니다.") else { return }
+            media = replacement
+        }
+        openVideoProject(project, media: media)
+    }
+
+    /// Content role comes from the v3 contract, never from the replacement suffix.
+    func openVideoProject(_ project: VideoProjectFile, media: URL, asTemplate: Bool = false) {
+        guard canLoadFiles else { return }
+        do { try VideoProjectFile.requireAvailableFonts(project.payload.drawings) }
+        catch { showError(error.localizedDescription); return }
+        var edits = project.edits
+        if asTemplate { edits.sourceSHA256 = nil }
+        load(url: media, project: edits, videoProject: project, template: asTemplate)
+    }
+
     /// Template use: the project's items (normalized positions, times, styles) on another video or image.
     @objc private func applyProjectToOtherMediaTapped() {
-        guard !isExporting, var (project, _) = chooseProject(message: "적용할 프로젝트(템플릿)를 고르세요."),
+        guard !isExporting, var (project, videoProject, _) = chooseProject(message: "적용할 프로젝트(템플릿)를 고르세요."),
               let media = chooseMedia(message: "프로젝트 항목을 적용할 영상이나 이미지를 고르세요.") else { return }
         project.sourceSHA256 = nil // Explicit template action intentionally targets different media.
-        openProject(project, media: media)
+        if let videoProject { openVideoProject(videoProject, media: media, asTemplate: true) }
+        else { load(url: media, project: project, template: true) }
     }
 
     @objc private func importProjectItemsTapped() {
         guard !isExporting, doc.mediaKind != .none,
-              let (project, _) = chooseProject(message: "현재 파일에 항목을 더할 프로젝트를 고르세요.") else { return }
+              let (project, videoProject, _) = chooseProject(message: "현재 파일에 항목을 더할 프로젝트를 고르세요.") else { return }
+        if let videoProject {
+            do { try importVideoProjectItems(videoProject) } catch { showError(error.localizedDescription) }
+            return
+        }
         importProjectItems(project)
+    }
+
+    func importVideoProjectItems(_ project: VideoProjectFile,
+                                 completion: ((Result<Void, Error>) -> Void)? = nil) throws {
+        guard !isExporting, let source = doc.url, let expected = doc.sourceSHA256,
+              canvas.bounds.width > 0, canvas.bounds.height > 0 else { throw ProjectFile.ProjectError.invalidContent }
+        try VideoProjectFile.requireAvailableFonts(project.payload.drawings)
+        let binding = doc.videoProjectBinding
+        if doc.hasVideo && binding == nil { throw ProjectFile.ProjectError.invalidContent }
+        let operating = doc, id = UUID(); projectImportID = id
+        setExporting(true); cancelButton.isHidden = false
+        progressIndicator.isIndeterminate = true; progressIndicator.isHidden = false
+        progressLabel.stringValue = "항목을 가져오기 전에 현재 원본을 확인하는 중…"
+        projectSaveTask = Task { [weak self] in
+            let result: Result<Void, Error>
+            do {
+                let validated: VideoProjectSourceBinding.Source
+                if let binding { validated = try await binding.revalidated().source }
+                else {
+                    validated = try await VideoProjectSourceBinding.capture(source)
+                    guard validated.sha256 == expected else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                }
+                try Task.checkCancellation()
+                guard let self, self.projectImportID == id else { return }
+                guard self.doc === operating else { throw CancellationError() }
+                try validated.validateIdentity()
+                // No await between the final source/generation gate and the
+                // single existing import checkpoint/commit on the GUI actor.
+                self.setExporting(false)
+                self.importProjectItems(project.edits)
+                result = .success(())
+            } catch { result = .failure(error) }
+            guard let self, self.projectImportID == id else { return }
+            self.projectImportID = nil; self.projectSaveTask = nil
+            self.progressIndicator.isHidden = true; self.progressIndicator.isIndeterminate = false
+            self.cancelButton.isHidden = true; self.progressLabel.stringValue = ""; self.setExporting(false)
+            guard self.doc === operating else { return }
+            if let completion { completion(result); return }
+            if case .failure(let error) = result {
+                if error is CancellationError { self.workflowHint.stringValue = "항목 가져오기를 취소했습니다. 기존 작업은 유지됩니다." }
+                else { self.showError(error.localizedDescription) }
+            }
+        }
     }
 
     /// Adds a project's items to the current session as new items (new IDs and group IDs, fitted to
@@ -2581,6 +2793,7 @@ final class MainWindowController: NSWindowController {
         checkpoint()
         pairs.append(contentsOf: imported)
         annotations.append(contentsOf: drawings)
+        window?.isDocumentEdited = true
         workflowHint.stringValue = "프로젝트에서 영역 \(imported.count)개 · 그림 \(drawings.count)개를 가져왔습니다."
         refreshAfterEdit()
     }
@@ -2592,7 +2805,7 @@ final class MainWindowController: NSWindowController {
         load(url: media, project: project)
     }
 
-    private func applyProject(_ project: ProjectFile) {
+    private func applyProject(_ project: ProjectFile, clipToTarget: Bool = true) {
         let size = canvas.bounds.size
         guard size.width > 0, size.height > 0 else {
             showError("화면을 준비하지 못해 프로젝트 내용을 적용하지 못했습니다. 창을 키운 뒤 다시 열어 주세요.")
@@ -2601,7 +2814,7 @@ final class MainWindowController: NSWindowController {
         let unit = CGSize(width: 1, height: 1)
         // A template applied to a shorter video: clip ranges that run past the end.
         func clipped(_ range: ClosedRange<Double>) -> ClosedRange<Double> {
-            guard doc.hasVideo, !(range.lowerBound == 0 && range.upperBound == 0), range.upperBound > doc.duration else { return range }
+            guard clipToTarget, doc.hasVideo, !(range.lowerBound == 0 && range.upperBound == 0), range.upperBound > doc.duration else { return range }
             return min(range.lowerBound, doc.duration)...doc.duration
         }
         pairs = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size).map { pair in
@@ -2915,7 +3128,8 @@ final class MainWindowController: NSWindowController {
 
     /// Prepare a separate document; the operating session is untouched until completion.
     private func load(url: URL, project: ProjectFile?, pageImage: CGImage? = nil,
-                      workspace: PageWorkspace? = nil, workspaceNavigation: Bool = false) {
+                      workspace: PageWorkspace? = nil, workspaceNavigation: Bool = false,
+                      videoProject: VideoProjectFile? = nil, template: Bool = false) {
         Self.dropLoadLog.notice("load-requested")
         guard canLoadFiles else {
             Self.dropLoadLog.notice("load-blocked-by-export")
@@ -2929,6 +3143,8 @@ final class MainWindowController: NSWindowController {
         let candidate = DocumentModel(videoLoader: videoLoader)
         pendingDocument = candidate
         pendingProject = project
+        pendingVideoProject = videoProject
+        pendingTemplate = template
         pendingWorkspace = workspace
         pendingWorkspaceNavigation = workspaceNavigation
         pendingProgressText = progressLabel.stringValue
@@ -2945,7 +3161,8 @@ final class MainWindowController: NSWindowController {
             candidate.load(pageImage: pageImage, sourceURL: url,
                            name: "\(workspace.title) · \(workspace.currentIndex + 1)/\(workspace.pages.count)")
         } else {
-            candidate.load(url: url, expectedSourceSHA256: project?.sourceSHA256)
+            candidate.load(url: url, expectedSourceSHA256: project?.sourceSHA256,
+                           videoProject: template ? nil : videoProject)
         }
     }
 
@@ -2960,6 +3177,8 @@ final class MainWindowController: NSWindowController {
         pendingDocument?.onLoad = nil
         pendingDocument = nil
         pendingProject = nil
+        pendingVideoProject = nil
+        pendingTemplate = false
         pendingWorkspace = nil
         pendingWorkspaceNavigation = false
         progressLabel.stringValue = pendingProgressText
@@ -2972,9 +3191,15 @@ final class MainWindowController: NSWindowController {
             if let error = candidate.errorMessage { throw NSError(domain: "BlurAction.Load", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: error]) }
             guard candidate.mediaKind != .none else { throw DocumentModel.LoadError.noVideo }
-            if let expected = pendingProject?.sourceSHA256 {
+            if let expected = pendingProject?.sourceSHA256, pendingVideoProject == nil || pendingTemplate {
                 try candidate.validateSourceUnchanged(expectedSourceSHA256: expected)
             }
+            if let project = pendingVideoProject, !pendingTemplate {
+                guard let binding = candidate.videoProjectBinding else { throw ProjectFile.ProjectError.invalidContent }
+                try project.verify(binding: binding)
+                try binding.source.validateIdentity()
+            }
+            if let binding = candidate.videoProjectBinding { try binding.source.validateIdentity() }
             if let workspace = pendingWorkspace { try workspace.validateSourcesUnchanged() }
         } catch {
             finishPendingMediaLoad()
@@ -2982,6 +3207,8 @@ final class MainWindowController: NSWindowController {
             return
         }
         let project = pendingProject
+        let videoProject = pendingVideoProject
+        let template = pendingTemplate
         let workspace = pendingWorkspace
         let replacingWorkspace = !pendingWorkspaceNavigation
         candidate.onLoad = nil
@@ -2989,7 +3216,11 @@ final class MainWindowController: NSWindowController {
         pendingWorkspace = nil
         pendingWorkspaceNavigation = false
         pendingProject = project
+        pendingVideoProject = videoProject
+        pendingTemplate = template
         doc = candidate
+        videoProjectBaseline = nil
+        videoProjectNativeBaseline = nil
         pageWorkspace = workspace
         if replacingWorkspace { workspaceWindowFitted = false }
         // Only a verified candidate can reach these destructive session resets.
@@ -3176,8 +3407,17 @@ final class MainWindowController: NSWindowController {
         refreshEraserControls()
         if let project = pendingProject {
             pendingProject = nil
-            applyProject(project)
+            let original = pendingVideoProject
+            let template = pendingTemplate
+            pendingVideoProject = nil; pendingTemplate = false
+            applyProject(project, clipToTarget: template)
+            if let original, !template {
+                videoProjectBaseline = original
+                videoProjectNativeBaseline = ProjectFile(mediaPath: original.mediaPath,
+                    regions: pairs.map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }, drawings: annotations)
+            }
         }
+        if let review = doc.videoProjectReview { workflowHint.stringValue = review }
         if let workspace = pageWorkspace {
             restoreWorkspacePage(workspace.pages[workspace.currentIndex])
             mainContainer.pageControls.isHidden = false

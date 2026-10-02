@@ -372,7 +372,13 @@ def publish_new(temporary, destination):
             raise
 
 
-def save_bytes_new(path, data, cancel=None):
+def save_bytes_new(path, data, cancel=None, *, prepublish=None):
+    """Write privately, then revalidate caller state before exclusive publish.
+
+    A project source can change while its payload is flushed. The optional
+    callback runs after the temporary writer closes and before the public path
+    is created; its failure leaves the destination absent.
+    """
     check_cancel(cancel)
     target = fresh_target(path)
     fd, name = tempfile.mkstemp(prefix='.bluraction-', suffix='.tmp', dir=target.parent)
@@ -383,6 +389,9 @@ def save_bytes_new(path, data, cancel=None):
                 out.write(data[offset:offset + 1024 * 1024])
             out.flush()
             os.fsync(out.fileno())
+        check_cancel(cancel)
+        if prepublish is not None:
+            prepublish()
         check_cancel(cancel)
         publish_new(name, target)
     finally:

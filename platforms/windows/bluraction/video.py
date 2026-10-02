@@ -228,7 +228,7 @@ class TimedImage:
 
 
 class VideoSource:
-    def __init__(self, path, cancel=None):
+    def __init__(self, path, cancel=None, *, require_asset_presentation=False):
         check_cancel(cancel)
         self.path = Path(path).absolute()
         self._source_identity = _capture_identity(self.path)
@@ -238,7 +238,7 @@ class VideoSource:
         # bounded by the original captured size and reject any growth/change.
         self.source_sha256 = fingerprint(self.path, max_bytes=self._source_identity.metadata[3], cancel=cancel)
         check_cancel(cancel)
-        if _ASSET_LOAD.get() and self.path.suffix.lower() in ('.mov','.mp4','.m4v'):
+        if require_asset_presentation or (_ASSET_LOAD.get() and self.path.suffix.lower() in ('.mov','.mp4','.m4v')):
             self._load_owned_asset(cancel)
             created=_ASSET_CREATED.get()
             if created is not None: created.append(self)
@@ -355,6 +355,18 @@ class VideoSource:
     def page(self):
         self._guard()
         return Page(self.path, self.source_sha256, self._first_image.copy(), source_identity=self._source_identity)
+
+    def verified_asset_binding(self, cancel=None):
+        """Source-bound v3 authority. Never infer a timeline from file suffix/Qt."""
+        session=getattr(self,'asset_session',None)
+        if session is None:
+            raise VideoError('이 영상의 실제 asset 시간축 검수가 필요합니다. 저장된 기간은 이동하지 않습니다.')
+        self.validate(cancel)
+        binding=session.verified_asset_binding(cancel)
+        if binding.source_sha256 != self.source_sha256:
+            raise VideoError('영상 프로젝트 원본 지문이 변경되었습니다.')
+        self._guard(); check_cancel(cancel)
+        return binding
 
     def enable_asset_transport(self, cancel=None):
         """UI load-worker transaction; preserve the legacy origin/save guard.

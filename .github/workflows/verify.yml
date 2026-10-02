@@ -104,6 +104,33 @@ jobs:
             if [ "$diagnostic_status" -ne 3 ]; then exit "$diagnostic_status"; fi
             echo '::warning::ImageIO encode failures observed. Mandatory native regressions still follow; no formats are skipped.'
           fi
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Build owned CPU HEIC helper for mandatory product regressions
+        run: |
+          python build-recipes/macos-heic-cpu/verify_candidate.py --repository "$PWD"
+          python - <<'PYTHON'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path.cwd()
+          attempts = list((root / '.build').glob('mac-heic-cpu-verification-*'))
+          assert len(attempts) == 1, 'One fresh runner-owned HEIC attempt required'
+          attempt = attempts[0]
+          report = json.loads((attempt / 'execution.json').read_text())
+          assert report['status'] == 'source-build-and-six-cases-complete' and report['sourcesPreserved']
+          assert report['host'] == 'darwin' and report['macOS'].startswith('14.')
+          helper = attempt / 'source-build/heic_cpu_candidate'
+          assert helper.is_file() and not helper.is_symlink() and helper.resolve() == helper
+          digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+          assert digest == report['helperSHA256']
+          rows = {'BLURACTION_TEST_HEIC_CPU_HELPER': str(helper),
+                  'BLURACTION_TEST_HEIC_CPU_HELPER_SHA256': digest,
+                  'BLURACTION_OWNED_HEIC_ROOT': str(attempt / 'source-build')}
+          assert all('\n' not in v and '\r' not in v for v in rows.values())
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              for name, value in rows.items(): stream.write(name + '=' + value + '\n')
+          PYTHON
       - name: Native Mac regression checks
         # Keep the mandatory product run even if its separate diagnostic
         # crashes; both failures remain failures with their own evidence.
@@ -116,6 +143,19 @@ jobs:
           name: mac-native-verification
           path: |
             .build/mac-verification-*/
+            .build/mac-heic-cpu-verification-*/execution.json
+            .build/mac-heic-cpu-verification-*/tool-acquisition.json
+            .build/mac-heic-cpu-verification-*/*.log
+            .build/mac-heic-cpu-verification-*/source-build/reports/*.json
+            .build/mac-heic-cpu-verification-*/source-build/logs/*
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/summary.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/execution.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/report.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/stdout.txt
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/stderr.txt
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/*.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/stdout.txt
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/stderr.txt
             .build/image-io-diagnostic-*/execution.json
             .build/image-io-diagnostic-*/native.json
             .build/image-io-diagnostic-*/native.stderr
@@ -124,8 +164,10 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
-      - name: Build candidate without operating installation
-        run: ./scripts/build_app.sh --build-only --no-install
+      - name: Build integrated candidate without operating installation
+        run: |
+          test -n "$BLURACTION_OWNED_HEIC_ROOT"
+          ./scripts/build_app.sh --build-only --no-install --heic-cpu-root="$BLURACTION_OWNED_HEIC_ROOT"
 
   windows-native:
     if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac' && inputs.target_platform != 'mac-heic-cpu' }}

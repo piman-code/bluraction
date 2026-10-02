@@ -283,8 +283,13 @@ final class LayersTextTimelineTrackingTests {
         canvas.regionsUpdate?([region.replacing(rect: tiny)])
         session.controller.applyEraserStroke([CGPoint(x: 0, y: tiny.midY), CGPoint(x: canvas.bounds.width, y: tiny.midY)], width: 40)
         #expect(canvas.effectForID?(region.id)?.erasures.count == 1)
-        let project = try ProjectFile.decode(try session.controller.projectData())
+        let current = try VideoProjectFile.decode(session.controller.projectData(producerVersion: "test.layers"))
+        #expect(current.payload.version == 3)
+        let project = current.edits
         #expect(project.regions[0].effect.erasures.count == 1, "The saved project reopens")
+        let legacy = try ProjectFile.decode(project.encoded())
+        #expect(legacy.regions[0].effect.erasures == project.regions[0].effect.erasures,
+                "The v1 edit DTO still preserves the same eraser geometry and timing")
     }
 
     @Test

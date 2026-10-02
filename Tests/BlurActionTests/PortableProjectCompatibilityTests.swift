@@ -625,9 +625,18 @@ struct PortableProjectCompatibilityTests {
         #expect(container.canvas.currentVideoTime == displayed)
         #expect(container.canvas.currentTimeProvider?() == displayed)
         let createdShape = RegionShape.rectangle(id: UUID(), origin: .zero, size: container.canvas.bounds.size)
+        // This path uses an actual bound native MOV, so inspect the v3 host's
+        // current edit projection. Image/injected-loader v1 controls elsewhere
+        // remain unchanged. The test binary has no production Bundle Info.
+        func currentVideoEdits() throws -> ProjectFile {
+            let current = try VideoProjectFile.decode(controller.projectData(producerVersion: "test.native-leading-gap"))
+            #expect(current.payload.version == 3)
+            #expect(current.sourceSHA256 == expectedSourceDigest)
+            return current.edits
+        }
         // Use the product's registered callbacks, with no synthetic mouse events.
         container.canvas.regionsUpdate?([createdShape])
-        let createdRegion = try #require(try ProjectFile.decode(controller.projectData()).regions.first)
+        let createdRegion = try #require(try currentVideoEdits().regions.first)
         #expect(createdRegion.effect.timeRange.lowerBound == displayed)
         #expect(createdRegion.effect.isActive(at: displayed))
         #expect(createdRegion.effect.style == .blur && createdRegion.effect.blurRadius == 25)
@@ -641,7 +650,7 @@ struct PortableProjectCompatibilityTests {
             points: [.zero, CGPoint(x: container.canvas.bounds.width, y: container.canvas.bounds.height)],
             color: .white, lineWidth: 2, fillOpacity: 1)
         container.canvas.annotationAdded?(addedDrawing)
-        let createdSession = try ProjectFile.decode(controller.projectData())
+        let createdSession = try currentVideoEdits()
         let createdDrawing = try #require(createdSession.drawings.first)
         #expect(createdDrawing.timeRange.lowerBound == displayed)
         #expect(createdDrawing.isVisible(at: displayed))
@@ -649,27 +658,34 @@ struct PortableProjectCompatibilityTests {
         try #require(CFGetTypeID(drawingContents as CFTypeRef) == CGImage.typeID)
         #expect(try meanRGB(drawingContents as! CGImage) > 200, "New white drawing is immediately visible")
         controller.perform(NSSelectorFromString("undoTapped"))
-        #expect(try ProjectFile.decode(controller.projectData()).drawings.isEmpty)
+        #expect(try currentVideoEdits().drawings.isEmpty)
         controller.perform(NSSelectorFromString("redoTapped"))
-        #expect(try ProjectFile.decode(controller.projectData()) == createdSession)
+        #expect(try currentVideoEdits() == createdSession)
         let createdURL = folder.appendingPathComponent("created-on-presented-frame.bluraction")
-        let createdData = try controller.projectData(projectURL: createdURL)
+        let createdData = try controller.projectData(projectURL: createdURL, producerVersion: "test.native-leading-gap")
         try createdData.write(to: createdURL, options: .withoutOverwriting)
-        let savedCreation = try ProjectFile.decode(Data(contentsOf: createdURL))
+        let savedVideo = try VideoProjectFile.decode(Data(contentsOf: createdURL))
+        let savedCreation = savedVideo.edits
         #expect(savedCreation.regions[0].effect.timeRange.lowerBound == displayed)
         #expect(savedCreation.drawings[0].timeRange.lowerBound == displayed)
+        // Keep the legacy v1 codec's exact saved-time contract independently.
+        let legacyCreation = try VideoProjectFile.decodeLegacy(savedCreation.encoded())
+        #expect(legacyCreation == savedCreation)
         let reopenedCreation = MainWindowController(loadErrorPresenter: { errors.append($0) })
         reopenedCreation.window?.isReleasedWhenClosed = false
         reopenedCreation.showWindow(nil)
         defer { reopenedCreation.close() }
         let reopenedContainer = try #require(reopenedCreation.window?.contentViewController as? MainContainerViewController)
-        reopenedCreation.openProject(savedCreation, media: output)
+        reopenedCreation.openVideoProject(savedVideo, media: output)
         let creationDeadline = ContinuousClock.now.advanced(by: .seconds(10))
         while (reopenedCreation.mediaLoadSessionDiagnostics.pending || reopenedContainer.liveBlur.contents == nil
                || reopenedContainer.liveBlur.presentedFrameTime == nil), ContinuousClock.now < creationDeadline {
             await Task.yield()
         }
-        let reopenedSession = try ProjectFile.decode(reopenedCreation.projectData())
+        let reopenedVideo = try VideoProjectFile.decode(reopenedCreation.projectData(producerVersion: "test.native-leading-gap"))
+        #expect(reopenedVideo.timeline == savedVideo.timeline)
+        #expect(reopenedVideo.sourceSHA256 == savedVideo.sourceSHA256)
+        let reopenedSession = reopenedVideo.edits
         #expect(reopenedSession.regions[0].effect.timeRange.lowerBound == displayed)
         #expect(reopenedSession.drawings[0].timeRange.lowerBound == displayed)
         let reopenedContents = try #require(reopenedContainer.liveBlur.contents)
@@ -689,7 +705,7 @@ struct PortableProjectCompatibilityTests {
             RegionKeyframe(time: displayed + 0.08, rect: CGRect(x: 0.7, y: 0.1, width: 0.2, height: 0.2))]
         controller.importProjectItems(ProjectFile(mediaPath: output.path,
             regions: [.init(shape: movingShape, effect: movingEffect)], drawings: []))
-        let movingID = try #require(try ProjectFile.decode(controller.projectData()).regions.last?.shape.id)
+        let movingID = try #require(try currentVideoEdits().regions.last?.shape.id)
         let seekTarget = displayed + 0.02
         container.slider.doubleValue = seekTarget
         controller.perform(NSSelectorFromString("sliderMoved:"), with: container.slider)
@@ -709,12 +725,12 @@ struct PortableProjectCompatibilityTests {
             y: container.canvas.bounds.height * 0.2), threshold: 0))
         container.canvas.selectRegion(id: movingID)
         controller.perform(NSSelectorFromString("recordCurrentPosition"))
-        let recorded = try #require(try ProjectFile.decode(controller.projectData()).regions.last)
+        let recorded = try #require(try currentVideoEdits().regions.last)
         #expect(recorded.effect.keyframes.count == 2)
         #expect(recorded.effect.keyframes.first?.time == heldPTS)
         let center = CGPoint(x: container.canvas.bounds.width * 0.2, y: container.canvas.bounds.height * 0.2)
         container.canvas.eraserStroke?([CGPoint(x: center.x - 1, y: center.y), CGPoint(x: center.x + 1, y: center.y)], 10)
-        let erased = try #require(try ProjectFile.decode(controller.projectData()).regions.last)
+        let erased = try #require(try currentVideoEdits().regions.last)
         #expect(erased.effect.erasures.first?.from == heldPTS)
         #expect(erased.effect.erasures.first?.isActive(at: heldPTS) == true)
 
