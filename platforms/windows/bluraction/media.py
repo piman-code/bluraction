@@ -16,6 +16,8 @@ from PySide6.QtGui import QImage, QImageIOHandler, QImageReader, QImageWriter, Q
 from PySide6.QtPdf import QPdfDocument, QPdfDocumentRenderOptions
 
 from shared.portable_project import validate_output_path, windows_reserved_name
+from shared.source_identity import (StatSnapshot, metadata, stat_snapshot,
+                                    same_domain, path_matches_descriptor)
 
 from .renderer import render
 
@@ -43,10 +45,11 @@ MAX_SOURCE_BYTES = 1024 ** 3
 class SourceIdentity:
     canonical: str
     metadata: tuple
+    stat_snapshot: StatSnapshot | None = None
 
 
 def _metadata(info):
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    return metadata(info)
 
 
 def _capture_identity(path):
@@ -56,20 +59,23 @@ def _capture_identity(path):
         before = path.lstat()
         if not stat.S_ISREG(before.st_mode):
             raise ValueError('읽을 수 있는 일반 원본 파일을 선택하세요.')
+        before_snapshot = stat_snapshot(before, domain='path')
         canonical = path.resolve(strict=True)
-        resolved = canonical.stat()
-        after = path.lstat()
-        if (_metadata(before) != _metadata(resolved) or _metadata(before) != _metadata(after)
+        resolved = stat_snapshot(canonical.stat(), domain='path')
+        after = stat_snapshot(path.lstat(), domain='path')
+        if (not same_domain(before_snapshot, resolved) or not same_domain(before_snapshot, after)
                 or path.resolve(strict=True) != canonical):
             raise ValueError('원본 경로가 확인 중 변경되었습니다.')
-        return SourceIdentity(str(canonical), _metadata(before))
+        return SourceIdentity(str(canonical), before_snapshot.metadata, before_snapshot)
     except OSError as error:
         raise ValueError('읽을 수 있는 일반 원본 파일을 선택하세요.') from error
 
 
 def _check_identity(path, expected):
-    if _capture_identity(path) != expected:
+    current = _capture_identity(path)
+    if current != expected:
         raise ValueError('원본 파일 또는 경로가 변경되었습니다. 가림 위치를 다시 확인하세요.')
+    return current
 
 
 def fingerprint(path, max_bytes=MAX_SOURCE_BYTES, cancel=None):
@@ -88,7 +94,8 @@ def fingerprint(path, max_bytes=MAX_SOURCE_BYTES, cancel=None):
     fd = os.open(path, flags)
     try:
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or _metadata(opened) != expected.metadata:
+        descriptor_baseline = stat_snapshot(opened, domain='descriptor')
+        if not path_matches_descriptor(expected.stat_snapshot, descriptor_baseline):
             raise ValueError('원본 파일이 열리는 동안 변경되었습니다.')
         _check_identity(path, expected)
         digest, count = hashlib.sha256(), 0
@@ -99,9 +106,12 @@ def fingerprint(path, max_bytes=MAX_SOURCE_BYTES, cancel=None):
             count += len(chunk)
             if count > max_bytes:
                 raise ValueError('원본 파일이 읽기 용량 한도를 넘습니다.')
-            if _metadata(os.fstat(fd)) != expected.metadata:
+            descriptor_current = stat_snapshot(os.fstat(fd), domain='descriptor')
+            if not same_domain(descriptor_baseline, descriptor_current):
                 raise ValueError('원본이 읽는 동안 변경되었습니다.')
-            _check_identity(path, expected)
+            current = _check_identity(path, expected)
+            if not path_matches_descriptor(current.stat_snapshot, descriptor_current):
+                raise ValueError('원본 파일 또는 경로가 읽는 동안 변경되었습니다.')
             if not chunk:
                 break
             digest.update(chunk)

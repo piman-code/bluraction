@@ -210,7 +210,8 @@ def inspect_pdf_geometry(path, qt_point_sizes, *, expected_identity=None, expect
     marked pdfGeometryVersion=1 never need a legacy policy decision. Return
     metadata only; this function never changes a PDF, project, or editor.
     """
-    from .media import _capture_identity, _check_identity, _metadata, check_cancel, fingerprint
+    from .media import _capture_identity, _check_identity, check_cancel, fingerprint
+    from shared.source_identity import stat_snapshot, same_domain, path_matches_descriptor
     path = Path(path).absolute()
     check = lambda: check_cancel(cancel)
     check()
@@ -232,7 +233,8 @@ def inspect_pdf_geometry(path, qt_point_sizes, *, expected_identity=None, expect
     result = []
     try:
         with os.fdopen(descriptor, 'rb') as stream:
-            if _metadata(os.fstat(stream.fileno())) != before.metadata:
+            descriptor_baseline = stat_snapshot(os.fstat(stream.fileno()), domain='descriptor')
+            if not path_matches_descriptor(before.stat_snapshot, descriptor_baseline):
                 raise PDFGeometryError('PDF 원본이 열리는 동안 변경되었습니다.')
             _check_identity(path, before)
             reader = backend.PdfReader(_BoundedReader(stream, size, check), strict=True, root_object_recovery_limit=1000)
@@ -246,7 +248,9 @@ def inspect_pdf_geometry(path, qt_point_sizes, *, expected_identity=None, expect
                 media = inherited.get('/MediaBox')
                 crop = inherited.get('/CropBox', media)
                 result.append(analyze_geometry(media, crop, inherited.get('/Rotate', 0), page.get('/UserUnit', 1), qt_size))
-            if _metadata(os.fstat(stream.fileno())) != before.metadata:
+            descriptor_current = stat_snapshot(os.fstat(stream.fileno()), domain='descriptor')
+            if (not same_domain(descriptor_baseline, descriptor_current)
+                    or not path_matches_descriptor(before.stat_snapshot, descriptor_current)):
                 raise PDFGeometryError('PDF 원본이 메타데이터 검증 중 변경되었습니다.')
     except PDFGeometryError:
         raise

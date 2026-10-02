@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable, Literal
 
 from .portable_project import PortableProject, ProjectError, windows_reserved_name, validate_output_path
+from .source_identity import stat_snapshot, same_domain, path_matches_descriptor, same_path_binding
 
 Platform = Literal["macos", "windows"]
 MAX_SOURCE_BYTES = 1024 * 1024 * 1024
@@ -136,12 +137,20 @@ def check_source(resolution: PathResolution, expected_sha256: str | None, *,
         metadata = path.stat(follow_symlinks=False)
         if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= maximum_bytes:
             return result("blocked", "source must be a nonempty bounded regular file")
+        path_baseline = stat_snapshot(metadata, domain='path')
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
         descriptor = os.open(path, flags)
         with os.fdopen(descriptor, "rb") as stream:
             before = os.fstat(stream.fileno())
             if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= maximum_bytes:
                 return result("blocked", "source must be a nonempty bounded regular file")
+            descriptor_baseline = stat_snapshot(before, domain='descriptor')
+            if not path_matches_descriptor(path_baseline, descriptor_baseline):
+                return result("changed", "source identity changed before verification")
+            opened_path = stat_snapshot(path.stat(follow_symlinks=False), domain='path')
+            if (not same_path_binding(path_baseline, opened_path, str(canonical), str(path.resolve(strict=True)))
+                    or not path_matches_descriptor(opened_path, descriptor_baseline)):
+                return result("changed", "source path changed before verification")
             digest = hashlib.sha256()
             count = 0
             while block := stream.read(1024 * 1024):
@@ -151,8 +160,11 @@ def check_source(resolution: PathResolution, expected_sha256: str | None, *,
                 digest.update(block)
             after = os.fstat(stream.fileno())
         current = path.stat(follow_symlinks=False)
-        fingerprint = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-        if fingerprint(before) != fingerprint(after) or fingerprint(after) != fingerprint(current) or path.resolve(strict=True) != canonical or count != after.st_size:
+        descriptor_current = stat_snapshot(after, domain='descriptor')
+        path_current = stat_snapshot(current, domain='path')
+        if (not same_domain(descriptor_baseline, descriptor_current)
+                or not same_path_binding(path_baseline, path_current, str(canonical), str(path.resolve(strict=True)))
+                or not path_matches_descriptor(path_current, descriptor_current) or count != after.st_size):
             return result("changed", "source identity changed during verification")
         actual = digest.hexdigest()
         if expected_sha256 is None:

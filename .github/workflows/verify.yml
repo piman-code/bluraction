@@ -1,6 +1,7 @@
 name: Verify Mac and Windows candidates
 
-# This workflow is source preparation. It has not been run on GitHub.
+# Development CI; first actual run 36953462804 exposed environment/stat-domain
+# failures. Passing CI is distinct from OS user acceptance and a release.
 # Candidate packaging is opt-in; no installation, signing, push or release step.
 on:
   pull_request:
@@ -45,20 +46,39 @@ jobs:
 
   mac-native:
     runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      # Runner default Xcode15 lacks Swift Testing. Keep macOS14 execution;
+      # select its installed Xcode16.2 only for this ephemeral job environment.
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Record native runner and require the existing fixture tool
+      - name: Record native runner and Swift Testing toolchain
         run: |
           uname -a
+          test -d "$DEVELOPER_DIR"
           swift --version
           xcode-select -p
-          if ! command -v ffmpeg; then
-            echo '::error::Swift fixture checks require an approved ffmpeg installation on this runner.'
-            exit 1
-          fi
+      - name: Install approved synthetic fixture tool on the disposable runner
+        timeout-minutes: 15
+        run: |
+          # Official ffmpeg@7 provides a Sonoma arm64 bottle. This test-only
+          # GPL CLI is not linked into or bundled with the Mac application.
+          brew install ffmpeg@7
+          fixture_bin="$(brew --prefix ffmpeg@7)/bin/ffmpeg"
+          fixture_version="$("$fixture_bin" -version)"
+          printf '%s\n' "$fixture_version"
+          [[ "${fixture_version%%$'\n'*}" =~ ^ffmpeg\ version\ 7\.1\.5([\ -]|$) ]]
+          test ! -e /opt/homebrew/bin/ffmpeg
+          test ! -L /opt/homebrew/bin/ffmpeg
+          ln -s "$fixture_bin" /opt/homebrew/bin/ffmpeg
+          shasum -a 256 "$fixture_bin"
+          brew info --json=v2 ffmpeg@7
       - name: Native Mac regression checks
         run: python3 scripts/verify_mac.py
       - name: Retain synthetic native verification logs and input hashes
@@ -96,6 +116,8 @@ jobs:
       - name: Check required native media capabilities
         shell: pwsh
         run: |
+          & .ci-venv/Scripts/python.exe scripts/diagnose_source_identity.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual source stat-domain diagnostic could not complete.' }
           ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
           & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
