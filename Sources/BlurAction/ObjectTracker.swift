@@ -20,13 +20,21 @@ enum ObjectTracker {
 
     enum TrackError: LocalizedError {
         case noVideoTrack, readFailed, boxTooSmall
+        /// Keep native diagnostics available to tests without replacing the
+        /// readable user message with framework internals.
+        case nativeFailure(stage: FailureStage, underlying: NSError?)
         var errorDescription: String? {
             switch self {
             case .noVideoTrack: return "영상 트랙을 찾지 못했습니다."
             case .readFailed: return "영상 프레임을 읽지 못해 추적을 멈췄습니다."
             case .boxTooSmall: return "추적할 영역이 너무 작습니다. 조금 크게 잡아 주세요."
+            case .nativeFailure: return "영상 처리 중 오류가 발생해 추적을 멈췄습니다."
             }
         }
+    }
+
+    enum FailureStage: String {
+        case readerCreation, readerOutput, readerStart, visionRequest, readerCompletion
     }
 
     /// Thread-safe cancel flag shared with the UI.
@@ -47,7 +55,8 @@ enum ObjectTracker {
         guard let track = asset.tracks(withMediaType: .video).first else { throw TrackError.noVideoTrack }
         let transform = track.preferredTransform
         let reader: AVAssetReader
-        do { reader = try AVAssetReader(asset: asset) } catch { throw TrackError.readFailed }
+        do { reader = try AVAssetReader(asset: asset) }
+        catch { throw TrackError.nativeFailure(stage: .readerCreation, underlying: error as NSError) }
         let span = max(0, end - start)
         reader.timeRange = CMTimeRange(start: CMTime(seconds: max(0, start), preferredTimescale: 600),
                                        duration: CMTime(seconds: span + 0.05, preferredTimescale: 600))
@@ -55,9 +64,9 @@ enum ObjectTracker {
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
         ])
         output.alwaysCopiesSampleData = false
-        guard reader.canAdd(output) else { throw TrackError.readFailed }
+        guard reader.canAdd(output) else { throw TrackError.nativeFailure(stage: .readerOutput, underlying: reader.error as NSError?) }
         reader.add(output)
-        guard reader.startReading() else { throw TrackError.readFailed }
+        guard reader.startReading() else { throw TrackError.nativeFailure(stage: .readerStart, underlying: reader.error as NSError?) }
         defer { if reader.status == .reading { reader.cancelReading() } }
 
         let handler = VNSequenceRequestHandler()
@@ -78,7 +87,8 @@ enum ObjectTracker {
             let frame = BlurRenderer.oriented(CIImage(cvPixelBuffer: pixels), transform: transform)
             let request = VNTrackObjectRequest(detectedObjectObservation: observation)
             request.trackingLevel = .accurate
-            do { try handler.perform([request], on: frame) } catch { throw TrackError.readFailed }
+            do { try handler.perform([request], on: frame) }
+            catch { throw TrackError.nativeFailure(stage: .visionRequest, underlying: error as NSError) }
             guard let result = request.results?.first as? VNDetectedObjectObservation,
                   result.confidence >= minimumConfidence else {
                 return Outcome(samples: samples, lostTarget: true, cancelled: false)
@@ -87,7 +97,7 @@ enum ObjectTracker {
             samples.append(Sample(time: time, box: result.boundingBox))
             progress(span > 0 ? min(1, (time - start) / span) : 1)
         }
-        if reader.status == .failed { throw TrackError.readFailed }
+        if reader.status == .failed { throw TrackError.nativeFailure(stage: .readerCompletion, underlying: reader.error as NSError?) }
         return Outcome(samples: samples, lostTarget: false, cancelled: false)
     }
 }

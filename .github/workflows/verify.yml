@@ -112,6 +112,66 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           python-version: '3.14'
+      - name: Require Mac-host HEIC source ownership and portable archive contracts
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python - <<'PYTHON'
+          import hashlib, json, sys, uuid
+          from pathlib import Path
+          from scripts.verify_windows import run_command
+          if sys.platform != 'darwin':
+              raise RuntimeError('Actual macOS required; Windows packaging skips do not prove this gate.')
+          root = Path.cwd()
+          build = root / '.build'
+          build.mkdir(exist_ok=True)
+          attempt = build / ('mac-heic-materials-tests-' + str(uuid.uuid4()))
+          attempt.mkdir(mode=0o700)
+          names = ('Tests/PackagingTests/test_mac_heic_source_materials.py',
+                   'scripts/relink_heic_cpu.py', 'scripts/package_mac_heic_sources.py',
+                   'shared/source_identity.py', '.github/workflows/verify.yml')
+          def inputs():
+              return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
+          before = inputs()
+          report = {'host': sys.platform, 'status': 'failed-or-incomplete', 'sourceInputs': before,
+                    'OSInput': False, 'installs': False, 'limitations': [
+                    'Controlled Apple command observations; no real Mach-O, signing, codec or legal-compliance proof.']}
+          child = '''import json, sys, unittest
+          from Tests.PackagingTests.test_mac_heic_source_materials import MacHEICSourceMaterialsTests
+          if sys.platform != 'darwin': raise RuntimeError('Actual macOS required')
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(MacHEICSourceMaterialsTests)
+          collected = suite.countTestCases()
+          result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
+          payload = {'host': sys.platform, 'collected': collected, 'completed': result.testsRun,
+                     'skipped': len(result.skipped), 'failures': len(result.failures), 'errors': len(result.errors),
+                     'expectedFailures': len(result.expectedFailures), 'unexpectedSuccesses': len(result.unexpectedSuccesses),
+                     'successful': result.wasSuccessful()}
+          print('MAC_HEIC_MATERIALS_RESULT ' + json.dumps(payload, sort_keys=True))
+          raise SystemExit(0 if payload['successful'] and collected == 19 and result.testsRun == 19 and not
+                           (result.skipped or result.expectedFailures or result.unexpectedSuccesses) else 1)
+          '''
+          log = attempt / 'tests.log'
+          try:
+              with log.open('x', encoding='utf-8') as stream:
+                  code, timed_out = run_command([sys.executable, '-c', child], stream, 60)
+              report.update(exit=code, timedOut=timed_out)
+              rows = [line[len('MAC_HEIC_MATERIALS_RESULT '):] for line in log.read_text(encoding='utf-8').splitlines()
+                      if line.startswith('MAC_HEIC_MATERIALS_RESULT ')]
+              if len(rows) != 1: raise RuntimeError('Missing unique structured Mac completion')
+              result = json.loads(rows[0]); report['completion'] = result
+              if code != 0 or timed_out or result['host'] != 'darwin' or not result['successful'] or result['collected'] != 19 or result['completed'] != 19 or any(
+                  result[key] != 0 for key in ('skipped','failures','errors','expectedFailures','unexpectedSuccesses')):
+                  raise RuntimeError('Required Mac19 completion failed or skipped; retain exact failures.')
+              report['status'] = 'mac-host-19-complete-zero-skips'
+          finally:
+              report['inputsUnchanged'] = inputs() == before
+              if not report['inputsUnchanged']: report['status'] = 'failed-or-incomplete'
+              if log.exists(): report['logSHA256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+              with (attempt / 'execution.json').open('x', encoding='utf-8') as stream:
+                  json.dump(report, stream, sort_keys=True, indent=2)
+          if report['status'] != 'mac-host-19-complete-zero-skips': raise RuntimeError('Mac HEIC materials gate incomplete')
+          PYTHON
       - name: Build owned CPU HEIC helper for mandatory product regressions
         if: ${{ !cancelled() }}
         run: |
@@ -149,6 +209,8 @@ jobs:
           name: mac-native-verification
           path: |
             .build/mac-verification-*/
+            .build/mac-heic-materials-tests-*/execution.json
+            .build/mac-heic-materials-tests-*/tests.log
             .build/mac-heic-cpu-verification-*/execution.json
             .build/mac-heic-cpu-verification-*/tool-acquisition.json
             .build/mac-heic-cpu-verification-*/*.log

@@ -6,7 +6,7 @@
 
 ## 실행 단계
 
-저장소 루트에서 실행한다. 아래 `.build` 대상 이름은 매번 새 이름이어야 한다. 각 driver는 0700 새 attempt와 `payload/`를 만들며 180초의 private process group 또는 Windows Job Object로 자신이 시작한 자식을 정리한다. 로그와 `report.json`은 실패해도 보존한다. Mac은 기존 `scripts/test.sh`와 macOS 14 이상 Swift Testing 환경, Windows는 실제 Python 환경의 모든 고정 native 의존성이 필요하다. 추가 설치·다운로드는 driver에 없다.
+저장소 루트에서 실행한다. 아래 `.build` 대상 이름은 매번 새 이름이어야 한다. 각 driver는 0700 새 attempt와 `payload/`를 만든다. Mac은 새 `swift-build/`에서 앱·검사 번들을 빌드하는 private process group에 600초를 부여한 뒤, 같은 바이너리로 실행하는 실제 suite에 별도 180초를 부여한다. Windows 단계는 단일 180초 Windows Job Object를 유지한다. 각 단계가 시작한 자식은 종료·회수한 뒤 로그를 확정한다. Mac 빌드 전후 소스와 실행 전후 앱·검사 번들의 SHA-256을 확인하므로 기존 `.build` 바이너리로 통과를 대신할 수 없다. 로그와 `report.json`은 실패해도 보존한다. Mac은 기존 `scripts/test.sh`와 macOS 14 이상 Swift Testing 환경, Windows는 실제 Python 환경의 모든 고정 native 의존성이 필요하다. 추가 설치·다운로드는 driver에 없다.
 
 ```sh
 python3 scripts/video-project-roundtrip/run_stage.py --stage mac-emit --output .build/roundtrip-mac-emit-NEW

@@ -263,31 +263,7 @@ class OwnedCanonicalVideoProvider:
                         continue
                     if observed != sample.observation:
                         raise CanonicalVideoReview('decoded pixel row does not exactly match selected inventory sample')
-                    # Reject known HDR/high-depth until validated SDR tone mapping
-                    # exists. Do not silently collapse PQ/HLG to untagged RGB8.
-                    if getattr(frame, 'color_trc', None) in (16, 18):
-                        raise CanonicalVideoReview('HDR transfer needs validated tone mapping')
-                    components = getattr(getattr(frame, 'format', None), 'components', None)
-                    if not components or any(type(c.bits) is not int or not 0 < c.bits <= 8 for c in components):
-                        raise CanonicalVideoReview('unknown/high-depth pixel policy needs review')
-                    sar = observed.frame_sar
-                    if sar is None or sar == 0:
-                        sar = self._inventory.decoder.codec_sar
-                    if sar is None or sar == 0:
-                        # No guessed stream SAR or implicit 1:1 normalization.
-                        raise CanonicalVideoReview('exact display SAR unavailable; no guessed geometry')
-                    width = round(observed.width * sar)
-                    if (width <= 0 or width > self._limits.max_dimension or
-                            width * observed.height > self._limits.max_pixels):
-                        raise CanonicalVideoReview('normalized pixels exceed explicit resource budget')
-                    metadata = dict(getattr(stream, 'metadata', {}))
-                    if observed.display_matrix is None and not observed.rotation:
-                        rotate = next((v for k, v in metadata.items() if k.lower() == 'rotate'), 0)
-                        if str(rotate) not in ('0', '0.0'):
-                            raise CanonicalVideoReview('unobserved stream rotation requires geometry review')
-                    image = _display_image(frame, sar, metadata)
-                    if image.isNull():
-                        raise CanonicalVideoReview('pixel decoder produced no normalized image')
+                    image = self._normalized_image(frame, observed, stream)
                     self._check()
                     return image.copy()
                 raise CanonicalVideoReview('selected observed sample missing from pixel decode; no future/last substitute')
@@ -306,6 +282,97 @@ class OwnedCanonicalVideoProvider:
                                 raise failure
                             raise failure from error
                         raise
+
+    def _normalized_image(self, frame, observed, stream):
+        # Reject known HDR/high-depth until validated SDR tone mapping
+        # exists. Do not silently collapse PQ/HLG to untagged RGB8.
+        if getattr(frame, 'color_trc', None) in (16, 18):
+            raise CanonicalVideoReview('HDR transfer needs validated tone mapping')
+        components = getattr(getattr(frame, 'format', None), 'components', None)
+        if not components or any(type(c.bits) is not int or not 0 < c.bits <= 8 for c in components):
+            raise CanonicalVideoReview('unknown/high-depth pixel policy needs review')
+        sar = observed.frame_sar
+        if sar is None or sar == 0:
+            sar = self._inventory.decoder.codec_sar
+        if sar is None or sar == 0:
+            # No guessed stream SAR or implicit 1:1 normalization.
+            raise CanonicalVideoReview('exact display SAR unavailable; no guessed geometry')
+        width = round(observed.width * sar)
+        if (width <= 0 or width > self._limits.max_dimension or
+                width * observed.height > self._limits.max_pixels):
+            raise CanonicalVideoReview('normalized pixels exceed explicit resource budget')
+        metadata = dict(getattr(stream, 'metadata', {}))
+        if observed.display_matrix is None and not observed.rotation:
+            rotate = next((v for k, v in metadata.items() if k.lower() == 'rotate'), 0)
+            if str(rotate) not in ('0', '0.0'):
+                raise CanonicalVideoReview('unobserved stream rotation requires geometry review')
+        image = _display_image(frame, sar, metadata)
+        if image.isNull():
+            raise CanonicalVideoReview('pixel decoder produced no normalized image')
+        return image.copy()
+
+    def iter_content(self, start=Fraction(0), end=None):
+        """One sequential guarded decode, exact raw inventory rows and EOF.
+
+        No seek/FPS/origin mapping. The completed index selects membership and
+        clips right ends. Early generator close releases only this decoder;
+        errors invalidate this owned provider. Full source SHA is checked at
+        transaction start and normal EOF, not once per video frame.
+        """
+        end = self._duration if end is None else end
+        if type(start) is not Fraction or type(end) is not Fraction or not 0 <= start <= end <= self._duration:
+            raise CanonicalVideoReview('exact canonical iteration range required')
+        try:
+            with self._lock:
+                self._guard(hash_source=True)
+                with self._decoder() as container:
+                    videos = list(container.streams.video)
+                    if len(videos) != 1 or videos[0].id != self._inventory.decoder.stream_id:
+                        raise CanonicalVideoReview('sequential decoder video track differs')
+                    stream = videos[0]
+                    if _exact_fraction(stream.time_base, 'sequential time base') != self._inventory.decoder.stream_time_base:
+                        raise CanonicalVideoReview('sequential decoder time base differs')
+                    frames = iter(container.decode(stream))
+                    failure = None
+                    try:
+                        count = 0
+                        for frame in frames:
+                            self._guard()
+                            if count >= len(self._inventory):
+                                raise CanonicalVideoReview('sequential decoder produced additional raw frames')
+                            observed = _observe(frame, self._limits)
+                            if observed != self._inventory[count]:
+                                raise CanonicalVideoReview('sequential decoded row differs from completed inventory')
+                            sample = self._index.sample_for_source_index(count)
+                            count += 1
+                            if sample is None or not start <= sample.asset_pts <= end:
+                                continue
+                            image = self._normalized_image(frame, observed, stream)
+                            self._guard()
+                            yield CanonicalPixels('content', sample.asset_pts, sample.asset_pts,
+                                sample.interval_start, sample.interval_end, sample.source_index,
+                                image, self._sha, self._descriptor_sha, self._generation)
+                        if count != len(self._inventory):
+                            raise CanonicalVideoReview('sequential decoder ended before complete raw EOF')
+                        self._guard(hash_source=True)
+                    except BaseException as error:
+                        failure = error
+                        raise
+                    finally:
+                        close = getattr(frames, 'close', None)
+                        if close is not None:
+                            try: close()
+                            except BaseException as cleanup:
+                                if failure is not None:
+                                    failure.add_note(f'sequential iterator cleanup also failed: {cleanup!r}')
+                                    if cleanup is failure: raise failure
+                                    raise failure from cleanup
+                                raise
+        except GeneratorExit:
+            raise  # Consumer close does not invalidate an otherwise healthy source.
+        except BaseException as error:
+            self._discard(error)
+            raise
 
     def frame_at(self, time):
         with self._lock:

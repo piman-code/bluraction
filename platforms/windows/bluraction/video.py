@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 import math
+import hashlib
 import os
 from pathlib import Path
 import struct
@@ -266,6 +267,8 @@ class TimedImage:
     image: QImage
     presence: str = 'content'
     interval_end: Fraction | None = None
+    source_index: int | None = None
+    interval_start: Fraction | None = None
 
 
 class VideoSource:
@@ -482,7 +485,8 @@ class VideoSource:
                 image.fill(0)
             self._guard(); check_cancel(cancel)
             return TimedImage(metadata['time'] if metadata['time'] is not None else stamp,
-                              image,metadata['presence'],metadata.get('intervalEnd'))
+                              image,metadata['presence'],metadata.get('intervalEnd'),
+                              metadata.get('sourceIndex'),metadata.get('intervalStart'))
         if not math.isfinite(time):
             raise VideoError('재생 시각이 올바르지 않습니다.')
         target = self.origin + Fraction(str(max(0, min(self.duration, time))))
@@ -544,6 +548,22 @@ class VideoSource:
         end = self.duration if end is None else end
         if not all(math.isfinite(t) for t in (start, end)) or not 0 <= start <= end <= self.duration:
             raise VideoError('프레임 구간이 원래 영상 길이 밖입니다.')
+        session=getattr(self,'asset_session',None)
+        if session is not None:
+            from .canonical_transport import exact_time
+            cursor=session.iter_frames(exact_time(start),exact_time(end),cancel)
+            try:
+                for meta,buffers in cursor:
+                    self._guard(); check_cancel(cancel)
+                    if meta.get('presence')!='content' or type(meta.get('time')) is not Fraction:
+                        raise VideoError('canonical tracking frame membership changed')
+                    yield TimedImage(meta['time'],self._asset_image(meta,buffers),'content',
+                        meta.get('intervalEnd'),meta.get('sourceIndex'),meta.get('intervalStart'))
+            finally:
+                from .media import _cleanup_preserving_primary
+                _cleanup_preserving_primary(cursor.close,'canonical frame cursor close')
+            self.validate(cancel)
+            return
         previous = None
         with _av().open(str(self.path)) as container:
             for frame in container.decode(container.streams[self.stream_index]):
@@ -560,16 +580,68 @@ class VideoSource:
         self._guard()
 
 
-def export_video(source, state, path, cancel=None, progress=None, *, quality=QualityPreset.HIGH):
-    """Original frame PTS/audio packet timing, once-normalized pixels, fresh output.
+def _export_asset_video(source,state,target,cancel,progress,quality):
+    """Dedicated native attempt; cancellation preserves the live preview owner."""
+    from .canonical_transport import CanonicalSession
+    from .media import _cleanup_preserving_primary
+    source.validate(cancel); check_cancel(cancel)
+    expected=source.verified_asset_binding(cancel)
+    attempt=None; temporary=None
+    try:
+        attempt=CanonicalSession(source.path,source.source_sha256,cancel=cancel)
+        actual=attempt.verified_asset_binding(cancel)
+        if actual!=expected:
+            raise VideoError('내보내기 원본·asset 시간축이 기존 편집과 다릅니다.')
+        artifact,report=attempt.export_private(deepcopy(state),quality.value,target.suffix.lower(),cancel,progress)
+        fd,name=tempfile.mkstemp(prefix='.bluraction-video-',suffix=target.suffix,dir=target.parent)
+        temporary=Path(name)
+        digest=hashlib.sha256()
+        flags=os.O_RDONLY|getattr(os,'O_BINARY',0)|getattr(os,'O_NOFOLLOW',0)
+        with os.fdopen(fd,'wb') as out, os.fdopen(os.open(artifact,flags),'rb') as stream:
+            before=os.fstat(stream.fileno())
+            while True:
+                check_cancel(cancel); source._guard()
+                data=stream.read(1024*1024)
+                if not data: break
+                digest.update(data); out.write(data)
+            after=os.fstat(stream.fileno())
+            if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns) != (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                raise VideoError('검수한 영상 출력 후보가 복사 중 변경되었습니다.')
+            out.flush(); os.fsync(out.fileno())
+        if digest.hexdigest()!=report['outputSHA256']:
+            raise VideoError('검수한 출력 후보의 전체 지문이 다릅니다.')
+        copy_identity=_capture_identity(temporary)
+        if fingerprint(temporary,max_bytes=copy_identity.metadata[3],cancel=cancel)!=report['outputSHA256']:
+            raise VideoError('발행할 출력 복사본의 지문이 변경되었습니다.')
+        _check_identity(temporary,copy_identity)
+        source.validate(cancel); attempt.validate(cancel); check_cancel(cancel)
+        attempt.close(); attempt=None  # Reap before public output can exist.
+        source.validate(cancel); check_cancel(cancel)
+        _check_identity(temporary,copy_identity)
+        publish_new(temporary,target)
+    finally:
+        if attempt is not None:
+            _cleanup_preserving_primary(attempt.close,'owned export process reap')
+        if temporary is not None:
+            _cleanup_preserving_primary(lambda:temporary.unlink(missing_ok=True),'owned video temp cleanup')
+    if progress is not None: progress(1.0)
+    return target
 
-    MP4/MOV only. The muxer validates audio codec compatibility; no audio decoder,
-    lossy transcode, CFR resampling or unapproved GPL encoder fallback is used.
+
+def export_video(source, state, path, cancel=None, progress=None, *, quality=QualityPreset.HIGH):
+    """Fresh verified MOV/MP4 output using the source's declared clock.
+
+    Owned asset sources use canonical content/empty scenes, all PCM schedules
+    and exact EOF readback. MOV preserves meaningful PCM bytes; MP4 explicitly
+    encodes AAC and verifies sample coverage. Legacy generic sources retain the
+    existing raw packet route until their asset contracts are proven.
     """
     quality = QualityPreset(quality)
     target = fresh_target(path)
     if target.suffix.lower() not in ('.mp4', '.mov', '.m4v'):
         raise VideoError('영상 출력은 MP4 또는 MOV의 새 파일 이름을 선택하세요.')
+    if getattr(source,'asset_session',None) is not None:
+        return _export_asset_video(source,state,target,cancel,progress,quality)
     source.validate(cancel); check_cancel(cancel)
     capability = encoder_capability()
     if not capability['registered']:
@@ -717,8 +789,11 @@ def track(source, item, region, start, end, cancel=None, progress=None):
         raise VideoError('잠금 또는 숨김 항목은 추적하지 않습니다.')
     source.validate(cancel); check_cancel(cancel)
     _, tracker = _csrt()
-    initial = source.frame_at(start)
-    shown = positioned(item, region, start)
+    initial_timed = source.frame_at_timed(start, cancel=cancel)
+    if initial_timed.presence != 'content':
+        raise TrackingLost('추적 시작 시각에 실제 영상 프레임이 없습니다. 기존 편집은 유지됩니다.')
+    initial = initial_timed.image
+    shown = positioned(item, region, float(initial_timed.time))
     points = shape_points(shown)[1] if region else shown['points']
     x, y, w, h = bounds(points)
     width, height = initial.width(), initial.height()
@@ -729,37 +804,51 @@ def track(source, item, region, start, end, cancel=None, progress=None):
         raise TrackingLost('추적 영역을 초기화하지 못했습니다. 기존 편집은 유지됩니다.')
     initial_center = (roi[0] + roi[2] / 2, roi[1] + roi[3] / 2)
     frames = [{'time': start, 'rect': [[x, y], [w, h]]}]
-    for timed in source.iter_frames(start, end, cancel):
-        time = float(timed.time)
-        if time <= start:
-            continue  # the initialized presentation frame
-        check_cancel(cancel)
-        if timed.image.size() != initial.size():
-            raise TrackingLost('추적 중 영상 크기가 바뀌었습니다. 기존 편집은 유지됩니다.')
-        success, box = tracker.update(_bgr(timed.image))
-        if not success:
-            raise TrackingLost(f'{time:.3f}초에서 대상을 잃었습니다. 부분 추적을 적용하지 않습니다.')
-        left, top, box_width, box_height = box
-        if not all(math.isfinite(v) for v in box) or box_width < 2 or box_height < 2 or left < 0 or top < 0 or left + box_width > width or top + box_height > height:
-            raise TrackingLost('추적 영역이 영상 밖으로 벗어났습니다. 부분 추적을 적용하지 않습니다.')
-        if region:
-            rect = [[left / width, 1 - (top + box_height) / height], [box_width / width, box_height / height]]
-        else:
-            # The tracked target may grow/shrink. As on macOS, a drawing keeps
-            # its displayed starting dimensions and follows only the center.
-            # Subtract the initialized integer ROI center to avoid a rounding
-            # jump between normalized annotation points and CSRT pixel boxes.
-            moved_x = x + (left + box_width / 2 - initial_center[0]) / width
-            moved_y = y - (top + box_height / 2 - initial_center[1]) / height
-            if moved_x < -1e-9 or moved_y < -1e-9 or moved_x + w > 1 + 1e-9 or moved_y + h > 1 + 1e-9:
-                raise TrackingLost('추적한 그림이 영상 밖으로 벗어났습니다. 부분 추적을 적용하지 않습니다.')
-            rect = [[moved_x, moved_y], [w, h]]
-        frames.append({'time': time, 'rect': rect})
-        if len(frames) > 100_000:
-            raise VideoError('추적 키프레임은 최대 100,000개입니다.')
-        if progress:
-            progress(min(.99, (time - start) / (end - start)))
-        check_cancel(cancel)
+    interval_end = initial_timed.interval_end
+    initial_index = initial_timed.source_index
+    cursor = iter(source.iter_frames(start, end, cancel))
+    try:
+        for timed in cursor:
+            time = float(timed.time)
+            if time <= start or (initial_index is not None and timed.source_index == initial_index):
+                continue  # the initialized presentation frame
+            if timed.presence != 'content' or (interval_end is not None and timed.time > interval_end):
+                raise TrackingLost('추적 구간의 실제 영상이 끊겼습니다. 부분 경로를 적용하지 않습니다.')
+            interval_end = timed.interval_end
+            check_cancel(cancel)
+            if timed.image.size() != initial.size():
+                raise TrackingLost('추적 중 영상 크기가 바뀌었습니다. 기존 편집은 유지됩니다.')
+            success, box = tracker.update(_bgr(timed.image))
+            if not success:
+                raise TrackingLost(f'{time:.3f}초에서 대상을 잃었습니다. 부분 추적을 적용하지 않습니다.')
+            left, top, box_width, box_height = box
+            if not all(math.isfinite(v) for v in box) or box_width < 2 or box_height < 2 or left < 0 or top < 0 or left + box_width > width or top + box_height > height:
+                raise TrackingLost('추적 영역이 영상 밖으로 벗어났습니다. 부분 추적을 적용하지 않습니다.')
+            if region:
+                rect = [[left / width, 1 - (top + box_height) / height], [box_width / width, box_height / height]]
+            else:
+                # The tracked target may grow/shrink. As on macOS, a drawing keeps
+                # its displayed starting dimensions and follows only the center.
+                # Subtract the initialized integer ROI center to avoid a rounding
+                # jump between normalized annotation points and CSRT pixel boxes.
+                moved_x = x + (left + box_width / 2 - initial_center[0]) / width
+                moved_y = y - (top + box_height / 2 - initial_center[1]) / height
+                if moved_x < -1e-9 or moved_y < -1e-9 or moved_x + w > 1 + 1e-9 or moved_y + h > 1 + 1e-9:
+                    raise TrackingLost('추적한 그림이 영상 밖으로 벗어났습니다. 부분 추적을 적용하지 않습니다.')
+                rect = [[moved_x, moved_y], [w, h]]
+            frames.append({'time': time, 'rect': rect})
+            if len(frames) > 100_000:
+                raise VideoError('추적 키프레임은 최대 100,000개입니다.')
+            if progress:
+                progress(min(.99, (time - start) / (end - start)))
+            check_cancel(cancel)
+    finally:
+        close = getattr(cursor, 'close', None)
+        if close is not None:
+            from .media import _cleanup_preserving_primary
+            _cleanup_preserving_primary(close, 'tracking canonical cursor close')
+    if interval_end is not None and end > interval_end:
+        raise TrackingLost('추적 끝 시각까지 실제 영상이 이어지지 않습니다. 부분 경로를 적용하지 않습니다.')
     if len(frames) < 2:
         raise TrackingLost('추적 구간에 실제 프레임이 부족합니다. 기존 편집은 유지됩니다.')
     source.validate(cancel); check_cancel(cancel)

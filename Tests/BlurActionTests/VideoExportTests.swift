@@ -91,6 +91,90 @@ final class VideoExportTests {
         return CIImage(cgImage: copy)
     }
 
+    private struct TimelineFixtures: Decodable {
+        struct Case: Decodable {
+            struct Timeline: Decodable {
+                struct Fraction: Decodable { let numerator: String; let denominator: String }
+                let assetDuration: Fraction
+            }
+            let file: String
+            let sourceSHA256: String
+            let timeline: Timeline
+        }
+        let syntheticOnly: Bool
+        let cases: [Case]
+    }
+
+    private func completeVideoPTS(_ asset: AVAsset) async throws -> [CMTime] {
+        let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
+        let reader = try AVAssetReader(asset: asset)
+        defer { if reader.status == .reading { reader.cancelReading() } }
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        try #require(reader.canAdd(output))
+        reader.add(output)
+        try #require(reader.startReading())
+        var pts: [CMTime] = []
+        // These authored fixtures have at most nine native decoded frames.
+        // Hitting the bound is incomplete, never a successful partial scan.
+        for _ in 0..<256 {
+            guard let sample = output.copyNextSampleBuffer() else { break }
+            try #require(CMSampleBufferGetImageBuffer(sample) != nil)
+            pts.append(CMSampleBufferGetPresentationTimeStamp(sample))
+        }
+        try #require(reader.status == .completed)
+        return pts
+    }
+
+    @MainActor
+    @Test
+    func testEightPinnedVFRAndEditListExportsKeepExactAssetEndAndAllVideoPTS() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("shared/fixtures/video-timelines")
+        let fixtures = try JSONDecoder().decode(TimelineFixtures.self,
+            from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+        try #require(fixtures.syntheticOnly && fixtures.cases.count == 8)
+        let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
+        for fixture in fixtures.cases {
+            let original = root.appendingPathComponent(fixture.file)
+            try #require(try PageWorkspace.digest(of: original) == fixture.sourceSHA256)
+            let input = dir.appendingPathComponent(fixture.file)
+            try FileManager.default.copyItem(at: original, to: input)
+            let fraction = fixture.timeline.assetDuration
+            let value = try #require(Int64(fraction.numerator))
+            let scale = try #require(Int32(fraction.denominator))
+            try #require(value > 0 && scale > 0)
+            let expectedEnd = CMTime(value: value, timescale: scale)
+            let asset = VideoAssetPolicy.asset(url: input)
+            let inputEnd = try await asset.load(.duration)
+            try #require(CMTimeCompare(inputEnd, expectedEnd) == 0,
+                         "Pinned native source duration must match the independent manifest: \(fixture.file)")
+            let sourcePTS = try await completeVideoPTS(asset)
+            try #require(!sourcePTS.isEmpty)
+            let sourceTrack = try #require(try await asset.loadTracks(withMediaType: .video).first)
+            let size = try await sourceTrack.load(.naturalSize)
+            let exporter = BlurredVideoExporter()
+            await exporter.export(input: input, pairs: [], quality: .original, canvasBounds: size,
+                                  expectedSourceSHA256: fixture.sourceSHA256)
+            try #require(!exporter.wasCancelled, "\(fixture.file): \(exporter.statusText)")
+            let output = try #require(exporter.lastOutputURL, "\(fixture.file): \(exporter.statusText)")
+            let result = VideoAssetPolicy.asset(url: output)
+            let resultEnd = try await result.load(.duration)
+            #expect(CMTimeCompare(resultEnd, expectedEnd) == 0,
+                    "Export must not grow or round the asset endpoint: \(fixture.file)")
+            let outputPTS = try await completeVideoPTS(result)
+            try #require(outputPTS.count == sourcePTS.count, "Complete decoded frame count: \(fixture.file)")
+            for (before, after) in zip(sourcePTS, outputPTS) {
+                #expect(CMTimeCompare(before, after) == 0, "Presentation time: \(fixture.file)")
+            }
+            let inputAudio = try await asset.loadTracks(withMediaType: .audio)
+            let resultAudio = try await result.loadTracks(withMediaType: .audio)
+            #expect(inputAudio.count == resultAudio.count, "Audio track count: \(fixture.file)")
+            #expect(try PageWorkspace.digest(of: original) == fixture.sourceSHA256)
+            #expect(try PageWorkspace.digest(of: input) == fixture.sourceSHA256)
+        }
+    }
+
     @MainActor
     @Test
     func testLongDecomposedVideoNameReservesSuffixAndCollisionBytes() {

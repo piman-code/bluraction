@@ -14,7 +14,7 @@ from fractions import Fraction
 import time as transport_time
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QUrl, Signal, Slot, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QFontDatabase, QFontInfo, QImage, QKeySequence, QPainter, QPen, QTransform
+from PySide6.QtGui import QAction, QActionGroup, QColor, QColorSpace, QFont, QFontDatabase, QFontInfo, QImage, QKeySequence, QPainter, QPen, QTransform
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat, QMediaDevices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox,
@@ -78,6 +78,9 @@ class EditorCanvas(QWidget):
     erased = Signal(object)
     message = Signal(str)
     presented = Signal(object)
+    color_pick_requested = Signal()
+    color_picked = Signal(object)
+    color_pick_cancelled = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,12 +106,71 @@ class EditorCanvas(QWidget):
         self._stroke = []
         self._drag_start = None
         self._drag_item = None
+        self._color_pick = None
+
+    def arm_color_pick(self):
+        if (self.busy or self.preview_pending or self.preview_queue.busy or self._preview.isNull()
+                or self._stroke or self._drag_start is not None):
+            return False
+        self.cancel_color_pick(notify=False)
+        self._color_pick = (self._accepted_context, self._preview.cacheKey(), self.time,
+                            self.tool, frozenset(self.selection_ids), deepcopy(self.state), self.cursor())
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocus()
+        return True
+
+    def cancel_color_pick(self, reason='색 고르기를 취소했습니다.', *, notify=True):
+        if self._color_pick is None:
+            return
+        cursor = self._color_pick[-1]
+        self._color_pick = None
+        self.setCursor(cursor)
+        if notify:
+            self.color_pick_cancelled.emit(reason)
+
+    def _color_snapshot_valid(self):
+        pick = self._color_pick
+        return bool(pick is not None and not self.busy and not self.preview_pending and not self.preview_queue.busy
+            and self._accepted_context == self.preview_context
+            and pick[:5] == (self._accepted_context, self._preview.cacheKey(), self.time,
+                            self.tool, frozenset(self.selection_ids)) and pick[5] == self.state)
+
+    def sample_composite_at(self, position):
+        """Read the displayed composite pixel, excluding selection decorations."""
+        if self.busy or self.preview_pending or self.preview_queue.busy or self._preview.isNull():
+            raise ValueError('합성 미리보기가 준비된 뒤 색을 가져오세요.')
+        if not math.isfinite(position.x()) or not math.isfinite(position.y()):
+            raise ValueError('색을 가져올 위치를 확인하세요.')
+        point = self.normalized(position)
+        if point is None:
+            return None  # The letterbox is not a media pixel.
+        x = min(self._preview.width() - 1, math.floor(point[0] * self._preview.width()))
+        y = min(self._preview.height() - 1, math.floor((1 - point[1]) * self._preview.height()))
+        pixel = self._preview.copy(x, y, 1, 1)
+        space = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+        if not pixel.colorSpace().isValid():
+            raise ValueError('합성 미리보기의 색 공간을 확인할 수 없습니다.')
+        if pixel.colorSpace() != space:
+            pixel = pixel.convertedToColorSpace(space)
+        color = pixel.pixelColor(0, 0)
+        if not color.isValid() or color.alphaF() <= 0:
+            raise ValueError('투명한 위치에서는 색을 가져올 수 없습니다.')
+        color.setAlphaF(1)  # Mac eyedropper's straight sRGB / opaque-brush contract.
+        return color
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self._color_pick is not None:
+            self.cancel_color_pick()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_I and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            self.color_pick_requested.emit()
+            event.accept()
+            return
         arrows = (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
         allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
         if event.key() in arrows and not (event.modifiers() & ~allowed):
-            if not self.busy and not self._stroke and self._drag_start is None:
+            if self._color_pick is None and not self.busy and not self._stroke and self._drag_start is None:
                 self.nudged.emit(event.key(), event.modifiers())
             event.accept()
             return
@@ -132,6 +194,10 @@ class EditorCanvas(QWidget):
                        rect.y() + (1 - point[1]) * rect.height())
 
     def set_document(self, image, state, selection_ids=(), time=None):
+        if self._color_pick is not None and (self._accepted_context != self.preview_context
+                or image.cacheKey() != self.image.cacheKey() or state != self.state
+                or time != self.time or frozenset(selection_ids) != self._color_pick[4]):
+            self.cancel_color_pick('미리보기 또는 선택이 바뀌어 색 고르기를 취소했습니다.')
         # Selection, inspector and busy-state refreshes do not change pixels.
         # Keep the full-resolution result rather than recomputing a large effect
         # on every such update. QImage.cacheKey also changes on pixel mutation.
@@ -171,6 +237,7 @@ class EditorCanvas(QWidget):
             or self._accepted_context != self._desired.context or self.state != self._desired.state)
 
     def request_video_seek(self, source, seconds, state, selection_ids=()):
+        self.cancel_color_pick('영상 탐색으로 색 고르기를 취소했습니다.')
         self.selection_ids = set(selection_ids)
         previous = self._desired
         if (previous is not None and previous.decode is not None and previous.context == self.preview_context
@@ -188,6 +255,7 @@ class EditorCanvas(QWidget):
         self.update()
 
     def accept_prepared(self, image, state, pixels, time, context):
+        self.cancel_color_pick('새 미디어로 색 고르기를 취소했습니다.')
         self.preview_queue.discard_pending(cancel_active=True)
         self.preview_context = self._accepted_context = context
         self.image, self.state, self.time = QImage(image), deepcopy(state), time
@@ -202,6 +270,7 @@ class EditorCanvas(QWidget):
         desired = self._desired
         if desired is None or request.context != desired.context or request.state != desired.state:
             return
+        self.cancel_color_pick('미리보기가 바뀌어 색 고르기를 취소했습니다.')
         if error is not None:
             if (request.image.cacheKey() != desired.image.cacheKey() or request.time != desired.time
                     or isinstance(error, Cancelled)):
@@ -234,6 +303,7 @@ class EditorCanvas(QWidget):
             self.close()
 
     def closeEvent(self, event):
+        self.cancel_color_pick()
         self.preview_queue.shutdown()
         if self.preview_queue.busy:
             self._closing = True
@@ -242,6 +312,7 @@ class EditorCanvas(QWidget):
             event.accept()
 
     def set_tool(self, tool):
+        self.cancel_color_pick('도구 변경으로 색 고르기를 취소했습니다.')
         self.tool = tool
         self._stroke = []
         self._drag_start = None
@@ -310,6 +381,25 @@ class EditorCanvas(QWidget):
                     painter.drawRect(rect)
 
     def mousePressEvent(self, event):
+        if self._color_pick is not None:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return
+            if not self._color_snapshot_valid():
+                self.cancel_color_pick('미리보기 또는 선택이 바뀌어 색 고르기를 취소했습니다.')
+                return
+            if self.normalized(event.position()) is None:
+                return
+            try:
+                if self.accept_guard is not None:
+                    self.accept_guard(self._desired)
+                color = self.sample_composite_at(event.position())
+            except (ValueError, OSError) as error:
+                self.cancel_color_pick(str(error))
+                return
+            self.cancel_color_pick(notify=False)
+            self._stroke, self._drag_start, self._drag_item = [], None, None
+            self.color_picked.emit(color)
+            return
         if self.busy or event.button() != Qt.MouseButton.LeftButton:
             return
         point = self.normalized(event.position())
@@ -582,6 +672,10 @@ class BlurActionWindow(QMainWindow):
         self.canvas.picked.connect(self.pick_item)
         self.canvas.moved.connect(self.move_items)
         self.canvas.nudged.connect(self.nudge_items)
+        self._pick_context = None
+        self.canvas.color_pick_requested.connect(self.start_color_pick_from_key)
+        self.canvas.color_picked.connect(self.apply_picked_color)
+        self.canvas.color_pick_cancelled.connect(self.color_pick_cancelled)
         self.canvas.erased.connect(self.erase_points)
         self.canvas.message.connect(lambda text: self.statusBar().showMessage(text))
         self.canvas.presented.connect(self.preview_presented)
@@ -713,10 +807,26 @@ class BlurActionWindow(QMainWindow):
         form.addRow('경계 부드럽게', self.feather)
         cover_color = QPushButton('가리기 색…')
         cover_color.clicked.connect(lambda: self.choose_color(True))
-        form.addRow(cover_color)
+        self.cover_pick = QPushButton('스포이드')
+        self.cover_pick.setAccessibleName('가리기 색 스포이드')
+        self.cover_pick.clicked.connect(lambda: self.start_color_pick(True))
+        cover_row = QWidget()
+        cover_row_layout = QHBoxLayout(cover_row)
+        cover_row_layout.setContentsMargins(0, 0, 0, 0)
+        cover_row_layout.addWidget(cover_color)
+        cover_row_layout.addWidget(self.cover_pick)
+        form.addRow(cover_row)
         drawing_color = QPushButton('그림·글자 색…')
         drawing_color.clicked.connect(lambda: self.choose_color(False))
-        form.addRow(drawing_color)
+        self.drawing_pick = QPushButton('스포이드')
+        self.drawing_pick.setAccessibleName('그림·글자 색 스포이드')
+        self.drawing_pick.clicked.connect(lambda: self.start_color_pick(False))
+        drawing_row = QWidget()
+        drawing_row_layout = QHBoxLayout(drawing_row)
+        drawing_row_layout.setContentsMargins(0, 0, 0, 0)
+        drawing_row_layout.addWidget(drawing_color)
+        drawing_row_layout.addWidget(self.drawing_pick)
+        form.addRow(drawing_row)
         form.addRow('선 굵기', self.width)
         form.addRow('채우기', self.fill)
         self.eraser_mode = QComboBox()
@@ -908,6 +1018,7 @@ class BlurActionWindow(QMainWindow):
         Group members share the bounded delta; locked members stay unchanged.
         """
         if (self.workspace.busy or self.canvas.busy or self.canvas.preview_pending
+                or self.canvas._color_pick is not None
                 or QApplication.focusWidget() is not self.canvas
                 or QApplication.activeModalWidget() is not None
                 or not self.workspace.page or not self.workspace.selected()):
@@ -1026,17 +1137,72 @@ class BlurActionWindow(QMainWindow):
         self.update_selection(**{field: value})
 
     def choose_color(self, cover):
+        if self.workspace.busy:
+            return
+        self.canvas.cancel_color_pick()
         value = QColorDialog.getColor(self.cover_color if cover else self.drawing_color,
                                       self, '가리기 색' if cover else '그림·글자 색',
                                       QColorDialog.ColorDialogOption.ShowAlphaChannel)
         if value.isValid():
-            if cover:
-                self.cover_color = value
-            else:
-                self.drawing_color = value
-            chosen = self.workspace.selected()
-            if chosen and chosen[1] == cover:
-                self.update_selection(**({'color': self._color_dict(value)} if cover else self._color_dict(value)))
+            self.apply_color(cover, value)
+
+    def apply_color(self, cover, value):
+        if self.workspace.busy or not value.isValid():
+            return
+        if cover:
+            self.cover_color = QColor(value)
+        else:
+            self.drawing_color = QColor(value)
+        if self.workspace.page:
+            self.perform(lambda: self.workspace.set_selected_color(self._color_dict(value), cover))
+
+    def start_color_pick_from_key(self):
+        if QApplication.focusWidget() is not self.canvas:
+            return
+        chosen = self.workspace.selected()
+        cover = chosen[1] if chosen else self.canvas.tool.startswith('cover_') or self.canvas.tool == 'select'
+        self.start_color_pick(cover)
+
+    def _update_color_pick_buttons(self):
+        enabled = bool(self.workspace.page and not self.workspace.busy and not self.canvas.busy
+                       and not self.canvas.preview_pending and not self.canvas.preview_queue.busy)
+        for button in (self.cover_pick, self.drawing_pick):
+            button.setEnabled(enabled)
+
+    def start_color_pick(self, cover):
+        if (self.workspace.busy or not self.workspace.page or self.canvas.busy
+                or self.canvas.preview_pending or self.canvas.preview_queue.busy
+                or QApplication.activeModalWidget() is not None
+                or self.canvas._stroke or self.canvas._drag_start is not None):
+            return False
+        self._play_after_seek = False
+        self._pause_asset()
+        self.player.pause()
+        if not self.canvas.arm_color_pick():
+            return False
+        self._pick_context = (cover, self.workspace.page, self._video_generation, self._seek_epoch,
+                              frozenset(self.workspace.selection_ids), self.workspace.time,
+                              deepcopy(self.workspace.page.state))
+        self.statusBar().showMessage('캔버스의 합성 색을 클릭하세요. Esc로 취소합니다.')
+        return True
+
+    def color_pick_cancelled(self, reason):
+        self._pick_context = None
+        self.statusBar().showMessage(reason)
+
+    def apply_picked_color(self, color):
+        context, self._pick_context = self._pick_context, None
+        if context is None:
+            return
+        cover, page, generation, epoch, selection, stamp, state = context
+        if (self.workspace.busy or self.workspace.page is not page or generation != self._video_generation
+                or epoch != self._seek_epoch or selection != frozenset(self.workspace.selection_ids)
+                or stamp != self.workspace.time or state != self.workspace.page.state
+                or QApplication.activeModalWidget() is not None):
+            self.statusBar().showMessage('작업 또는 선택이 바뀌어 색 고르기를 취소했습니다.')
+            return
+        self.apply_color(cover, color)
+        self.statusBar().showMessage('색을 가져왔습니다.')
 
     def _create_video_player(self):
         self.player = QMediaPlayer(self)
@@ -1219,6 +1385,8 @@ class BlurActionWindow(QMainWindow):
     def refresh(self):
         self._refreshing = True
         page = self.workspace.page
+        if self.workspace.busy:
+            self.canvas.cancel_color_pick('작업 시작으로 색 고르기를 취소했습니다.')
         selected = self.workspace.selectionID
         self._sync_video_source(page)
         try:
@@ -1334,6 +1502,7 @@ class BlurActionWindow(QMainWindow):
             action.setEnabled(not self.workspace.busy and (bool(page) if name not in ('open', 'open_project', 'template') else True))
         self.export_button.setEnabled(bool(page) and not self.workspace.busy)
         self.quality.setEnabled(bool(page) and not self.workspace.busy)
+        self._update_color_pick_buttons()
         self.update_quality_info()
         self.actions['delete'].setEnabled(bool(selected) and not self.workspace.busy)
         self.actions['duplicate'].setEnabled(bool(selected) and not self.workspace.busy)
@@ -1705,6 +1874,7 @@ class BlurActionWindow(QMainWindow):
     @Slot()
     def preview_idle(self):
         if self.canvas.preview_queue.busy or self._asset_audio.queue.busy: return
+        self._update_color_pick_buttons()
         if self._deferred_operation is not None:
             task, self._deferred_operation = self._deferred_operation, None
             if self._operation_cancelled is not None and self._operation_cancelled.is_set():
@@ -2018,6 +2188,7 @@ class BlurActionWindow(QMainWindow):
         if not self.confirm_discard():
             event.ignore()
             return
+        self.canvas.cancel_color_pick()
         self._closing = True
         self._video_generation += 1
         self._native_seek_ms = None

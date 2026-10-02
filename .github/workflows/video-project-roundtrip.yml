@@ -48,6 +48,7 @@ jobs:
           path: |
             .build/roundtrip-mac-emit/report.json
             .build/roundtrip-mac-emit/stage.log
+            .build/roundtrip-mac-emit/build.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -135,5 +136,6 @@ jobs:
           path: |
             .build/roundtrip-mac-verify/report.json
             .build/roundtrip-mac-verify/stage.log
+            .build/roundtrip-mac-verify/build.log
           if-no-files-found: warn
           retention-days: 14

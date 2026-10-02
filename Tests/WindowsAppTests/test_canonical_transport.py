@@ -114,7 +114,7 @@ class CanonicalTransportTests(unittest.TestCase):
         for frame_sar,stream_sar,codec_sar,expected in cases:
             with self.subTest(frame=frame_sar,stream=stream_sar,codec=codec_sar):
                 stream=SimpleNamespace(index=0,type='video',start_time=0,duration=2,
-                    time_base=F(1),sample_aspect_ratio=stream_sar,average_rate=F(1),
+                    time_base=F(1),sample_aspect_ratio=stream_sar,average_rate=F(1),bit_rate=876543,
                     codec_context=SimpleNamespace(sample_aspect_ratio=codec_sar),metadata={})
                 first=SimpleNamespace(asset_pts=F(0),observation=SimpleNamespace(frame_sar=frame_sar))
                 inventory=Inventory([SimpleNamespace(pts=F(0),duration=F(1)),
@@ -142,6 +142,8 @@ class CanonicalTransportTests(unittest.TestCase):
                     self.assertEqual(metadata['kind'],'ready')
                     self.assertIs(type(metadata['decoder']['sar']),F)
                     self.assertEqual(metadata['decoder']['sar'],expected)
+                    self.assertIs(type(metadata['decoder']['bitRate']),int)
+                    self.assertEqual(metadata['decoder']['bitRate'],876543)
 
     def test_transport_target_is_continuous_without_relabeling_presented_pts(self):
         now=[10.0]; clock=AssetClock(F(19,12),lambda:now[0])

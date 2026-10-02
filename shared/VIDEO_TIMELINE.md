@@ -1,10 +1,12 @@
 # Video project v3 asset presentation contract
 
-This contract is under implementation. `video_timeline.py` validates its mandatory
-metadata independently; the shared JSON reader also accepts v3, while native/app
-host loaders still accept v1/v2 only.
-It is not proof of playback, Windows execution, output fidelity or completed v3
-interoperability. Existing v1 images and v2 page workspaces retain their versions.
+`video_timeline.py` validates the mandatory metadata. The Mac
+`VideoProjectFile`/controller and Windows workspace host accept video v3 and save
+it with source and timeline bindings. Windows opens it through the verified owned
+asset decoder; a shared JSON parse alone cannot authorize that transaction.
+Existing v1 images and v2 page workspaces retain their versions. These loader
+paths do not establish complete output fidelity, clean-OS installation or
+cross-host interoperability; each requires its own executed verification.
 
 Video v3 requires the existing single-media `mediaPath`, `regions`, `drawings`,
 plus `version:3`, `mediaKind:"video"`, mandatory original `sourceSHA256`,
@@ -54,9 +56,11 @@ descriptor mismatch must fail the candidate transaction while preserving the
 active workspace, dirty edits, selection and undo history.
 
 The shared reader retains unknown root/edit fields and requires host review. The
-current Windows host rejects v3 before media access or session replacement until
-its canonical decoder clock is verified; this prevents treating top-level video
-as v2 pages or applying asset-time edits through the old origin-relative adapter.
+Windows host resolves and verifies the video source, obtains the complete native
+asset descriptor, and compares both SHA and exact timeline before replacing the
+workspace. Unverified clocks or descriptors fail the candidate transaction.
+It dispatches top-level video v3 separately from v2 pages and saves the original
+asset-time edit values without applying the old origin-relative adapter.
 The Mac `VideoTimeline` DTO uses exact wide arithmetic compatible with macOS14.
 `ProjectJSONTokens` validates original JSON grammar and duplicate decoded keys;
 its generic object gate is also used by standalone timeline decoding. Root version
@@ -64,6 +68,37 @@ and timeline integer tokens retain lexical strictness while normal edit decimals
 remain valid. Neither boundary establishes frame presence or a source clock. The new native
 `VideoAssetTimeline` reads exact AVFoundation metadata without origin shifts or
 track padding; its caller still owns approved-source identity/SHA protection.
+
+Opening and saving a bound project does not prove every media operation uses that
+binding. The owned MOV Windows export and tracking paths now consume canonical
+sample membership, exact clipped intervals and the asset EOF used by preview.
+Export uses a separate owned worker and verifies the encoded result through
+complete native video/audio reads before publishing a new file. Content VFR PTS
+are retained; declared empty/suffix scenes may add explicit black output samples
+at 60 Hz for scene animation, without labelling these as original content frames.
+MOV preserves meaningful PCM bytes, rates and active track layouts; MP4 AAC
+checks exact decoded sample coverage rather than claiming lossless byte equality.
+Tracking starts from the actual displayed PTS and preserves existing keyframes
+outside the requested range. Cancellation or incomplete tracking cannot apply a
+partial candidate. Local macOS execution of these Windows modules is separate
+from actual Windows encoder/transport and clean-OS verification. Those native
+checks and general-container, HDR, rate, disabled-track and device/multi-track
+capabilities remain explicit gates rather than being inferred from DTO capacity.
+
+The Mac exporter ends its writer session at the source asset's exact CMTime,
+using that movie timescale, so encoder packet padding or an inferred final VFR
+frame duration cannot extend the asset endpoint. This duration contract does not
+establish identical PCM, channel layout or generic format fidelity.
+
+The separate `video-project-roundtrip.yml` workflow transfers only allowlisted
+synthetic sources/projects through three native stages: Mac controller emit,
+Windows open/edit/undo/redo/save, and Mac controller reopen/save verification.
+Its stage-specific reports bind source and payload hashes. An executed Mac emit
+stage proves only that first stage; the returned Windows project and completed
+Mac verification are needed to claim the full roundtrip. See
+[`scripts/video-project-roundtrip/README.md`](../scripts/video-project-roundtrip/README.md)
+for the reproducible stage commands. Panel/drop and installed-app user checks
+remain separate from those internal controller stages.
 
 Focused metadata tests:
 

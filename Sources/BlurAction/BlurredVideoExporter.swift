@@ -158,18 +158,23 @@ final class BlurredVideoExporter: ObservableObject {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw ExportError.noVideoTrack }
         let natural = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
-        let duration = try await asset.load(.duration).seconds
+        let assetDuration = try await asset.load(.duration)
+        let duration = assetDuration.seconds
         let fps = Double(try await track.load(.nominalFrameRate))
         let estimatedRate = Double(try await track.load(.estimatedDataRate))
         let rect = CGRect(origin: .zero, size: natural).applying(transform)
         let size = CGSize(width: ceil(rect.width), height: ceil(rect.height))
         try validateOutputSize(size)
-        guard duration.isFinite, duration > 0,
+        guard assetDuration.isValid, assetDuration.isNumeric, assetDuration.timescale > 0,
+              duration.isFinite, duration > 0,
               canvasBounds.width.isFinite, canvasBounds.height.isFinite,
               canvasBounds.width > 0, canvasBounds.height > 0 else { throw ExportError.videoSizeUnknown }
         try cancellation.check()
         let reader = try AVAssetReader(asset: asset)
         let writer = try AVAssetWriter(outputURL: output, fileType: output.pathExtension == "mov" ? .mov : .mp4)
+        // Preserve the asset's exact endpoint, including fractional edit-list
+        // boundaries. A default movie timescale can round that endpoint.
+        writer.movieTimeScale = assetDuration.timescale
         defer {
             if reader.status == .reading { reader.cancelReading() }
             if writer.status == .writing { writer.cancelWriting() }
@@ -252,6 +257,10 @@ final class BlurredVideoExporter: ObservableObject {
         }
         guard frameCount > 0, reader.status == .completed else { throw reader.error ?? ExportError.readSampleFailed }
         try cancellation.check()
+        // Pixel-buffer appends carry PTS but not the original sample duration.
+        // Without an explicit end, the writer can extend the last VFR frame or
+        // encoded audio packet beyond the source asset's presentation interval.
+        writer.endSession(atSourceTime: assetDuration)
         await writer.finishWriting()
         try cancellation.check()
         guard writer.status == .completed else { throw writer.error ?? ExportError.finalizeFailed("출력 미완료") }

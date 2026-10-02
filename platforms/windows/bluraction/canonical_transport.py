@@ -11,6 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from fractions import Fraction
 import json
+import hashlib
+import os
+import stat
 import math
 import multiprocessing
 from multiprocessing.reduction import ForkingPickler
@@ -233,10 +236,53 @@ def _send(connection, metadata, buffers=()):
         for start in range(0,len(buffer),65536): connection.send_bytes(buffer[start:start+65536])
 
 
+def _pixel_reply(sequence, result, kind='frame'):
+    from PySide6.QtGui import QImage
+    meta = dict(sequence=sequence, kind=kind, presence=result.presence,
+        time=result.asset_pts, requested=result.requested_time,
+        intervalStart=result.interval_start, intervalEnd=result.interval_end,
+        sourceIndex=result.source_index, sha256=result.source_sha256,
+        descriptorSHA256=result.descriptor_sha256)
+    buffers = ()
+    if result.image is not None:
+        image = result.image.convertToFormat(QImage.Format.Format_RGBA8888)
+        meta.update(width=image.width(), height=image.height())
+        view = image.constBits()
+        buffers = (b''.join(bytes(view[y*image.bytesPerLine():y*image.bytesPerLine()+image.width()*4])
+            for y in range(image.height())),)
+    return meta, buffers
+
+
+def _export_state(work, digest):
+    """The request is a new parent-owned file in this private process tree."""
+    path = Path(work)/'export-state.json'
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 20*1024*1024:
+        raise TransportReview('bounded regular export-state request required')
+    flags = os.O_RDONLY | getattr(os,'O_BINARY',0) | getattr(os,'O_NOFOLLOW',0)
+    with os.fdopen(os.open(path,flags),'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev,opened.st_ino,opened.st_size) != (before.st_dev,before.st_ino,before.st_size):
+            raise TransportReview('export state replaced before read')
+        data = stream.read(20*1024*1024+1)
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise TransportReview('immutable export-state SHA changed')
+        identity=lambda row:(row.st_dev,row.st_ino,row.st_mode,row.st_size,row.st_mtime_ns,row.st_ctime_ns)
+        if identity(os.fstat(stream.fileno())) != identity(opened) or identity(path.lstat()) != identity(before):
+            raise TransportReview('export-state request changed during read')
+    from shared.portable_project import _edits, _json_tree
+    value = json.loads(data)
+    _json_tree(value)
+    reviews=[]
+    _edits(value, '$', reviews)
+    if reviews: raise TransportReview('unknown export edit fields require explicit review')
+    return value
+
+
 def _decoder_process(connection, path, sha, work):
     """No QApplication, audio device, network or outside output path."""
     tempfile.tempdir=work  # This child only; parent owns/reaps/cleans this tree.
-    video=audio=None
+    video=audio=cursor=None
     try:
         from .canonical_video import OwnedCanonicalVideoProvider, DecoderAccess
         from .canonical_audio import OwnedCanonicalAudioProvider
@@ -275,6 +321,7 @@ def _decoder_process(connection, path, sha, work):
                 sar=sar,
                 metadata=dict(stream.metadata),averageRate=average_rate,
                 audioCodecs=tuple(s.codec_context.name for s in container.streams.audio),
+                bitRate=stream.bit_rate or 0,
                 legacyOrigin=min(starts) if starts else raw_first.pts,
                 videoEnd=(Fraction(stream.start_time+stream.duration)*time_base
                     if stream.start_time is not None and stream.duration is not None else raw_last.pts+raw_last.duration))
@@ -292,18 +339,39 @@ def _decoder_process(connection, path, sha, work):
                 result=snapshot_frame(video,args[0])
                 if result.presence=='content-no-sample':
                     raise TransportReview('content video sample missing; no future/last substitute')
-                meta={'sequence':sequence,'kind':'frame','presence':result.presence,
-                    'time':result.asset_pts,'requested':result.requested_time,
-                    'intervalEnd':result.interval_end,'sha256':sha}
-                buffers=()
-                if result.image is not None:
-                    image=result.image.convertToFormat(QImage.Format.Format_RGBA8888)
-                    meta.update(width=image.width(),height=image.height())
-                    # Tight RGBA rows; never serialize a borrowed QImage view.
-                    view=image.constBits()
-                    buffers=(b''.join(bytes(view[y*image.bytesPerLine():y*image.bytesPerLine()+image.width()*4])
-                        for y in range(image.height())),)
+                meta,buffers=_pixel_reply(sequence,result)
                 _send(connection,meta,buffers)
+            elif operation=='cursor_open':
+                if cursor is not None: raise TransportReview('only one sequential cursor per owned decoder')
+                cursor=iter(video.iter_content(*args))
+                _send(connection,{'sequence':sequence,'kind':'cursor_ready','sha256':sha})
+            elif operation=='cursor_next':
+                if cursor is None: raise TransportReview('sequential cursor missing')
+                result=next(cursor,None)
+                if result is None:
+                    cursor.close(); cursor=None
+                    _send(connection,{'sequence':sequence,'kind':'cursor_EOF','sha256':sha})
+                else:
+                    meta,buffers=_pixel_reply(sequence,result,'cursor_frame')
+                    _send(connection,meta,buffers)
+            elif operation=='cursor_close':
+                if cursor is not None: cursor.close(); cursor=None
+                _send(connection,{'sequence':sequence,'kind':'cursor_closed','sha256':sha})
+            elif operation=='export':
+                if cursor is not None: raise TransportReview('export cannot share an active pixel cursor')
+                quality,suffix,state_sha=args
+                if suffix not in ('.mov','.mp4','.m4v'): raise TransportReview('exclusive MOV/MP4 export required')
+                from .canonical_export import encode_from_providers
+                from .video import encoder_capability
+                capability=encoder_capability()
+                if not capability['registered']: raise TransportReview(capability['reason'])
+                state=_export_state(work,state_sha)
+                result=encode_from_providers(video,audio,state,Path(work)/('export'+suffix),
+                    decoder_meta,quality,capability['encoder'],
+                    progress=lambda fraction:_send(connection,{'sequence':sequence,
+                        'kind':'export_progress','fraction':fraction,'sha256':sha}))
+                _send(connection,{'sequence':sequence,'kind':'export_complete','sha256':sha,
+                    'report':result,'filename':'export'+suffix})
             elif operation=='audio':
                 chunk=snapshot_pcm(audio,*args)
                 _send(connection,{'sequence':sequence,'kind':'audio','chunk':chunk.__class__(
@@ -321,6 +389,9 @@ def _decoder_process(connection, path, sha, work):
         try: _send(connection,{'kind':'error','error':str(error),'type':type(error).__name__})
         except BaseException: pass
     finally:
+        if cursor is not None:
+            try: cursor.close()
+            except BaseException: pass
         for provider in (audio,video):
             if provider is not None:
                 try: provider.close()
@@ -426,6 +497,86 @@ class CanonicalSession:
 
     def frame(self,stamp,cancel=None):
         return self._rpc('frame',(exact_time(stamp),),cancel)
+
+    def iter_frames(self,start=Fraction(0),end=None,cancel=None):
+        """Bounded content cursor; IPC EOF checks the entire raw inventory."""
+        end=self.duration if end is None else exact_time(end)
+        start=exact_time(start)
+        if not start<=end<=self.duration: raise TransportReview('canonical cursor range invalid')
+        with self._lock:
+            failure=None
+            try:
+                # A cancelled request may have been drained after the child
+                # created its cursor. The finally must cover cursor_open too.
+                self._rpc('cursor_open',(start,end),cancel)
+                while True:
+                    meta,buffers=self._rpc('cursor_next',cancel=cancel)
+                    if meta['kind']=='cursor_EOF': break
+                    if meta['kind']!='cursor_frame' or meta.get('sha256')!=self.sha:
+                        raise TransportReview('cursor reply changed')
+                    yield meta,buffers
+            except BaseException as error:
+                failure=error
+                raise
+            finally:
+                if not self._closed:
+                    try: self._rpc('cursor_close')
+                    except BaseException as cleanup:
+                        if failure is not None:
+                            failure.add_note(f'sequential RPC cleanup also failed: {cleanup!r}')
+                            if cleanup is failure: raise failure
+                            raise failure from cleanup
+                        raise
+
+    def export_private(self,state,quality,suffix,cancel=None,progress=None,timeout=3600):
+        """Use ONLY a new export-owned session, never the live preview session.
+
+        Cancellation interrupts and reaps this attempt; all recv chunks/progress
+        share one absolute operation deadline. Only a verified private artifact
+        path and manifest are returned; the caller owns final publication.
+        """
+        if type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0<timeout<=3600:
+            raise TransportReview('bounded export operation deadline required')
+        data=json.dumps(state,separators=(',', ':'),allow_nan=False).encode('utf-8')
+        if len(data)>20*1024*1024: raise TransportReview('export state exceeds project byte bound')
+        digest=hashlib.sha256(data).hexdigest()
+        request=Path(self._directory.name)/'export-state.json'
+        with request.open('xb') as stream:
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        with self._lock:
+            check_cancel(cancel)
+            try:
+                self._guard(); self._sequence+=1; sequence=self._sequence
+                deadline=time.monotonic()+timeout
+                self._connection.send((sequence,'export',(quality,suffix,digest)),deadline=deadline)
+                while True:
+                    meta,buffers=self._receive(deadline,cancel,abort_cancel=True)
+                    self._guard(); check_cancel(cancel)
+                    if meta.get('sequence')!=sequence or meta.get('sha256')!=self.sha or buffers:
+                        raise TransportReview('export operation reply identity changed')
+                    if meta.get('kind')=='export_progress':
+                        value=meta.get('fraction')
+                        if type(value) not in (int,float) or not math.isfinite(value) or not 0<=value<=1:
+                            raise TransportReview('invalid bounded export progress')
+                        if progress is not None: progress(value)
+                        continue
+                    if meta.get('kind')!='export_complete' or meta.get('filename')!='export'+suffix:
+                        raise TransportReview('private export completion missing')
+                    report=meta['report']
+                    if (report.get('outputVerified') is not True or report.get('sourceSHA256')!=self.sha
+                            or report.get('descriptorSHA256')!=self._asset_binding.descriptor_sha256):
+                        raise TransportReview('verified export binding differs')
+                    artifact=Path(self._directory.name)/meta['filename']
+                    if not stat.S_ISREG(artifact.lstat().st_mode): raise TransportReview('private output is not a regular file')
+                    return artifact,report
+            except BaseException as primary:
+                try: self.close()
+                except BaseException as cleanup:
+                    if cleanup is not primary:
+                        primary.add_note(f'export process cleanup also failed: {cleanup!r}')
+                        primary.__cause__=cleanup
+                    primary.retry_transport_close=self.close
+                raise
 
     def audio(self,identity,stamp,count=4096,cancel=None):
         return self._rpc('audio',(identity,exact_time(stamp),count),cancel)

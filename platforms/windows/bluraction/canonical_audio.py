@@ -26,7 +26,7 @@ https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/libavcodec/decode.c
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 import hashlib
 import json
@@ -566,6 +566,39 @@ class OwnedCanonicalAudioProvider:
                 observation.pts,index,first,samples,track.format,tuple(planes),
                 self._sha,self._descriptor_sha,self._generation)
         return self._read(read)
+
+    def iter_asset_pcm(self, track_id, max_samples=4096):
+        """All scheduled meaningful samples, including only declared empty zeros.
+
+        Full SHA brackets the transaction; each bounded read still checks source
+        metadata and the sticky generation/cancel guards. Suffix ends this track,
+        not the asset. No downmix, resampling, origin shift or fabricated content.
+        """
+        self._guard(hash_source=True)
+        cursor = Fraction(0)
+        while cursor < self._duration:
+            chunk = self.read_snapshot_samples(track_id, cursor, max_samples)
+            if chunk.presence in ('suffix', 'EOF'):
+                break
+            if chunk.presence == 'empty':
+                units = (chunk.interval_end - cursor) * chunk.format.sample_rate
+                if units.denominator != 1 or units <= 0:
+                    raise CanonicalAudioReview('empty export interval is not sample aligned')
+                count = min(max_samples, units.numerator,
+                    self._limits.max_query_bytes // chunk.format.bytes_per_time_sample)
+                if count <= 0:
+                    raise CanonicalAudioReview('PCM export budget cannot contain one sample')
+                channels = len(chunk.format.channels)
+                value = b'\x80' if chunk.format.name.removesuffix('p') == 'u8' else b'\0' * chunk.format.bytes_per_sample
+                planes = (value * count,) * channels if chunk.format.planar else (value * (count * channels),)
+                chunk = replace(chunk, samples=count, planes=planes, interval_start=cursor,
+                    interval_end=cursor + Fraction(count, chunk.format.sample_rate))
+            elif chunk.presence != 'content' or chunk.samples <= 0:
+                raise CanonicalAudioReview('export content lacks observed PCM')
+            self._guard()
+            yield chunk
+            cursor = chunk.interval_end
+        self._guard(hash_source=True)
 
     def close(self):
         """Invalidate first; Windows handles close before unlink, failures retry."""

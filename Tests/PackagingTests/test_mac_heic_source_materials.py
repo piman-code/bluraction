@@ -2,14 +2,18 @@
 
 Native commands are injected text observations only. Root must separately run
 the tools on actual pinned source builds and a modified-library app copy.
+Four POSIX/application-copy cases require actual macOS and retain explicit
+per-test skips on other hosts; archive/JSON/metadata contracts remain portable.
 """
 import hashlib
+import inspect
 import io
 import json
 import os
 from pathlib import Path
 import plistlib
 import stat
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -18,6 +22,21 @@ import zipfile
 
 from scripts import relink_heic_cpu as relink
 from scripts import package_mac_heic_sources as materials
+
+
+MAC_HOST_REASON = 'Requires actual macOS POSIX permissions, protected installation paths and application-copy ownership; mandatory mac-native CI covers this case.'
+MAC_HOST_CASES = (
+    'test_fd_copy_keeps_original_bytes_mode_identity_and_independent_output',
+    'test_output_scope_rejects_system_installations_and_requires_new_expected_suffix',
+    'test_owner_copy_updates_integrity_without_mutating_originals_or_claiming_source_or_encode',
+    'test_relink_failure_retains_explicit_failed_copy_and_journal_originals_intact',
+)
+
+
+def require_macos_host():
+    # Direct/undecorated invocation cannot masquerade as a native Mac check.
+    if sys.platform != 'darwin':
+        raise RuntimeError(MAC_HOST_REASON)
 
 
 class MacHEICSourceMaterialsTests(unittest.TestCase):
@@ -39,7 +58,9 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
                 archive.writestr(member, data)
         return path
 
+    @unittest.skipUnless(sys.platform == 'darwin', MAC_HOST_REASON)
     def test_fd_copy_keeps_original_bytes_mode_identity_and_independent_output(self):
+        require_macos_host()
         original = self.file('input.cpp'); original.chmod(0o600)
         output = self.root / 'copy.cpp'
         before = relink.captured_file(original)
@@ -90,7 +111,9 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
             with self.assertRaises(ValueError): relink.captured_file(link)
             with self.assertRaises(ValueError): relink.plain_path(directory_alias, directory=True)
 
+    @unittest.skipUnless(sys.platform == 'darwin', MAC_HOST_REASON)
     def test_output_scope_rejects_system_installations_and_requires_new_expected_suffix(self):
+        require_macos_host()
         for path in (Path('/Applications/Modified.app'), Path('/System/Modified.app'),
                      Path('/usr/local/Modified.app'), Path.home() / 'Applications/Modified.app'):
             with self.subTest(path=path), self.assertRaises(ValueError):
@@ -203,7 +226,9 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
         replacements = {name: self.file('modified/' + name, b'modified ' + name.encode()) for name in relink.LIBRARIES}
         return app, replacements
 
+    @unittest.skipUnless(sys.platform == 'darwin', MAC_HOST_REASON)
     def test_owner_copy_updates_integrity_without_mutating_originals_or_claiming_source_or_encode(self):
+        require_macos_host()
         app, replacements = self.app()
         before = relink.tree_inventory(app)
         input_bytes = {name: path.read_bytes() for name, path in replacements.items()}
@@ -224,7 +249,9 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
         self.assertFalse(modified['sourceCorrespondenceVerified'])
         with self.assertRaises(ValueError): relink.relink(app, replacements, output, command=self.command())
 
+    @unittest.skipUnless(sys.platform == 'darwin', MAC_HOST_REASON)
     def test_relink_failure_retains_explicit_failed_copy_and_journal_originals_intact(self):
+        require_macos_host()
         app, replacements = self.app(); before = relink.tree_inventory(app)
         output = self.root / 'rejected.app'
         with self.assertRaisesRegex(ValueError, 'link closure'):
@@ -302,3 +329,18 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
             with materials.managed(Resource()):
                 pass
         self.assertIs(observed_cleanup.exception, cleanup)
+
+    def test_direct_non_mac_owner_checks_refuse_before_source_or_bundle_io(self):
+        # Unwrap only the standard unittest scheduling decorator. The actual
+        # body must still refuse another OS before touching paths or sources.
+        before = list(self.root.iterdir())
+        with patch.object(sys, 'platform', 'win32'), \
+             patch.object(self, 'file', side_effect=AssertionError('Unexpected source creation')), \
+             patch.object(self, 'app', side_effect=AssertionError('Unexpected app-copy setup')), \
+             patch.object(relink, 'captured_file', side_effect=AssertionError('Unexpected source FD read')), \
+             patch.object(relink, 'output_path', side_effect=AssertionError('Unexpected output scope access')), \
+             patch.object(relink, 'relink', side_effect=AssertionError('Unexpected relink')):
+            for name in MAC_HOST_CASES:
+                with self.subTest(case=name), self.assertRaisesRegex(RuntimeError, 'actual macOS'):
+                    inspect.unwrap(getattr(type(self), name))(self)
+        self.assertEqual(list(self.root.iterdir()), before)

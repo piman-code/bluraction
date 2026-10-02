@@ -245,6 +245,38 @@ class Workspace:
                 else:
                     target[key] = deepcopy(value)
 
+    def set_selected_color(self, color, region):
+        """Restyle only matching, unlocked explicit selections, in one undo.
+
+        Brush defaults belong to the window. This transaction preserves every
+        other persisted field and does not expand a selection to its group.
+        """
+        self._available()
+        channels = ('red', 'green', 'blue', 'alpha')
+        if set(color) != set(channels) or any(isinstance(color[key], bool)
+                or not isinstance(color[key], (int, float)) or not math.isfinite(color[key])
+                or not 0 <= color[key] <= 1 for key in channels):
+            raise ValueError('색상은 유한한 RGBA 0~1 값을 사용하세요.')
+        updates = []
+        for item, is_region in self.items():
+            target = item['effect'] if is_region else item
+            if (is_region != region or self.item_id(item, is_region) not in self.selection_ids
+                    or target.get('locked', False)):
+                continue
+            previous = target.get('color', {'red': 0, 'green': 0, 'blue': 0, 'alpha': 1}) if region else {
+                key: target.get(key, 1) for key in channels}
+            if previous != color:
+                updates.append(target)
+        if not updates:
+            return False
+        self._checkpoint()
+        for target in updates:
+            if region:
+                target['color'] = deepcopy(color)
+            else:
+                target.update(deepcopy(color))
+        return True
+
     def delete_selected(self):
         self._checkpoint()
         for key, region in [('regions', True), ('drawings', False)]:
