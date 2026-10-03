@@ -168,7 +168,7 @@ class EditorCanvas(QWidget):
             return
         arrows = (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
         allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
-        if event.key() in arrows and not (event.modifiers() & ~allowed):
+        if event.key() in arrows and not (event.modifiers().value & ~allowed.value):
             if self._color_pick is None and not self.busy and not self._stroke and self._drag_start is None:
                 self.nudged.emit(event.key(), event.modifiers())
             event.accept()
@@ -1033,7 +1033,9 @@ class BlurActionWindow(QMainWindow):
                 or not self.workspace.page or not self.workspace.selected()):
             return
         allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
-        if modifiers & ~allowed:
+        # Enforce the bit policy with Python integers, independent of the
+        # native Qt flag complement width and signedness on each platform.
+        if modifiers.value & ~allowed.value:
             return
         anchor, region = self.workspace.selected()
         if (anchor['effect'] if region else anchor).get('locked', False):

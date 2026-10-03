@@ -4,6 +4,7 @@ The encoder spy intentionally stops before encoding: it checks the actual bitrat
 assignment and failed-output cleanup, without claiming a real codec/device pass.
 """
 import os
+import json
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from copy import deepcopy
@@ -253,20 +254,38 @@ class QualityNudgeControllerTests(unittest.TestCase):
         self.cover()
         before = deepcopy(self.workspace.page.state)
         depth = len(self.workspace._undo[0])
+        allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        alt = Qt.KeyboardModifier.AltModifier
+        print('BLURACTION_MODIFIER_OBSERVATION ' + json.dumps({
+            'allowed': allowed.value, 'qt_complement': (~allowed).value,
+            'alt': alt.value, 'qt_alt_blocked': (alt & ~allowed).value,
+            'integer_alt_blocked': alt.value & ~allowed.value}, sort_keys=True))
+
+        def unchanged(guard):
+            self.assertEqual(self.workspace.page.state, before, guard)
+            self.assertEqual(len(self.workspace._undo[0]), depth, guard)
+
         with patch('platforms.windows.bluraction.ui.QApplication.focusWidget', return_value=self.window.text):
             self.window.nudge_items(Qt.Key.Key_Left)
+        unchanged('text focus')
         self.workspace.busy = True
         self.nudge(Qt.Key.Key_Left)
         self.workspace.busy = False
+        unchanged('workspace busy')
         self.window.canvas.busy = True
         self.nudge(Qt.Key.Key_Left)
         self.window.canvas.busy = False
+        unchanged('canvas busy')
         with patch('platforms.windows.bluraction.ui.QApplication.focusWidget', return_value=self.window.canvas), \
              patch('platforms.windows.bluraction.ui.QApplication.activeModalWidget', return_value=self.window.text):
             self.window.nudge_items(Qt.Key.Key_Left)
-        self.nudge(Qt.Key.Key_Left, Qt.KeyboardModifier.AltModifier)
-        self.assertEqual(self.workspace.page.state, before)
-        self.assertEqual(len(self.workspace._undo[0]), depth)
+        unchanged('modal widget')
+        for modifier in (Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.MetaModifier,
+                         Qt.KeyboardModifier.KeypadModifier, Qt.KeyboardModifier.GroupSwitchModifier,
+                         Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier):
+            with self.subTest(modifier=modifier.value):
+                self.nudge(Qt.Key.Key_Left, modifier)
+                unchanged('disallowed modifier ' + str(modifier.value))
 
     def test_keyboard_event_routes_canvas_only_and_guards_unfinished_gesture(self):
         item = self.cover()
@@ -283,6 +302,19 @@ class QualityNudgeControllerTests(unittest.TestCase):
             self.window.canvas.keyPressEvent(key)
         self.assertEqual(self.workspace.page.state, before)
         self.window.canvas._stroke = []
+
+    def test_disallowed_arrow_modifiers_do_not_emit_canvas_nudge(self):
+        self.cover()
+        emitted = []
+        self.window.canvas.nudged.connect(lambda key, modifiers: emitted.append(key))
+        before = deepcopy(self.workspace.page.state)
+        for modifier in (Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.MetaModifier,
+                         Qt.KeyboardModifier.KeypadModifier, Qt.KeyboardModifier.GroupSwitchModifier):
+            with self.subTest(modifier=modifier.value):
+                event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Left, modifier)
+                self.window.canvas.keyPressEvent(event)
+                self.assertEqual(emitted, [])
+                self.assertEqual(self.workspace.page.state, before)
 
     def test_motion_record_uses_displayed_time_and_restores_in_one_undo(self):
         item = self.cover()

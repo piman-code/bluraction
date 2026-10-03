@@ -28,6 +28,10 @@ on:
         description: Existing approved real dependency-materials directory on the runner (empty blocks packaging)
         type: string
         default: ''
+      windows_test_family:
+        description: Optional exact Windows test family for a diagnosed regression; empty runs the full inventory
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -296,14 +300,24 @@ jobs:
       - name: Verify model and Qt/media controllers with bounded subprocesses
         if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
         shell: pwsh
+        env:
+          SELECTED_WINDOWS_FAMILY: ${{ inputs.windows_test_family }}
+          APPROVED_PREPARE_CANDIDATE: ${{ inputs.prepare_windows_candidate }}
         run: |
           # The offscreen FreeType DB needs actual system fonts; native Windows
           # resolved Courier New in CI8. No font is installed or bundled here.
           $env:QT_QPA_FONTDIR = Join-Path $env:SystemRoot 'Fonts'
           if (-not (Test-Path -LiteralPath $env:QT_QPA_FONTDIR -PathType Container)) { throw 'System font folder unavailable.' }
-          & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/VerificationRunnerTests','-v'],check=True,timeout=120)"
-          if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
-          & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300
+          $FamilyArguments = @()
+          if ($env:SELECTED_WINDOWS_FAMILY) {
+            if ($env:SELECTED_WINDOWS_FAMILY -notmatch '\Atest_[A-Za-z0-9_]+\z') { throw 'Use one exact test family filename stem.' }
+            if ($env:APPROVED_PREPARE_CANDIDATE -eq 'true') { throw 'A selected family cannot satisfy candidate preparation.' }
+            $FamilyArguments = @('--family', $env:SELECTED_WINDOWS_FAMILY)
+          } else {
+            & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/VerificationRunnerTests','-v'],check=True,timeout=120)"
+            if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
+          }
+          & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300 @FamilyArguments
           if ($LASTEXITCODE -ne 0) { throw 'A required isolated Windows test family failed, timed out or did not complete.' }
       - name: Observe authored raw YUV and independent RGB conversions
         if: ${{ inputs.target_platform == 'windows-video-diagnostic' }}
@@ -328,7 +342,9 @@ jobs:
         shell: pwsh
         env:
           APPROVED_LICENSE_MATERIALS: ${{ inputs.windows_license_materials_path }}
+          SELECTED_WINDOWS_FAMILY: ${{ inputs.windows_test_family }}
         run: |
+          if ($env:SELECTED_WINDOWS_FAMILY) { throw 'Selected-family verification cannot prepare a candidate, regardless of diagnostic mode.' }
           if (-not $env:APPROVED_LICENSE_MATERIALS) {
             throw 'Packaging remains pending: real dependency notices/configuration evidence are not supplied. No invented review record or manifest will be uploaded.'
           }
