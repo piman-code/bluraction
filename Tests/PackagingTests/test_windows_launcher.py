@@ -1,5 +1,6 @@
 """Exercise the real launcher with injected dispatch/GUI boundaries, not a frozen EXE."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -43,16 +44,21 @@ try:
 except SystemExit as exc:
     code = exc.code
 finally:
-    print(json.dumps(events, ensure_ascii=False))
+    # ASCII JSON transports Korean arguments losslessly even when Windows
+    # redirects stdout using a legacy code page. Assertions decode it below.
+    print(json.dumps(events, ensure_ascii=True))
 sys.exit(code)
 '''
 
 
 class WindowsLauncherTests(unittest.TestCase):
-    def probe(self, scenario):
+    def probe(self, scenario, encoding=None):
+        environment = dict(os.environ)
+        if encoding:
+            environment['PYTHONIOENCODING'] = encoding
         result = subprocess.run(
             [sys.executable, '-c', PROBE, str(LAUNCHER), scenario],
-            text=True, capture_output=True, timeout=15,
+            text=True, capture_output=True, timeout=15, env=environment,
         )
         self.assertEqual(result.stderr, '')
         return result.returncode, json.loads(result.stdout)
@@ -72,6 +78,11 @@ class WindowsLauncherTests(unittest.TestCase):
         code, events = self.probe('import')
         self.assertEqual(events, [])
         self.assertEqual(code, 0)
+
+    def test_korean_arguments_survive_legacy_stdout_encoding(self):
+        code, events = self.probe('normal', encoding='cp1252')
+        self.assertEqual(code, 23)
+        self.assertEqual(events[-1], ['main', ['한글 project.bluraction', '--literal-argument']])
 
 
 if __name__ == '__main__':
