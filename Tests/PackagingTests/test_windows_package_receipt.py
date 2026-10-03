@@ -278,6 +278,16 @@ class WindowsReceiptTests(unittest.TestCase):
         item.update(row(path, self.artifacts))
         self.reject(contains='one bounded wheel')
 
+    def test_expanded_tags_are_alternative_supported_environments(self):
+        self.refresh_wheel('pypdf', tag='py2-none-any\nTag: py3-none-any')
+        self.assertTrue(self.check()['ok'])
+        self.refresh_wheel('pypdf', tag='py2-none-any')
+        self.reject(contains='compatible')
+        for malformed in ('malformed', 'bad tag-none-any', 'py3--any'):
+            with self.subTest(malformed=malformed):
+                self.refresh_wheel('pypdf', tag='py3-none-any\nTag: ' + malformed)
+                self.reject(contains='plain wheel tag')
+
     def test_pyinstaller_platform_wheel_none_abi_is_supported_only_for_windows_x64(self):
         # Actual acquired PyInstaller 6.22.3 metadata names py3-none-win_amd64.
         self.refresh_wheel('pyinstaller', tag='py3-none-win_amd64')

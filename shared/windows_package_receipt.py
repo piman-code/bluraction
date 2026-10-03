@@ -238,17 +238,21 @@ def wheel_identity(path, row):
             raise ValueError('wheel differs from declared package pin')
         if not tags or len(set(tags)) != len(tags):
             raise ValueError('unique wheel tags required')
+        compatible_tags = []
         for tag in tags:
             parts = tag.split('-')
-            if len(parts) != 3:
+            if len(parts) != 3 or any(not re.fullmatch(r'[A-Za-z0-9_.]+', part) for part in parts):
                 raise ValueError('plain wheel tag required')
             interpreter, abi, target = parts
             compatible = ((interpreter in ('py3', 'py2.py3') and abi == 'none' and target in ('any', 'win_amd64')) or
                           (target == 'win_amd64' and ((interpreter == 'cp314' and abi == 'cp314') or
                            (abi == 'abi3' and re.fullmatch(r'cp3[0-9]+', interpreter) and
                             2 <= int(interpreter[3:]) <= 14))))
-            if not compatible:
-                raise ValueError('wheel not standard CPython3.14 GIL Windows x64 compatible')
+            compatible_tags.append(compatible)
+        # Expanded tags describe alternatives, e.g. py2-none-any plus
+        # py3-none-any in the actual altgraph wheel (PyPA wheel spec).
+        if not any(compatible_tags):
+            raise ValueError('wheel not standard CPython3.14 GIL Windows x64 compatible')
         return name
 
 
