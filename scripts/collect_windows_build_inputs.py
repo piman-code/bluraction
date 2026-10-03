@@ -56,7 +56,10 @@ def collect(wheelhouse, pip_report, runtime):
             raise ValueError('Downloaded wheel differs from install report')
         row = {'distribution': name, 'version': version, 'filename': filename,
                'bytes': path.stat().st_size, 'sha256': digest}
-        wheel_identity(path, row)
+        try:
+            wheel_identity(path, row)
+        except ValueError as error:
+            raise ValueError(f'Wheel metadata rejected for {filename}: {error}') from error
         if runtime.get('distributions', {}).get(name) != version:
             raise ValueError('Installed metadata differs from selected wheel')
         observed.append(row)

@@ -218,8 +218,11 @@ def member_sha(archive, member):
 def wheel_identity(path, row):
     with stable_read(path) as stream, zipfile.ZipFile(stream) as archive:
         members = zip_members(archive)
-        meta = [m for n, m in members.items() if n.endswith('.dist-info/metadata')]
-        wheel = [m for n, m in members.items() if n.endswith('.dist-info/wheel')]
+        # Wheel identity belongs to the root dist-info directory. Vendored
+        # packages (e.g. setuptools/_vendor) retain their own metadata, which
+        # must not be mistaken for additional identities of this wheel.
+        meta = [m for n, m in members.items() if n.count('/') == 1 and n.endswith('.dist-info/metadata')]
+        wheel = [m for n, m in members.items() if n.count('/') == 1 and n.endswith('.dist-info/wheel')]
         if len(meta) != 1 or len(wheel) != 1 or meta[0].file_size > MAX_JSON or wheel[0].file_size > MAX_JSON:
             raise ValueError('one bounded wheel METADATA/WHEEL required')
         if meta[0].filename.rsplit('/', 1)[0] != wheel[0].filename.rsplit('/', 1)[0]:

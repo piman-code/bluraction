@@ -256,6 +256,28 @@ class WindowsReceiptTests(unittest.TestCase):
         self.refresh_wheel(identity, tag='cp39-abi3-win_amd64')
         self.assertTrue(self.check()['ok'])
 
+    def test_vendored_metadata_is_not_another_wheel_identity(self):
+        self.refresh_wheel('pypdf', extra={
+            'package/_vendor/example-1.dist-info/METADATA': 'Name: example\nVersion: 1\n',
+            'package/_vendor/example-1.dist-info/WHEEL': 'Tag: cp314-cp314-win_arm64\n'})
+        self.assertTrue(self.check()['ok'])
+
+    def test_second_root_metadata_identity_remains_rejected(self):
+        self.refresh_wheel('pypdf', extra={
+            'example-1.dist-info/METADATA': 'Name: example\nVersion: 1\n',
+            'example-1.dist-info/WHEEL': 'Tag: py3-none-any\n'})
+        self.reject(contains='one bounded wheel')
+
+    def test_nested_metadata_cannot_replace_missing_root_metadata(self):
+        item = self.find('pypdf')
+        path = self.artifacts / item['path']
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('package/_vendor/pypdf-6.19.0.dist-info/METADATA',
+                             'Name: pypdf\nVersion: 6.19.0\n')
+            archive.writestr('package/_vendor/pypdf-6.19.0.dist-info/WHEEL', 'Tag: py3-none-any\n')
+        item.update(row(path, self.artifacts))
+        self.reject(contains='one bounded wheel')
+
     def test_pyinstaller_platform_wheel_none_abi_is_supported_only_for_windows_x64(self):
         # Actual acquired PyInstaller 6.22.3 metadata names py3-none-win_amd64.
         self.refresh_wheel('pyinstaller', tag='py3-none-win_amd64')
