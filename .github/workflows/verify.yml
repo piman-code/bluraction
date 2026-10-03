@@ -259,9 +259,25 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .ci-venv
-          & .ci-venv/Scripts/python.exe -m pip install --only-binary=:all: -r platforms/windows/requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated Windows environment creation failed.' }
+          & .ci-venv/Scripts/python.exe -m pip download --only-binary=:all: --dest .build/windows-input-wheels -r platforms/windows/requirements-dev.txt -r platforms/windows/installer/requirements-packaging.txt
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows wheels unavailable; do not silently downgrade or skip a media feature.' }
+          & .ci-venv/Scripts/python.exe -m pip install --no-index --find-links .build/windows-input-wheels --only-binary=:all: --report .build/windows-install-report.json -r platforms/windows/requirements-dev.txt -r platforms/windows/installer/requirements-packaging.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Installing acquired Windows wheels failed.' }
           & .ci-venv/Scripts/python.exe -m pip freeze
+      - name: Bind observed Windows inputs to exact acquired wheels
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/collect_windows_build_inputs.py --wheelhouse .build/windows-input-wheels --pip-report .build/windows-install-report.json --output .build/windows-input-evidence.json
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Windows input observation failed; do not infer packaging readiness.' }
+      - name: Retain sanitized input hashes without wheels or install URLs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-input-evidence
+          path: .build/windows-input-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check required native media capabilities
         if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
         shell: pwsh
@@ -316,8 +332,6 @@ jobs:
           if (-not $env:APPROVED_LICENSE_MATERIALS) {
             throw 'Packaging remains pending: real dependency notices/configuration evidence are not supplied. No invented review record or manifest will be uploaded.'
           }
-          & .ci-venv/Scripts/python.exe -m pip install --only-binary=:all: -r platforms/windows/installer/requirements-packaging.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Approved packaging dependency unavailable.' }
           ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Version "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}" -LicenseMaterials $env:APPROVED_LICENSE_MATERIALS -PrepareForReview
       - name: Retain candidate manifest for review, without uploading unchecked binaries
         if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
