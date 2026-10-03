@@ -257,7 +257,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.14'
+          python-version: '3.14.7'
           architecture: x64
       - name: Install exact candidate dependencies into an isolated runner environment
         shell: pwsh
@@ -317,14 +317,39 @@ jobs:
             & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/VerificationRunnerTests','-v'],check=True,timeout=120)"
             if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
           }
-          & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300 @FamilyArguments
-          if ($LASTEXITCODE -ne 0) { throw 'A required isolated Windows test family failed, timed out or did not complete.' }
+          # Candidate builder runs the mandatory full inventory itself.
+          if ($env:APPROVED_PREPARE_CANDIDATE -ne 'true') {
+            & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300 @FamilyArguments
+            if ($LASTEXITCODE -ne 0) { throw 'A required isolated Windows test family failed, timed out or did not complete.' }
+          }
       - name: Observe authored raw YUV and independent RGB conversions
         if: ${{ inputs.target_platform == 'windows-video-diagnostic' }}
         shell: pwsh
         run: |
           & .ci-venv/Scripts/python.exe scripts/windows-video-diagnostic/run_video_diagnostic.py --repository "$PWD"
           if ($LASTEXITCODE -ne 0) { throw 'Video decoder observation incomplete; preserve exact pixels before changing product or hash assertions.' }
+      - name: Prepare onedir candidate only
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        shell: pwsh
+        env:
+          APPROVED_LICENSE_MATERIALS: ${{ inputs.windows_license_materials_path }}
+          SELECTED_WINDOWS_FAMILY: ${{ inputs.windows_test_family }}
+        run: |
+          if ($env:SELECTED_WINDOWS_FAMILY) { throw 'Selected-family verification cannot prepare a candidate, regardless of diagnostic mode.' }
+          if (-not $env:APPROVED_LICENSE_MATERIALS) {
+            throw 'Packaging remains pending: real dependency notices/configuration evidence are not supplied. No invented review record or manifest will be uploaded.'
+          }
+          $env:QT_QPA_FONTDIR = Join-Path $env:SystemRoot 'Fonts'
+          $Version = "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}"
+          $Inputs = Join-Path $PWD '.build/windows-candidate-inputs'
+          $Destination = Join-Path $PWD ".build/windows-packages/$Version"
+          git archive --format=zip --output .build/windows-source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Exact tracked source archive failed.' }
+          & .ci-venv/Scripts/python.exe scripts/create_windows_candidate_inputs.py --wheelhouse .build/windows-input-wheels --pip-report .build/windows-install-report.json --materials-root $env:APPROVED_LICENSE_MATERIALS --source-archive .build/windows-source.zip --commit $env:GITHUB_SHA --source-root "$PWD" --output $Inputs
+          if ($LASTEXITCODE -ne 0) { throw 'Actual candidate input receipt failed; no invented inputs accepted.' }
+          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Version $Version -Destination $Destination -LicenseMaterials "$Inputs/materials" -InputReceipt "$Inputs/candidate-inputs.json" -ReceiptArtifacts "$Inputs/artifacts" -PrepareForReview
+          & .ci-venv/Scripts/python.exe shared/windows_bundle_inventory.py --bundle "$Destination/dist/BlurAction" --bundle-manifest "$Destination/bundle-manifest.json" --receipt "$Inputs/candidate-inputs.json" --artifacts-root "$Inputs/artifacts" --output "$Destination/native-provider-inventory.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual bundle provider observation failed.' }
       - name: Retain synthetic Windows family logs and input hashes
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -337,24 +362,16 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
-      - name: Prepare onedir candidate only
-        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
-        shell: pwsh
-        env:
-          APPROVED_LICENSE_MATERIALS: ${{ inputs.windows_license_materials_path }}
-          SELECTED_WINDOWS_FAMILY: ${{ inputs.windows_test_family }}
-        run: |
-          if ($env:SELECTED_WINDOWS_FAMILY) { throw 'Selected-family verification cannot prepare a candidate, regardless of diagnostic mode.' }
-          if (-not $env:APPROVED_LICENSE_MATERIALS) {
-            throw 'Packaging remains pending: real dependency notices/configuration evidence are not supplied. No invented review record or manifest will be uploaded.'
-          }
-          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Version "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}" -LicenseMaterials $env:APPROVED_LICENSE_MATERIALS -PrepareForReview
       - name: Retain candidate manifest for review, without uploading unchecked binaries
         if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-candidate-manifest
-          path: .build/windows-packages/**/bundle-manifest.json
+          path: |
+            .build/windows-packages/**/bundle-manifest.json
+            .build/windows-packages/**/pyinstaller-input-build.json
+            .build/windows-packages/**/native-provider-inventory.json
+            .build/windows-candidate-inputs/candidate-inputs.json
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
