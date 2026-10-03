@@ -265,6 +265,102 @@
         "evidence/heif-codecs.json"
       ],
       "actual_bundle_bound": false
+    },
+    {
+      "id": "altgraph",
+      "version": "0.17.5",
+      "license": "MIT",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/altgraph/wheel/altgraph-0.17.5.dist-info/LICENSE"
+      ],
+      "evidence_files": [
+        "evidence/transitive-wheel-notices.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "packaging",
+      "version": "26.3",
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/packaging/wheel/packaging-26.3.dist-info/licenses/LICENSE",
+        "licenses/packaging/wheel/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+        "licenses/packaging/wheel/packaging-26.3.dist-info/licenses/LICENSE.BSD"
+      ],
+      "evidence_files": [
+        "evidence/transitive-wheel-notices.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pefile",
+      "version": "2024.8.26",
+      "license": "MIT",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pefile/wheel/pefile-2024.8.26.dist-info/LICENSE"
+      ],
+      "evidence_files": [
+        "evidence/transitive-wheel-notices.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pyinstaller-hooks-contrib",
+      "version": "2026.8",
+      "license": "METADATA classifiers: License :: OSI Approved :: Apache Software License; License :: OSI Approved :: GNU General Public License v2 (GPLv2); detailed file terms in included LICENSE",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pyinstaller-hooks-contrib/wheel/pyinstaller_hooks_contrib-2026.8.dist-info/licenses/LICENSE"
+      ],
+      "evidence_files": [
+        "evidence/transitive-wheel-notices.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "pywin32-ctypes",
+      "version": "0.2.3",
+      "license": "BSD-3-Clause",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/pywin32-ctypes/wheel/pywin32_ctypes-0.2.3.dist-info/LICENSE.txt"
+      ],
+      "evidence_files": [
+        "evidence/transitive-wheel-notices.json"
+      ],
+      "actual_bundle_bound": false
+    },
+    {
+      "id": "setuptools",
+      "version": "84.0.0",
+      "license": "MIT",
+      "redistribution_review": "pending-unpublished-candidate",
+      "license_files": [
+        "licenses/setuptools/wheel/setuptools-84.0.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+        "licenses/setuptools/wheel/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+        "licenses/setuptools/wheel/setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+        "licenses/setuptools/wheel/setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE",
+        "licenses/setuptools/wheel/setuptools/config/NOTICE",
+        "licenses/setuptools/wheel/setuptools/config/_validate_pyproject/NOTICE"
+      ],
+      "evidence_files": [
+        "evidence/transitive-wheel-notices.json"
+      ],
+      "actual_bundle_bound": false
     }
   ],
   "missing_required_ids": [],

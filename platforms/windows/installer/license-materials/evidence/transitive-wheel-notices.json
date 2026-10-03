@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "status": "exact-acquired-wheel-notices-only",
+  "ci_input_observation_sha256": "13d001650bf925b63b20b13eddf381bac11d88390bea7f7036c709755bf7df3a",
+  "wheels": [
+    {
+      "distribution": "altgraph",
+      "version": "0.17.5",
+      "wheel_filename": "altgraph-0.17.5-py2.py3-none-any.whl",
+      "wheel_bytes": 21228,
+      "wheel_sha256": "f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597",
+      "metadata_member": "altgraph-0.17.5.dist-info/METADATA",
+      "metadata_sha256": "dc60641dba229a3aef09f764f562c38d908b930c92615af2e626af31d6ff19b5",
+      "metadata_declarations": {
+        "License": [
+          "MIT"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ],
+        "Classifier": [
+          "Intended Audience :: Developers",
+          "License :: OSI Approved :: MIT License",
+          "Programming Language :: Python",
+          "Programming Language :: Python :: 2",
+          "Programming Language :: Python :: 2.7",
+          "Programming Language :: Python :: 3",
+          "Programming Language :: Python :: 3.4",
+          "Programming Language :: Python :: 3.5",
+          "Programming Language :: Python :: 3.6",
+          "Programming Language :: Python :: 3.7",
+          "Programming Language :: Python :: 3.8",
+          "Programming Language :: Python :: 3.9",
+          "Programming Language :: Python :: 3.10",
+          "Programming Language :: Python :: 3.11",
+          "Programming Language :: Python :: 3.12",
+          "Programming Language :: Python :: 3.13",
+          "Programming Language :: Python :: 3.14",
+          "Topic :: Software Development :: Libraries :: Python Modules",
+          "Topic :: Scientific/Engineering :: Mathematics",
+          "Topic :: Scientific/Engineering :: Visualization"
+        ]
+      },
+      "notice_members": [
+        {
+          "member": "altgraph-0.17.5.dist-info/LICENSE",
+          "path": "licenses/altgraph/wheel/altgraph-0.17.5.dist-info/LICENSE",
+          "bytes": 1002,
+          "sha256": "6c194d6db0c64d45535d10c95142b9b0cda7b7dcc7f1ddee302b3d536f3dbe46"
+        }
+      ],
+      "redistribution_review": "pending-unpublished-candidate",
+      "actual_bundle_bound": false
+    },
+    {
+      "distribution": "packaging",
+      "version": "26.3",
+      "wheel_filename": "packaging-26.3-py3-none-any.whl",
+      "wheel_bytes": 129956,
+      "wheel_sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "metadata_member": "packaging-26.3.dist-info/METADATA",
+      "metadata_sha256": "70fdb89fc4d4a9a043bf7372b8972bcc883fddff34ab55e9cf80d73875384763",
+      "metadata_declarations": {
+        "License": [],
+        "License-Expression": [
+          "Apache-2.0 OR BSD-2-Clause"
+        ],
+        "License-File": [
+          "LICENSE",
+          "LICENSE.APACHE",
+          "LICENSE.BSD"
+        ],
+        "Classifier": [
+          "Development Status :: 5 - Production/Stable",
+          "Intended Audience :: Developers",
+          "Programming Language :: Python",
+          "Programming Language :: Python :: 3",
+          "Programming Language :: Python :: 3 :: Only",
+          "Programming Language :: Python :: 3.9",
+          "Programming Language :: Python :: 3.10",
+          "Programming Language :: Python :: 3.11",
+          "Programming Language :: Python :: 3.12",
+          "Programming Language :: Python :: 3.13",
+          "Programming Language :: Python :: 3.14",
+          "Programming Language :: Python :: 3.15",
+          "Programming Language :: Python :: Implementation :: CPython",
+          "Programming Language :: Python :: Implementation :: PyPy",
+          "Programming Language :: Python :: Free Threading :: 4 - Resilient",
+          "Typing :: Typed"
+        ]
+      },
+      "notice_members": [
+        {
+          "member": "packaging-26.3.dist-info/licenses/LICENSE",
+          "path": "licenses/packaging/wheel/packaging-26.3.dist-info/licenses/LICENSE",
+          "bytes": 197,
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "member": "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "path": "licenses/packaging/wheel/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "bytes": 10174,
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "member": "packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "path": "licenses/packaging/wheel/packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "bytes": 1344,
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        }
+      ],
+      "redistribution_review": "pending-unpublished-candidate",
+      "actual_bundle_bound": false
+    },
+    {
+      "distribution": "pefile",
+      "version": "2024.8.26",
+      "wheel_filename": "pefile-2024.8.26-py3-none-any.whl",
+      "wheel_bytes": 74766,
+      "wheel_sha256": "76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f",
+      "metadata_member": "pefile-2024.8.26.dist-info/METADATA",
+      "metadata_sha256": "8ad83a5f8659e8da6eeaabf2dafa0eebb8c05832a3def16a5db4dd0d52e72474",
+      "metadata_declarations": {
+        "License": [
+          "MIT"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ],
+        "Classifier": [
+          "Development Status :: 5 - Production/Stable",
+          "Intended Audience :: Developers",
+          "Intended Audience :: Science/Research",
+          "Natural Language :: English",
+          "Operating System :: OS Independent",
+          "Programming Language :: Python",
+          "Topic :: Software Development :: Libraries :: Python Modules"
+        ]
+      },
+      "notice_members": [
+        {
+          "member": "pefile-2024.8.26.dist-info/LICENSE",
+          "path": "licenses/pefile/wheel/pefile-2024.8.26.dist-info/LICENSE",
+          "bytes": 1083,
+          "sha256": "b44409c067c6da52bfb54bb6624fb11a7b52157c3a13ae1400232f8196e86ad3"
+        }
+      ],
+      "redistribution_review": "pending-unpublished-candidate",
+      "actual_bundle_bound": false
+    },
+    {
+      "distribution": "pyinstaller-hooks-contrib",
+      "version": "2026.8",
+      "wheel_filename": "pyinstaller_hooks_contrib-2026.8-py3-none-any.whl",
+      "wheel_bytes": 462145,
+      "wheel_sha256": "6d21d65323ea4467753afc21f52d7d0e69416ae8101dd88269bf273ad48db084",
+      "metadata_member": "pyinstaller_hooks_contrib-2026.8.dist-info/METADATA",
+      "metadata_sha256": "686e63d76cb494d44c4533ed64a7d797970a1253493a4f875d39defc190396c4",
+      "metadata_declarations": {
+        "License": [],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ],
+        "Classifier": [
+          "Intended Audience :: Developers",
+          "Topic :: Software Development :: Build Tools",
+          "License :: OSI Approved :: Apache Software License",
+          "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+          "Natural Language :: English",
+          "Operating System :: OS Independent",
+          "Programming Language :: Python",
+          "Programming Language :: Python :: 3"
+        ]
+      },
+      "notice_members": [
+        {
+          "member": "pyinstaller_hooks_contrib-2026.8.dist-info/licenses/LICENSE",
+          "path": "licenses/pyinstaller-hooks-contrib/wheel/pyinstaller_hooks_contrib-2026.8.dist-info/licenses/LICENSE",
+          "bytes": 27666,
+          "sha256": "91d0baaff00773038e72c0a1fc9d5d2d38706b7a2b9c04f34296608f931b9cd0"
+        }
+      ],
+      "redistribution_review": "pending-unpublished-candidate",
+      "actual_bundle_bound": false
+    },
+    {
+      "distribution": "pywin32-ctypes",
+      "version": "0.2.3",
+      "wheel_filename": "pywin32_ctypes-0.2.3-py3-none-any.whl",
+      "wheel_bytes": 30756,
+      "wheel_sha256": "8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8",
+      "metadata_member": "pywin32_ctypes-0.2.3.dist-info/METADATA",
+      "metadata_sha256": "1e3767d3faff4d5b9c347160883831098d1f25acf4306b02c9acdcc6bfb5883b",
+      "metadata_declarations": {
+        "License": [
+          "BSD-3-Clause"
+        ],
+        "License-Expression": [],
+        "License-File": [],
+        "Classifier": [
+          "Programming Language :: Python :: 3",
+          "Programming Language :: Python :: 3.6",
+          "Programming Language :: Python :: 3.7",
+          "Programming Language :: Python :: 3.8",
+          "Programming Language :: Python :: 3.9",
+          "Programming Language :: Python :: 3.10",
+          "Programming Language :: Python :: 3.11"
+        ]
+      },
+      "notice_members": [
+        {
+          "member": "pywin32_ctypes-0.2.3.dist-info/LICENSE.txt",
+          "path": "licenses/pywin32-ctypes/wheel/pywin32_ctypes-0.2.3.dist-info/LICENSE.txt",
+          "bytes": 1644,
+          "sha256": "dfa83b3e2709adfcdb838d9ad55823ca674abb780e60563d9dd9544ccbf785e9"
+        }
+      ],
+      "redistribution_review": "pending-unpublished-candidate",
+      "actual_bundle_bound": false
+    },
+    {
+      "distribution": "setuptools",
+      "version": "84.0.0",
+      "wheel_filename": "setuptools-84.0.0-py3-none-any.whl",
+      "wheel_bytes": 818216,
+      "wheel_sha256": "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670",
+      "metadata_member": "setuptools-84.0.0.dist-info/METADATA",
+      "metadata_sha256": "3ef2975718dd31cabdd5829455e9b868ca14dbf79ed8fed2de0af4e87347006e",
+      "metadata_declarations": {
+        "License": [],
+        "License-Expression": [
+          "MIT"
+        ],
+        "License-File": [
+          "LICENSE"
+        ],
+        "Classifier": [
+          "Development Status :: 5 - Production/Stable",
+          "Intended Audience :: Developers",
+          "Programming Language :: Python :: 3",
+          "Programming Language :: Python :: 3 :: Only",
+          "Topic :: Software Development :: Libraries :: Python Modules",
+          "Topic :: System :: Archiving :: Packaging",
+          "Topic :: System :: Systems Administration",
+          "Topic :: Utilities"
+        ]
+      },
+      "notice_members": [
+        {
+          "member": "setuptools-84.0.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools-84.0.0.dist-info/licenses/LICENSE",
+          "bytes": 1023,
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "member": "setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+          "bytes": 7634,
+          "sha256": "ade78d04982d69972d444a8e14a94f87a2334dd3855cc80348ea8e240aa0df2d"
+        },
+        {
+          "member": "setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+          "bytes": 1023,
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "member": "setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+          "bytes": 10278,
+          "sha256": "458502e12d97bbf64438606a20044aa85eb05fb0a8a807bb35dbec253fd1fc04"
+        },
+        {
+          "member": "setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+          "bytes": 1023,
+          "sha256": "86da0f01aeae46348a3c3d465195dc1ceccde79f79e87769a64b8da04b2a4741"
+        },
+        {
+          "member": "setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+          "bytes": 1076,
+          "sha256": "9755a18519666e5f0f4cae3daad3d7012bcae48a600b31237d75e9fe134e6683"
+        },
+        {
+          "member": "setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+          "bytes": 1076,
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d"
+        },
+        {
+          "member": "setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+          "bytes": 1053,
+          "sha256": "09f1c8c9e941af3e584d59641ea9b87d83c0cb0fd007eb5ef391a7e2643c1a46"
+        },
+        {
+          "member": "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+          "bytes": 197,
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "member": "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+          "bytes": 10174,
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "member": "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+          "bytes": 1344,
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        },
+        {
+          "member": "setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+          "bytes": 1089,
+          "sha256": "29e0fd62e929850e86eb28c3fdccf0cefdf4fa94879011cffb3d0d4bed6d4db6"
+        },
+        {
+          "member": "setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+          "bytes": 1072,
+          "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+        },
+        {
+          "member": "setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+          "bytes": 1107,
+          "sha256": "30c23618679108f3e8ea1d2a658c7ca417bdfc891c98ef1a89fa4ff0c9828654"
+        },
+        {
+          "member": "setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE",
+          "path": "licenses/setuptools/wheel/setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE",
+          "bytes": 1076,
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d"
+        },
+        {
+          "member": "setuptools/config/NOTICE",
+          "path": "licenses/setuptools/wheel/setuptools/config/NOTICE",
+          "bytes": 493,
+          "sha256": "2dddf08818297a3b89d43d95ff659d8da85741108c9136dfa3a4d856c0623bd8"
+        },
+        {
+          "member": "setuptools/config/_validate_pyproject/NOTICE",
+          "path": "licenses/setuptools/wheel/setuptools/config/_validate_pyproject/NOTICE",
+          "bytes": 18737,
+          "sha256": "09c9bcea95ca086f8bc5bed174e40bc835b297d40fb5f86bbbb570fe0a5581a7"
+        }
+      ],
+      "redistribution_review": "pending-unpublished-candidate",
+      "actual_bundle_bound": false
+    }
+  ],
+  "redistribution_review": "pending-unpublished-candidate",
+  "actual_bundle_bound": false,
+  "limitations": [
+    "Exact selected wheel notice extraction only; not corresponding-source completeness or license approval.",
+    "Setuptools includes retained vendored package notices; its root MIT expression does not replace their individual terms.",
+    "PyInstaller hooks have file-specific terms; see actual included LICENSE."
+  ]
+}

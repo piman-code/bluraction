@@ -285,10 +285,14 @@ jobs:
       - name: Check required native media capabilities
         if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
         shell: pwsh
+        env:
+          APPROVED_PREPARE_CANDIDATE: ${{ inputs.prepare_windows_candidate }}
         run: |
           & .ci-venv/Scripts/python.exe scripts/diagnose_source_identity.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual source stat-domain diagnostic could not complete.' }
-          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
+          if ($env:APPROVED_PREPARE_CANDIDATE -ne 'true') {
+            ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
+          }
           & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
       - name: Observe default and system-font offscreen backends without windows or OS input
@@ -314,7 +318,7 @@ jobs:
             if ($env:APPROVED_PREPARE_CANDIDATE -eq 'true') { throw 'A selected family cannot satisfy candidate preparation.' }
             $FamilyArguments = @('--family', $env:SELECTED_WINDOWS_FAMILY)
           } else {
-            & .ci-venv/Scripts/python.exe -c "import subprocess,sys; subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PortableProjectTests','-v'],check=True,timeout=120); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/PackagingTests','-v'],check=True,timeout=60); subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/VerificationRunnerTests','-v'],check=True,timeout=120)"
+            & .ci-venv/Scripts/python.exe -c "import os,subprocess,sys; suites=['PackagingTests','VerificationRunnerTests']; suites += [] if os.environ.get('APPROVED_PREPARE_CANDIDATE')=='true' else ['PortableProjectTests']; [subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/'+suite,'-v'],check=True,timeout=120) for suite in suites]"
             if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
           }
           # Candidate builder runs the mandatory full inventory itself.
@@ -350,6 +354,16 @@ jobs:
           ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Version $Version -Destination $Destination -LicenseMaterials "$Inputs/materials" -InputReceipt "$Inputs/candidate-inputs.json" -ReceiptArtifacts "$Inputs/artifacts" -PrepareForReview
           & .ci-venv/Scripts/python.exe shared/windows_bundle_inventory.py --bundle "$Destination/dist/BlurAction" --bundle-manifest "$Destination/bundle-manifest.json" --receipt "$Inputs/candidate-inputs.json" --artifacts-root "$Inputs/artifacts" --output "$Destination/native-provider-inventory.json"
           if ($LASTEXITCODE -ne 0) { throw 'Actual bundle provider observation failed.' }
+          & .ci-venv/Scripts/python.exe scripts/collect_windows_bundle_origins.py --analysis "$Destination/work/BlurAction/Analysis-00.toc" --bundle "$Destination/dist/BlurAction" --output "$Destination/native-build-origins.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Observed build TOC origins could not be recorded.' }
+      - name: Verify the actual frozen EXE with an isolated owned process tree
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        shell: pwsh
+        run: |
+          $Version = "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}"
+          $Destination = Join-Path $PWD ".build/windows-packages/$Version"
+          & .ci-venv/Scripts/python.exe scripts/verify_windows_bundle.py --bundle "$Destination/dist/BlurAction" --output "$Destination/frozen-verification"
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen EXE smoke failed; source tests do not replace actual packaged execution.' }
       - name: Retain synthetic Windows family logs and input hashes
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -363,7 +377,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Retain candidate manifest for review, without uploading unchecked binaries
-        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-candidate-manifest
@@ -371,6 +385,9 @@ jobs:
             .build/windows-packages/**/bundle-manifest.json
             .build/windows-packages/**/pyinstaller-input-build.json
             .build/windows-packages/**/native-provider-inventory.json
+            .build/windows-packages/**/native-build-origins.json
+            .build/windows-packages/**/frozen-verification/execution.json
+            .build/windows-packages/**/frozen-verification/smoke/report.json
             .build/windows-candidate-inputs/candidate-inputs.json
           include-hidden-files: true
           if-no-files-found: error
