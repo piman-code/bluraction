@@ -44,8 +44,8 @@ def write_new(path, value):
         stream.write('\n')
 
 
-def create(*, wheelhouse, pip_report, materials_root, source_archive, commit,
-           source_root, output, runtime=None, executable=None, runtime_root=None):
+def create(*, wheelhouse, pip_report, materials_root, source_archive, commit=None,
+           source_root, output, source_manifest=None, runtime=None, executable=None, runtime_root=None):
     """Runtime/executable injection is only an authored-test seam, never CLI input."""
     observed = gate.runtime_observation() if runtime is None else runtime
     executable = Path(sys.executable) if executable is None else Path(executable)
@@ -58,7 +58,9 @@ def create(*, wheelhouse, pip_report, materials_root, source_archive, commit,
     gate.canonical(output.name)
     if output.exists() or output.is_symlink():
         raise ValueError('Output already exists')
-    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+    if (commit is None) == (source_manifest is None):
+        raise ValueError('Select exactly one commit or local source manifest')
+    if commit is not None and not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Exact lowercase 40-character Git commit required')
     for input_path in (wheelhouse, materials_root, source_root):
         if output == input_path or input_path.is_relative_to(output):
@@ -85,11 +87,17 @@ def create(*, wheelhouse, pip_report, materials_root, source_archive, commit,
         raise ValueError('Actual interpreter executable differs from observation')
     gate.require_amd64(executable)
     archive_hash = gate.sha(source_archive)
-    # git archive --format=zip records the selected commit in the ZIP comment.
-    with gate.stable_read(source_archive) as stream, zipfile.ZipFile(stream) as archive:
-        if archive.comment != commit.encode('ascii'):
-            raise ValueError('Source archive Git commit comment differs')
-    gate.source_identity(source_archive, source_root)
+    manifest_hash = None
+    if source_manifest is not None:
+        source_manifest = gate.plain(source_manifest)
+        manifest_hash = gate.sha(source_manifest)
+        gate.local_source_identity(source_archive, source_manifest, source_root)
+    else:
+        # Existing acquired commit archives are read, never generated here.
+        with gate.stable_read(source_archive) as stream, zipfile.ZipFile(stream) as archive:
+            if archive.comment != commit.encode('ascii'):
+                raise ValueError('Source archive Git commit comment differs')
+        gate.source_identity(source_archive, source_root)
     material_files = gate.tree_files(materials_root)
     material_rows = [{'path': name, 'bytes': path.stat().st_size, 'sha256': gate.sha(path)}
                      for name, path in sorted(material_files.values())]
@@ -116,7 +124,12 @@ def create(*, wheelhouse, pip_report, materials_root, source_archive, commit,
         identity = 'runtime-' + hashlib.sha256(name.encode('utf-8')).hexdigest()[:32]
         rows.append(dict(copied, path=relative, id=identity, kind='runtime'))
     copied = copy_exact(source_archive, artifacts / 'source.zip', archive_hash)
-    source = dict(copied, path='source.zip', commit=commit, dirty=False)
+    if source_manifest is not None:
+        manifest_copy = copy_exact(source_manifest, artifacts / 'source-manifest.json', manifest_hash)
+        source = dict(copied, path='source.zip', source_kind='local-snapshot',
+                      source_manifest=dict(manifest_copy, path='source-manifest.json'))
+    else:
+        source = dict(copied, path='source.zip', commit=commit, dirty=False)
     # Raw pip report contains machine paths. Only its hash and sanitized wheel
     # observation are copied; acquisition locations are never written here.
     evidence = artifacts / 'acquisition-observation.json'
@@ -142,6 +155,10 @@ def create(*, wheelhouse, pip_report, materials_root, source_archive, commit,
         gate.file_row(materials_root, row)
     if gate.sha(source_archive) != archive_hash or gate.sha(executable) != observed['executable_sha256']:
         raise ValueError('Source/runtime changed during preparation')
+    if source_manifest is not None:
+        if gate.sha(source_manifest) != manifest_hash:
+            raise ValueError('Local source manifest changed during preparation')
+        gate.local_source_identity(source_archive, source_manifest, source_root)
     for _, path, digest in native_rows:
         if gate.sha(path) != digest:
             raise ValueError('Python native runtime changed during preparation')
@@ -159,7 +176,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for field in ('wheelhouse', 'pip-report', 'materials-root', 'source-archive', 'source-root', 'output'):
         parser.add_argument('--' + field, required=True, type=Path)
-    parser.add_argument('--commit', required=True)
+    provenance = parser.add_mutually_exclusive_group(required=True)
+    provenance.add_argument('--commit')
+    provenance.add_argument('--source-manifest', type=Path)
     args = parser.parse_args(argv)
     result = create(**vars(args))
     print(json.dumps(result))

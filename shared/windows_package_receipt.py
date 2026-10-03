@@ -328,6 +328,80 @@ def source_identity(path, source_root=None):
                         raise ValueError('packaging code absent from source archive')
 
 
+
+LOCAL_SOURCE_COMMENT = b'bluraction-local-snapshot-v1:'
+
+
+def local_source_identity(path, manifest_path, source_root):
+    """Bind every selected local source byte, without inventing Git provenance."""
+    if source_root is None:
+        raise ValueError('local snapshot requires current source checkout')
+    root = plain(source_root, directory=True)
+    manifest_path = plain(manifest_path)
+    before = sha(manifest_path)
+    manifest = read_json(manifest_path)
+    keys(manifest, ('schema_version', 'source_kind', 'files'),
+         ('schema_version', 'source_kind', 'files'))
+    if type(manifest['schema_version']) is not int or manifest['schema_version'] != 1 or manifest['source_kind'] != 'local-snapshot':
+        raise ValueError('local snapshot manifest identity required')
+    rows = _rows(manifest['files'], 'local source census')
+    selected, total = {}, 0
+    for row in rows:
+        keys(row, ('path', 'bytes', 'sha256'), ('path', 'bytes', 'sha256'))
+        name = canonical(row['path'])
+        if name.casefold() in selected:
+            raise ValueError('duplicate local source path')
+        if type(row['bytes']) is not int or not 0 <= row['bytes'] <= MAX_FILE:
+            raise ValueError('bounded local source size required')
+        hash_value(row['sha256'])
+        selected[name.casefold()] = row
+        total += row['bytes']
+    if total > MAX_EXPANDED:
+        raise ValueError('bounded local source census required')
+    for row in rows:
+        if any(parent.as_posix().casefold() in selected for parent in PurePosixPath(row['path']).parents):
+            raise ValueError('local source file/directory collision')
+    source_identity(path, root)
+    with stable_read(path) as stream, zipfile.ZipFile(stream) as archive:
+        if archive.comment != LOCAL_SOURCE_COMMENT + before.encode('ascii'):
+            raise ValueError('local source manifest/comment mismatch')
+        members = zip_members(archive)
+        if any(m.is_dir() for m in members.values()) or set(members) != {r['path'].lower() for r in rows}:
+            raise ValueError('local source archive census mismatch')
+        for row in rows:
+            member = members[row['path'].lower()]
+            if member.filename != row['path'] or member.file_size != row['bytes'] or member_sha(archive, member) != row['sha256']:
+                raise ValueError('local source member bytes differ: ' + row['path'])
+            file = contained(root, row['path'])
+            if file.stat().st_size != row['bytes'] or sha(file) != row['sha256']:
+                raise ValueError('local source differs from selected checkout: ' + row['path'])
+    if sha(manifest_path) != before:
+        raise ValueError('local source manifest changed during validation')
+
+
+def source_provenance(source, artifacts_root, source_root=None):
+    if type(source) is dict and source.get('source_kind') == 'local-snapshot':
+        keys(source, ('path', 'bytes', 'sha256', 'source_kind', 'source_manifest'),
+             ('path', 'bytes', 'sha256', 'source_kind', 'source_manifest'))
+        keys(source['source_manifest'], ('path', 'bytes', 'sha256'), ('path', 'bytes', 'sha256'))
+        path = file_row(artifacts_root, source)
+        manifest = file_row(artifacts_root, source['source_manifest'])
+        local_source_identity(path, manifest, source_root)
+        file_row(artifacts_root, source['source_manifest'])
+    else:
+        keys(source, ('path', 'bytes', 'sha256', 'commit', 'dirty'))
+        path = file_row(artifacts_root, source)
+        if not re.fullmatch(r'[0-9a-f]{40}', str(source.get('commit', ''))) or type(source.get('dirty')) is not bool:
+            raise ValueError('explicit source commit/dirty provenance required')
+        # Existing legacy archives remain supported; a local marker can never
+        # masquerade as the older commit/dirty schema.
+        with stable_read(path) as stream, zipfile.ZipFile(stream) as archive:
+            if archive.comment.startswith(LOCAL_SOURCE_COMMENT):
+                raise ValueError('local snapshot cannot claim Git provenance')
+        source_identity(path, source_root)
+    return path
+
+
 def tree_files(root):
     root = plain(root, directory=True)
     result = {}
@@ -412,11 +486,7 @@ def _validate(receipt, *, mode, artifacts_root, materials_root, bundle_root,
                 if normalize(identity) not in selected or selected[normalize(identity)][0]['kind'] != 'evidence':
                     raise ValueError('owned wheel build evidence is absent')
     source = receipt.get('app_source')
-    keys(source, ('path', 'bytes', 'sha256', 'commit', 'dirty'))
-    source_path = file_row(artifacts_root, source)
-    if not re.fullmatch(r'[0-9a-f]{40}', str(source.get('commit', ''))) or type(source.get('dirty')) is not bool:
-        raise ValueError('explicit source commit/dirty provenance required')
-    source_identity(source_path, source_root)
+    source_path = source_provenance(source, artifacts_root, source_root)
     materials = receipt.get('materials', {})
     keys(materials, ('inventory_sha256', 'files', 'dependency_bindings'))
     files = tree_files(materials_root)
@@ -456,7 +526,7 @@ def _validate(receipt, *, mode, artifacts_root, materials_root, bundle_root,
         for row, _ in selected.values():
             file_row(artifacts_root, row)
         file_row(artifacts_root, source)
-        source_identity(source_path, source_root)
+        source_provenance(source, artifacts_root, source_root)
         for row in materials['files']:
             file_row(materials_root, row)
         if files.keys() != tree_files(materials_root).keys():
@@ -585,7 +655,7 @@ def _validate(receipt, *, mode, artifacts_root, materials_root, bundle_root,
     for row, _ in selected.values():
         file_row(artifacts_root, row)
     file_row(artifacts_root, source)
-    source_identity(source_path, source_root)
+    source_provenance(source, artifacts_root, source_root)
     file_row(artifacts_root, build)
     for row in materials['files']:
         file_row(materials_root, row)

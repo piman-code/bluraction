@@ -1,6 +1,7 @@
 """Run an actual frozen candidate in an isolated working directory and owned job."""
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -17,11 +18,13 @@ WRAPPER = r'''
 import os, subprocess, sys
 if sys.stdin.buffer.read(1) != b'G': raise SystemExit(2)
 exe, output, working = sys.argv[1:]
-env = dict(os.environ)
+env = {key.upper(): value for key, value in os.environ.items()}
 for key in list(env):
     if key.upper().startswith(('PYTHON', 'QT_', 'PYSIDE', 'VIRTUAL_ENV')):
         del env[key]
-system = env['SystemRoot']
+system = env.get('SYSTEMROOT')
+if not system:
+    raise ValueError('Required Windows system root is missing')
 env['PATH'] = os.pathsep.join((os.path.join(system, 'System32'), system))
 env['QT_QPA_PLATFORM'] = 'offscreen'
 env['QT_QPA_FONTDIR'] = os.path.join(system, 'Fonts')
@@ -53,16 +56,25 @@ def verify(bundle, output):
               'OSInput': False, 'installerVerified': False,
               'userAcceptanceVerified': False, 'redistributionApproved': False,
               'executableSHA256': files.sha(exe)}
+    report['bundleSHA256'] = hashlib.sha256(
+        json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     log = output / 'execution.log'
+    stage = 'process-execution'
     try:
         with log.open('x', encoding='utf-8') as stream:
             code, timed_out = run_command(
                 [sys.executable, '-c', WRAPPER, str(exe), str(output / 'smoke'), str(working)],
                 stream, 180)
         report.update(exit=code, timedOut=timed_out)
+        # Preserve a launch/child failure instead of replacing it with a missing
+        # smoke-report exception. No native-success inference from exit alone.
+        if code != 0 or timed_out:
+            raise ValueError('Frozen smoke did not positively complete')
+        stage = 'smoke-report-read'
         smoke_path = output / 'smoke/report.json'
         smoke = files.read_json(smoke_path)
         report['smokeReportSHA256'] = files.sha(smoke_path)
+        stage = 'smoke-report-validation'
         required = ('actualWindows', 'frozenExecutionVerified')
         excluded = ('installerVerified', 'userAcceptanceVerified', 'redistributionApproved')
         checks = smoke.get('checks', {})
@@ -78,6 +90,10 @@ def verify(bundle, output):
                     ('productionWorkerHandshake', 'decodedFrame', 'ownedChildClosed'))):
             raise ValueError('Frozen smoke did not positively complete')
         report['status'] = 'frozen-smoke-pass'
+    except Exception as error:
+        # Arbitrary exception text may contain paths or environment values.
+        report['failure'] = {'stage': stage, 'type': type(error).__name__[:80]}
+        raise
     finally:
         report['bundleUnchanged'] = census(bundle) == before
         if not report['bundleUnchanged']:

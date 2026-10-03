@@ -1,11 +1,81 @@
 """Authored runner outcomes; these fixtures never claim native execution."""
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from scripts import verify_windows_bundle as subject
+
+
+class WrapperEnvironmentTests(unittest.TestCase):
+    """Execute real wrapper code in a subprocess; the app launch is intercepted."""
+    def probe(self, environment, gate='G'):
+        driver = r'''
+import io,json,os,subprocess,sys,types
+wrapper,gate,environment=sys.argv[1:]
+calls=[]
+def child(argv,**kwargs):
+    calls.append(dict(argv=argv,cwd=kwargs['cwd'],env=kwargs['env'],
+                      stdinClosed=kwargs['stdin']==subprocess.DEVNULL))
+    return types.SimpleNamespace(returncode=17)
+subprocess.run=child
+sys.stdin=types.SimpleNamespace(buffer=io.BytesIO(gate.encode('ascii')))
+sys.argv=['wrapper','authored-app','authored-output','empty-working-directory']
+result={}
+os.environ.clear()
+os.environ.update(json.loads(environment))
+try:
+    exec(compile(wrapper,'<actual-wrapper>','exec'), {'__name__':'__main__'})
+except SystemExit as error:
+    result['exit']=error.code
+except Exception as error:
+    result['errorType']=type(error).__name__
+result['calls']=calls
+print(json.dumps(result))
+'''
+        # Preserve the host environment while starting Python. Apply the
+        # authored environment only inside the already-running probe process.
+        result = subprocess.run([sys.executable, '-c', driver, subject.WRAPPER, gate,
+                                 json.dumps(environment)],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_uppercase_windows_environment_reaches_child_without_dev_paths(self):
+        root = os.path.abspath('authored-windows-root')
+        result = self.probe({'SYSTEMROOT': root, 'PATH': 'unwanted-development-path',
+                             'PYTHONPATH': 'private-code', 'QT_PLUGIN_PATH': 'private-plugins',
+                             'PYSIDE_TEST': 'private-setting', 'VIRTUAL_ENV': 'private-venv'})
+        self.assertEqual(result.get('exit'), 17, result)
+        self.assertEqual(len(result['calls']), 1)
+        call = result['calls'][0]
+        self.assertEqual(call['argv'], ['authored-app', '--candidate-smoke', '--output', 'authored-output'])
+        self.assertEqual(call['cwd'], 'empty-working-directory')
+        self.assertTrue(call['stdinClosed'])
+        self.assertEqual(call['env']['PATH'], os.pathsep.join((os.path.join(root, 'System32'), root)))
+        for key in ('PYTHONPATH', 'QT_PLUGIN_PATH', 'PYSIDE_TEST', 'VIRTUAL_ENV'):
+            self.assertNotIn(key, call['env'])
+
+    def test_mixed_case_environment_is_normalized(self):
+        result = self.probe({'SystemRoot': os.path.abspath('authored-windows-root'),
+                             'Path': 'private-tools', 'PythonPath': 'private-code'})
+        self.assertEqual(result.get('exit'), 17, result)
+        self.assertNotIn('Path', result['calls'][0]['env'])
+        self.assertNotIn('PythonPath', result['calls'][0]['env'])
+
+    def test_missing_root_fails_before_child(self):
+        result = self.probe({'PATH': 'unwanted-development-path'})
+        self.assertEqual(result['errorType'], 'ValueError')
+        self.assertEqual(result['calls'], [])
+
+    def test_gate_precedes_environment_handling_and_child(self):
+        result = self.probe({}, gate='X')
+        self.assertEqual(result['exit'], 2)
+        self.assertEqual(result['calls'], [])
 
 
 class BundleRunnerTests(unittest.TestCase):
@@ -68,6 +138,35 @@ class BundleRunnerTests(unittest.TestCase):
         self.code = 1
         with self.assertRaises(ValueError):
             self.run_fixture()
+
+    def test_launch_failure_is_not_hidden_by_missing_smoke_report(self):
+        def fail_before_app(argv, log, timeout):
+            log.write('authored launch failure\n')
+            return 1, False
+        with patch.object(self, 'execute', side_effect=fail_before_app):
+            with self.assertRaisesRegex(ValueError, 'positively complete'):
+                self.run_fixture()
+        report = json.loads((self.output / 'execution.json').read_text())
+        self.assertEqual(report['failure'], {'stage': 'process-execution', 'type': 'ValueError'})
+        self.assertEqual(report['exit'], 1)
+        self.assertTrue(report['bundleUnchanged'])
+        self.assertIn('logSHA256', report)
+
+    def test_zero_exit_without_smoke_report_is_still_failure(self):
+        with patch.object(self, 'execute', return_value=(0, False)):
+            with self.assertRaises(FileNotFoundError):
+                self.run_fixture()
+        report = json.loads((self.output / 'execution.json').read_text())
+        self.assertEqual(report['status'], 'failed-or-incomplete')
+        self.assertEqual(report['failure']['stage'], 'smoke-report-read')
+
+    def test_exception_message_is_not_copied_into_report(self):
+        with patch.object(self, 'execute', side_effect=OSError('private-path-secret-value')):
+            with self.assertRaises(OSError):
+                self.run_fixture()
+        text = (self.output / 'execution.json').read_text()
+        self.assertNotIn('private-path-secret-value', text)
+        self.assertEqual(json.loads(text)['failure']['type'], 'OSError')
 
     def test_missing_decoder_completion_cannot_pass(self):
         del self.smoke['checks']['production-decoder']['ownedChildClosed']

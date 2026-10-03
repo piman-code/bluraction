@@ -167,6 +167,84 @@ class WindowsReceiptTests(unittest.TestCase):
         if hasattr(self, 'receipt'):
             self.receipt['app_source'].update(row(self.source_zip, self.artifacts))
 
+    def use_local_source(self):
+        manifest = self.artifacts / 'source-manifest.json'
+        files = [row(p, self.source) for p in sorted(self.source.rglob('*')) if p.is_file()]
+        manifest.write_text(json.dumps(dict(schema_version=1, source_kind='local-snapshot', files=files)))
+        with zipfile.ZipFile(self.source_zip, 'a') as archive:
+            archive.comment = subject.LOCAL_SOURCE_COMMENT + subject.sha(manifest).encode('ascii')
+        self.receipt['app_source'] = dict(row(self.source_zip, self.artifacts), source_kind='local-snapshot',
+                                         source_manifest=row(manifest, self.artifacts))
+        self.build_record['source_archive_sha256'] = subject.sha(self.source_zip)
+        build = self.artifacts / 'build.json'
+        build.write_text(json.dumps(self.build_record))
+        self.receipt['build_evidence'] = row(build, self.artifacts)
+        return manifest
+
+    def test_local_source_prepare_and_final_preserve_all_gates(self):
+        self.use_local_source()
+        for mode in ('prepare', 'finalize'):
+            result = self.check(mode)
+            self.assertTrue(result['ok'], result)
+        self.receipt['materials']['dependency_bindings'] = []
+        self.assertFalse(self.check('finalize')['ok'])
+
+    def test_local_manifest_tampering_and_checkout_noncode_drift(self):
+        selected = self.source / 'docs/selected.md'
+        selected.parent.mkdir(); selected.write_text('selected reviewed document')
+        self.write_source()
+        manifest = self.use_local_source()
+        manifest.write_text(manifest.read_text() + ' ')
+        self.assertFalse(self.check()['ok'])
+        self.use_local_source()
+        selected.write_text('changed text')
+        self.assertFalse(self.check()['ok'])
+
+    def test_local_source_full_census_catches_missing_extra_changed_files(self):
+        extra = self.source / 'docs/selected.md'
+        extra.parent.mkdir(); extra.write_text('reviewed noncode')
+        self.write_source()
+        self.use_local_source()
+        with zipfile.ZipFile(self.source_zip) as archive:
+            original = {m.filename: archive.read(m) for m in archive.infolist()}
+            comment = archive.comment
+        for mutation in ('missing', 'extra', 'changed'):
+            with self.subTest(mutation=mutation):
+                contents = dict(original)
+                if mutation == 'missing': del contents['docs/selected.md']
+                elif mutation == 'extra': contents['docs/unselected.md'] = b'extra'
+                else: contents['docs/selected.md'] = b'changed content'
+                with zipfile.ZipFile(self.source_zip, 'w') as archive:
+                    archive.comment = comment
+                    for name, data in contents.items(): archive.writestr(name, data)
+                self.receipt['app_source'].update(row(self.source_zip, self.artifacts))
+                self.assertFalse(self.check()['ok'])
+
+    def test_local_source_provenance_cannot_mix_or_downgrade(self):
+        self.use_local_source()
+        original = deepcopy(self.receipt['app_source'])
+        for field, value in (('commit', 'c'*40), ('dirty', False)):
+            self.receipt['app_source'] = dict(original, **{field: value})
+            self.assertFalse(self.check()['ok'])
+        self.receipt['app_source'] = dict(row(self.source_zip, self.artifacts), commit='c'*40, dirty=False)
+        self.assertFalse(self.check()['ok'])
+        self.receipt['app_source'] = original
+        with zipfile.ZipFile(self.source_zip, 'a') as archive: archive.comment = b'c'*40
+        self.receipt['app_source'].update(row(self.source_zip, self.artifacts))
+        self.assertFalse(self.check()['ok'])
+
+    def test_local_source_requires_checkout_and_exact_manifest(self):
+        manifest = self.use_local_source()
+        with self.assertRaisesRegex(ValueError, 'current source checkout'):
+            subject.local_source_identity(self.source_zip, manifest, None)
+        value = json.loads(manifest.read_text()); value['commit'] = 'c'*40
+        manifest.write_text(json.dumps(value))
+        self.receipt['app_source']['source_manifest'] = row(manifest, self.artifacts)
+        with zipfile.ZipFile(self.source_zip, 'a') as archive:
+            archive.comment = subject.LOCAL_SOURCE_COMMENT + subject.sha(manifest).encode('ascii')
+        self.receipt['app_source'].update(row(self.source_zip, self.artifacts))
+        self.assertFalse(self.check()['ok'])
+
     def refresh_materials(self):
         self.receipt['materials'] = dict(inventory_sha256=digest((self.materials / 'dependencies.json').read_bytes()),
             files=[row(f, self.materials) for f in sorted(self.materials.iterdir())])

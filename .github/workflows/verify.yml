@@ -32,6 +32,10 @@ on:
         description: Optional exact Windows test family for a diagnosed regression; empty runs the full inventory
         type: string
         default: ''
+      personal_windows_installer:
+        description: Build an encrypted personal-test installer; no public release or plaintext artifact
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -364,6 +368,32 @@ jobs:
           $Destination = Join-Path $PWD ".build/windows-packages/$Version"
           & .ci-venv/Scripts/python.exe scripts/verify_windows_bundle.py --bundle "$Destination/dist/BlurAction" --output "$Destination/frozen-verification"
           if ($LASTEXITCODE -ne 0) { throw 'Frozen EXE smoke failed; source tests do not replace actual packaged execution.' }
+      - name: Compile and encrypt the explicitly requested personal installer
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate && inputs.personal_windows_installer
+        shell: pwsh
+        run: |
+          $Version = "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}"
+          $Destination = Join-Path $PWD ".build/windows-packages/$Version"
+          $Inputs = Join-Path $PWD '.build/windows-candidate-inputs'
+          $InstallerOutput = Join-Path $PWD '.build/personal-installer'
+          ./platforms/windows/installer/build_personal_installer.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Bundle "$Destination/dist/BlurAction" -BundleManifest "$Destination/bundle-manifest.json" -InputReceipt "$Inputs/candidate-inputs.json" -ReceiptArtifacts "$Inputs/artifacts" -Version $Version -FrozenReport "$Destination/frozen-verification/execution.json" -OutputDirectory $InstallerOutput
+          if ($LASTEXITCODE -ne 0) { throw 'Personal installer compilation failed.' }
+          $RecordPath = Join-Path $InstallerOutput 'personal-installer-record.json'
+          $Record = Get-Content -LiteralPath $RecordPath -Raw | ConvertFrom-Json
+          $OpenSSL = Join-Path $env:ProgramFiles 'Git/usr/bin/openssl.exe'
+          if (-not (Test-Path -LiteralPath $OpenSSL)) { throw 'Runner OpenSSL absent; no plaintext upload permitted.' }
+          & .ci-venv/Scripts/python.exe scripts/seal_personal_installer.py --installer (Join-Path $InstallerOutput $Record.installer) --record $RecordPath --certificate build-recipes/windows-personal-test/recipient.pem --output .build/personal-delivery --openssl $OpenSSL
+          if ($LASTEXITCODE -ne 0) { throw 'Personal installer encryption failed.' }
+      - name: Deliver only encrypted personal installer
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate && inputs.personal_windows_installer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: personal-installer-encrypted
+          path: |
+            .build/personal-delivery/personal-installer.p7m
+            .build/personal-delivery/delivery.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Retain synthetic Windows family logs and input hashes
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

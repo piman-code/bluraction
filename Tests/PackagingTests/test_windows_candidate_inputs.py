@@ -124,6 +124,51 @@ class CandidateInputsTests(unittest.TestCase):
             self.create()
         self.assertFalse(self.output.exists())
 
+    def test_local_snapshot_receipt_copies_manifest_without_fake_commit(self):
+        manifest = self.fixture.use_local_source()
+        self.args.pop('commit')
+        self.args['source_manifest'] = manifest
+        self.create()
+        receipt = gate.read_json(self.output / 'candidate-inputs.json')
+        source = receipt['app_source']
+        self.assertEqual(source['source_kind'], 'local-snapshot')
+        self.assertNotIn('commit', source)
+        self.assertNotIn('dirty', source)
+        self.assertEqual((self.output / 'artifacts/source-manifest.json').read_bytes(), manifest.read_bytes())
+        checked = gate.validate_receipt(receipt, artifacts_root=self.output / 'artifacts',
+            materials_root=self.output / 'materials', source_root=self.fixture.source,
+            runtime_observation=self.runtime)
+        self.assertTrue(checked['ok'], checked)
+
+    def test_local_provenance_exclusive_and_manifest_drift_rejected(self):
+        manifest = self.fixture.use_local_source()
+        self.args['source_manifest'] = manifest
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            self.create()
+        self.args.pop('commit')
+        original = subject.copy_exact
+        def change(source, destination, expected=None):
+            if destination.name == 'source-manifest.json':
+                source.write_text(source.read_text() + ' ')
+            return original(source, destination, expected)
+        with patch.object(subject, 'copy_exact', side_effect=change):
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                self.create()
+        self.assertFalse((self.output / 'candidate-inputs.json').exists())
+
+    def test_cli_local_manifest_option_is_exclusive_with_commit(self):
+        manifest = self.fixture.use_local_source()
+        args = []
+        for key in ('wheelhouse', 'pip_report', 'materials_root', 'source_archive', 'source_root', 'output'):
+            args += ['--' + key.replace('_', '-'), str(self.args[key])]
+        args += ['--source-manifest', str(manifest)]
+        with patch.object(gate, 'runtime_observation', return_value=self.runtime), \
+             patch.object(subject.sys, 'executable', str(self.args['executable'])), \
+             patch.object(subject.sys, 'base_prefix', str(self.runtime_root)):
+            self.assertEqual(subject.main(args), 0)
+        with self.assertRaises(SystemExit):
+            subject.main(args + ['--commit', 'c'*40])
+
     def test_cli_has_no_runtime_override_and_calls_actual_observer(self):
         args = []
         for key in ('wheelhouse', 'pip_report', 'materials_root', 'source_archive', 'source_root', 'output', 'commit'):
