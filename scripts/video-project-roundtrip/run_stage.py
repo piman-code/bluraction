@@ -155,7 +155,9 @@ def main():
                           buildSourceInputsSHA256=sha(json.dumps(before, sort_keys=True).encode('utf-8')))
             argv = ['bash', str(ROOT / 'scripts/test.sh'), '--scratch-path', str(scratch), '--skip-build', '--filter', SUITE]
         exit_code, timed_out = run_phase('native-stage', argv, STAGE_DEADLINE, log, report)
-        output = read(log).decode('utf-8', errors='replace')
+        # Windows subprocess logs use CRLF. Normalize only the parser view;
+        # the preserved log and its SHA below remain the original bytes.
+        output = read(log).decode('utf-8', errors='replace').replace('\r\n', '\n')
         report.update(exit=exit_code, timedOut=timed_out, logSHA256=sha(read(log)))
         require(exit_code == 0 and not timed_out, 'Native stage failed or exceeded its owned process-tree deadline')
         if args.stage == 'windows-edit':

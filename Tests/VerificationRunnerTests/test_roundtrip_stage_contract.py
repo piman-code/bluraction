@@ -32,7 +32,7 @@ def binaries(scratch):
 
 class RoundtripStageContractTests(unittest.TestCase):
     def drive(self, root, *, host='darwin', build_result=(0, False), mutate_binary=False, change_source=False,
-              build_summary=True, stage_result=(0, False)):
+              build_summary=True, stage_result=(0, False), windows_output=None):
         build = root / '.build'; build.mkdir()
         incoming = build / 'incoming'; incoming.mkdir()
         (incoming / 'source').write_bytes(b'preserved')
@@ -48,7 +48,10 @@ class RoundtripStageContractTests(unittest.TestCase):
                     log.write('Building failed or incomplete\n')
                 return build_result
             if host == 'win32':
-                log.write('Ran 1 test in 0.2s\nOK\n')
+                if windows_output is None:
+                    log.write('Ran 1 test in 0.2s\nOK\n')
+                else:
+                    log.buffer.write(windows_output)
             else:
                 log.write(f'◇ Suite {stage.SUITE} started.\n✔ Suite {stage.SUITE} passed after 1s.\n'
                           '✔ Test run with 1 test passed after 1s.\n')
@@ -145,6 +148,16 @@ class RoundtripStageContractTests(unittest.TestCase):
             self.assertNotIn('--skip-build', calls[0][0])
             self.assertNotIn('buildBinaryInputs', report)
             self.assertEqual(report['phases'][0]['phase'], 'native-stage')
+
+    def test_windows_crlf_summary_preserves_raw_log_and_rejects_false_completion(self):
+        for ending, valid in ((b'OK\r\n', True), (b'OK (skipped=1)\r\n', False),
+                              (b'OK\r\nOK\r\n', False), (b'FAILED\r\n', False)):
+            with self.subTest(ending=ending), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                raw = b'Ran 1 test in 0.2s\r\n' + ending
+                report, calls, error = self.drive(root, host='win32', windows_output=raw)
+                self.assertEqual(error is None, valid)
+                self.assertEqual((root / '.build/attempt/stage.log').read_bytes(), raw)
 
     def test_binary_inventory_rejects_missing_ambiguous_and_escaping_inputs(self):
         with tempfile.TemporaryDirectory() as folder:
