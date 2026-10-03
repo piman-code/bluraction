@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class PersonalInstallerTests(unittest.TestCase):
     def test_validator_python_compiles(self):
-        ps = (ROOT/'platforms/windows/installer/build_personal_installer.ps1').read_text()
+        ps = (ROOT/'platforms/windows/installer/build_personal_installer.ps1').read_text(encoding='utf-8')
         validator = ps.split("$Validator = @'\n",1)[1].split("\n'@",1)[0]
         compile(validator, '<personal installer validator>', 'exec')
         for gate in ('actual != recorded', "mode='prepare'", "'frozen-smoke-pass'", "'executableSHA256'", "'bundleUnchanged'", 'f.tree_files(bundle)', 'f.plain(p)'):
@@ -25,7 +25,7 @@ class PersonalInstallerTests(unittest.TestCase):
 
     def run_authored_validator(self, mutation=None, output_kind='sibling'):
         """Authored file validation; runtime/receipt observers mocked, never Windows proof."""
-        ps = (ROOT/'platforms/windows/installer/build_personal_installer.ps1').read_text()
+        ps = (ROOT/'platforms/windows/installer/build_personal_installer.ps1').read_text(encoding='utf-8')
         validator = ps.split("$Validator = @'\n",1)[1].split("\n'@",1)[0]
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()/'repo'; root.mkdir()
@@ -78,7 +78,7 @@ class PersonalInstallerTests(unittest.TestCase):
             self.run_authored_validator(output_kind='bundle')
 
     def test_personal_installer_is_isolated_and_never_launches(self):
-        iss = (ROOT/'platforms/windows/installer/BlurAction-personal.iss').read_text()
+        iss = (ROOT/'platforms/windows/installer/BlurAction-personal.iss').read_text(encoding='utf-8')
         for requirement in ('PrivilegesRequired=lowest', 'BlurAction.Windows.PersonalTest.',
                 'Programs\\BlurAction-PrivateTest\\', 'DirExists', 'CloseApplications=no',
                 'RestartApplications=no', 'personal-test-status.json'):
@@ -87,7 +87,7 @@ class PersonalInstallerTests(unittest.TestCase):
             self.assertNotIn(prohibited, iss)
 
     def test_final_installer_still_requires_review(self):
-        ps = (ROOT/'platforms/windows/installer/build_installer.ps1').read_text()
+        ps = (ROOT/'platforms/windows/installer/build_installer.ps1').read_text(encoding='utf-8')
         self.assertIn('$Review.status -ne "reviewed"', ps)
         self.assertIn('"--mode", "finalize"', ps)
         self.assertNotIn('Personal', ps)
