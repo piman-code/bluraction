@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "deploymentTarget": "14.0",
+  "sources": [
+    {
+      "name": "libheif",
+      "version": "1.23.5",
+      "filename": "libheif-1.23.5.tar.gz",
+      "directory": "libheif-1.23.5",
+      "url": "https://github.com/strukturag/libheif/releases/download/v1.23.5/libheif-1.23.5.tar.gz",
+      "sha256": "fd9036064c4432f0550d15072ddf34956a248279ee9aeaff0fba3fa0f77d8f1a",
+      "digestEvidence": "https://github.com/strukturag/libheif/releases/expanded_assets/v1.23.5",
+      "licenseDeclared": "LGPL-3.0-or-later"
+    },
+    {
+      "name": "kvazaar",
+      "version": "2.3.2",
+      "filename": "kvazaar-2.3.2.tar.gz",
+      "directory": "kvazaar-2.3.2",
+      "url": "https://github.com/ultravideo/kvazaar/releases/download/v2.3.2/kvazaar-2.3.2.tar.gz",
+      "sha256": "b95d2e20f2b0d8d7ed320055740be2e7a730abe28b153b5a788cfca371cc38b2",
+      "digestEvidence": "https://github.com/ultravideo/kvazaar/releases/expanded_assets/v2.3.2",
+      "licenseDeclared": "BSD-3-Clause (plus actual bundled notices to inventory)"
+    },
+    {
+      "name": "libde265",
+      "version": "1.1.3",
+      "filename": "libde265-1.1.3.tar.gz",
+      "directory": "libde265-1.1.3",
+      "url": "https://github.com/strukturag/libde265/releases/download/v1.1.3/libde265-1.1.3.tar.gz",
+      "sha256": "554228bd17788c99a7e63b37ab5634722190e6e2bf60c1dcb01cef328e133905",
+      "digestEvidence": "https://github.com/strukturag/libde265/releases/expanded_assets/v1.1.3",
+      "licenseDeclared": "LGPL-3.0-or-later (actual COPYING files required; decoder only)"
+    }
+  ],
+  "binaryAcquired": false,
+  "actualBuildVerified": false,
+  "releaseApproved": false
+}

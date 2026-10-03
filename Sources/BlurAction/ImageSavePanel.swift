@@ -30,8 +30,13 @@ enum ImageSavePanel {
 
     /// Reserve room for the suffix and extension before truncating at a grapheme boundary.
     /// Check both Unicode representations because Finder can supply decomposed Korean names.
-    static func filename(stem: String, extension ext: String, collision: Int = 0) -> String {
+    nonisolated static func filename(stem: String, extension ext: String, collision: Int = 0) -> String {
         let ending = "_blurred" + (collision == 0 ? "" : "(\(collision))") + "." + ext
+        return boundedName(stem: stem, ending: ending)
+    }
+
+    /// Shared by individual image names and workspace folders; reserve the whole ending.
+    nonisolated static func boundedName(stem: String, ending: String) -> String {
         let normalized = stem.precomposedStringWithCanonicalMapping
         var prefix = ""
         for character in normalized {

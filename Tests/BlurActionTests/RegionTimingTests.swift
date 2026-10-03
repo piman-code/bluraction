@@ -34,6 +34,8 @@ struct RegionTimingTests {
         let atEOF = RegionEffect.created(at: 8, videoDuration: 8)
         #expect(atEOF.timeRange == 8...8)
         #expect(!atEOF.appliesToEntireVideo)
+        #expect(RegionEffect.created(at: 12, videoDuration: 12).timeRange == 12...12,
+                "The model retains an explicit EOF timestamp; controller editing uses the displayed last frame")
         let frameBeforeEOF = try BlurRenderer.render(image: source, pairs: [(shape, atEOF)], canvasSize: renderer.size, time: 1)
         #expect(renderer.pixels(frameBeforeEOF) == renderer.pixels(source))
         #expect(!RegionEffect.created(at: 0, videoDuration: 0).isActive(at: 0))
@@ -119,13 +121,13 @@ struct RegionTimingTests {
         try await waitFor { fixture.player.currentTime().seconds > captured + 0.25 }
         fixture.container.canvas.mouseDragged(with: try fixture.mouse(.leftMouseDragged, 110, 120))
         fixture.container.canvas.mouseUp(with: try fixture.mouse(.leftMouseUp, 110, 120))
-        let drawn = try #require(fixture.container.canvas.regionsBinding?().first)
+        let drawn = try XCTUnwrap(fixture.container.canvas.regionsBinding?().first)
         #expect(fixture.container.canvas.effectForID?(drawn.id)?.timeRange == captured...12)
         #expect(fixture.container.canvas.effectForID?(drawn.id)?.isActive(at: 0) == false)
 
         let toolbarStart = fixture.player.currentTime().seconds
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let added = try #require(fixture.container.canvas.regionsBinding?().last)
+        let added = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
         let effect = try #require(fixture.container.canvas.effectForID?(added.id))
         #expect(effect.timeRange.lowerBound >= toolbarStart - 0.03)
         #expect(effect.timeRange.lowerBound <= fixture.player.currentTime().seconds + 0.03)
@@ -140,11 +142,11 @@ struct RegionTimingTests {
         defer { fixture.close() }
         try await fixture.seek(0.5)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let first = try #require(fixture.container.canvas.regionsBinding?().first)
+        let first = try XCTUnwrap(fixture.container.canvas.regionsBinding?().first)
         let firstEffect = try #require(fixture.container.canvas.effectForID?(first.id))
         try await fixture.seek(1)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let second = try #require(fixture.container.canvas.regionsBinding?().last)
+        let second = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
         let original = try #require(fixture.container.canvas.effectForID?(second.id))
         try await fixture.seek(2)
         let menu = fixture.controller.makeRegionContextMenu(for: second.id)
@@ -183,17 +185,20 @@ struct RegionTimingTests {
         #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == 11.75...12)
         try await fixture.seek(12)
         let atEnd = fixture.controller.makeRegionContextMenu(for: second.id).items.filter { $0.action == NSSelectorFromString("applyDurationPreset:") }
-        #expect(atEnd.count == 5 && atEnd.allSatisfy { !$0.isEnabled })
-        // An earlier menu remains anchored before EOF; a menu opened at EOF rejects the preset.
+        let lastDisplayedPTS = 143.0 / 12
+        #expect(atEnd.count == 5 && atEnd.allSatisfy { $0.isEnabled })
+        // At transport EOF the last decoded frame remains displayed and editable.
+        // An earlier menu still retains its own displayed-frame anchor.
         #expect(NSApp.sendAction(nearEndAction, to: nearEnd.target, from: nearEnd))
         #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == 11.75...12)
         let eofItem = try #require(atEnd.first)
         let eofAction = try #require(eofItem.action)
         #expect(NSApp.sendAction(eofAction, to: eofItem.target, from: eofItem))
-        #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == 11.75...12)
+        #expect(fixture.container.canvas.effectForID?(second.id)?.timeRange == lastDisplayedPTS...12)
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let eofShape = try #require(fixture.container.canvas.regionsBinding?().last)
-        #expect(fixture.container.canvas.effectForID?(eofShape.id)?.timeRange == 12...12)
+        let eofShape = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
+        #expect(fixture.container.canvas.effectForID?(eofShape.id)?.timeRange == lastDisplayedPTS...12)
+        #expect(fixture.container.canvas.effectForID?(eofShape.id)?.isActive(at: lastDisplayedPTS) == true)
         #expect(fixture.container.canvas.effectForID?(eofShape.id)?.isActive(at: 1) == false)
     }
 
@@ -211,7 +216,7 @@ struct RegionTimingTests {
         #expect(output.stringValue.contains("목표"))
 
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let base = try #require(fixture.container.canvas.regionsBinding?().first)
+        let base = try XCTUnwrap(fixture.container.canvas.regionsBinding?().first)
         try await fixture.seek(2)
         for (label, value) in [("왼쪽 X (원본 픽셀)", "12"), ("위쪽 Y (원본 픽셀)", "8"),
                                ("너비 (원본 픽셀)", "40"), ("높이 (원본 픽셀)", "30")] {
@@ -290,9 +295,19 @@ private struct TimingFixture {
     func seek(_ time: Double) async throws {
         container.slider.doubleValue = time
         #expect(container.slider.sendAction(container.slider.action, to: container.slider.target))
-        try await waitFor { abs(player.currentTime().seconds - time) < 0.001 }
-        // Allow the seek completion to reconcile the coordinator before starting playback.
-        try await Task.sleep(nanoseconds: 30_000_000)
+        // This fixture has exactly 144 frames at 12fps. A seek must settle its actual
+        // decoded frame and edit providers, not only the transport's requested clock.
+        let expectedPTS = min(floor(time * 12), 143) / 12
+        try await waitFor {
+            guard let pts = container.liveBlur.presentedFrameTime?.seconds,
+                  let contents = container.liveBlur.contents,
+                  CFGetTypeID(contents as CFTypeRef) == CGImage.typeID else { return false }
+            return abs(player.currentTime().seconds - time) < 0.001
+                && abs(pts - expectedPTS) < 0.000001
+                && container.canvas.currentVideoTime == pts
+                && container.canvas.currentTimeProvider?() == pts
+                && container.canvas.creationTimeProvider?() == pts
+        }
     }
 
     func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat) throws -> NSEvent {

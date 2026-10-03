@@ -1,0 +1,359 @@
+{
+  "authorPCMFormat": "s16LE-mono8000",
+  "authorSamples": 9600,
+  "cases": [
+    {
+      "author": {
+        "PCM_SHA256": "b5cbaeea1cf9431813df1c653fd99a19d22aa72f8769ff99d07326bbfd2e34f1",
+        "audioCodec": "pcm_s16le",
+        "audioFormat": "s16LE-mono",
+        "audioSampleRate": 8000,
+        "audioSamples": 9600,
+        "audioStart": {
+          "denominator": "4",
+          "numerator": "1"
+        },
+        "videoCodec": "mpeg4",
+        "videoPTS": [
+          {
+            "denominator": "1",
+            "numerator": "0"
+          },
+          {
+            "denominator": "12",
+            "numerator": "1"
+          },
+          {
+            "denominator": "24",
+            "numerator": "5"
+          },
+          {
+            "denominator": "24",
+            "numerator": "7"
+          },
+          {
+            "denominator": "2",
+            "numerator": "1"
+          },
+          {
+            "denominator": "12",
+            "numerator": "7"
+          },
+          {
+            "denominator": "6",
+            "numerator": "5"
+          },
+          {
+            "denominator": "1",
+            "numerator": "1"
+          }
+        ],
+        "videoSize": [
+          96,
+          64
+        ],
+        "waveform": "-10000+i"
+      },
+      "file": "unique-pcm-positive-quarter.mov",
+      "historicalRawPyAV19": {
+        "default-applied": {
+          "PCM_SHA256": "b5cbaeea1cf9431813df1c653fd99a19d22aa72f8769ff99d07326bbfd2e34f1",
+          "audioEOF": true,
+          "fullContentMatchesUniqueAuthoredSlice": true,
+          "leadingZeroSamples": 0,
+          "options": {
+            "advanced_editlist": "1",
+            "ignore_editlist": "0"
+          },
+          "samples": 9600,
+          "uniqueFirstAuthoredSampleIndex": 0,
+          "videoEOF": true
+        },
+        "ignore-editlist": {
+          "PCM_SHA256": "b5cbaeea1cf9431813df1c653fd99a19d22aa72f8769ff99d07326bbfd2e34f1",
+          "audioEOF": true,
+          "fullContentMatchesUniqueAuthoredSlice": true,
+          "leadingZeroSamples": 0,
+          "options": {
+            "ignore_editlist": "1"
+          },
+          "samples": 9600,
+          "uniqueFirstAuthoredSampleIndex": 0,
+          "videoEOF": true
+        }
+      },
+      "kind": "unique-pcm-positive-quarter",
+      "muxOptions": {
+        "avoid_negative_ts": "disabled",
+        "use_editlist": "1",
+        "video_track_timescale": "12288"
+      },
+      "nativeMacPCM": {
+        "channels": 1,
+        "chunkCount": 2,
+        "completeEOF": true,
+        "contentPCM_SHA256": "b5cbaeea1cf9431813df1c653fd99a19d22aa72f8769ff99d07326bbfd2e34f1",
+        "contentSamples": 9600,
+        "firstAuthoredSampleIndex": 0,
+        "format": "s16LE",
+        "fullPCM_SHA256": "c1579501005fd8700b88afcb0cd6913a9e4d620ad5801d9d1e465d210ee93c2d",
+        "leadingZeroSamples": 2000,
+        "sampleCount": 11600,
+        "sampleRate": 8000
+      },
+      "sourceBytes": 21395,
+      "sourceSHA256": "22183452e32b872c322d696658ffc7e604b48bb166b37a44c6f0f01b73a34316",
+      "timeline": {
+        "assetDuration": {
+          "denominator": "20",
+          "numerator": "29"
+        },
+        "basis": "asset-presentation",
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetDuration": {
+                  "denominator": "12",
+                  "numerator": "13"
+                },
+                "assetStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "mediaStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "rate": {
+                  "denominator": "1",
+                  "numerator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetDuration": {
+                  "denominator": "4",
+                  "numerator": "1"
+                },
+                "assetStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "mediaStart": null,
+                "rate": {
+                  "denominator": "1",
+                  "numerator": "1"
+                }
+              },
+              {
+                "assetDuration": {
+                  "denominator": "5",
+                  "numerator": "6"
+                },
+                "assetStart": {
+                  "denominator": "4",
+                  "numerator": "1"
+                },
+                "mediaStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "rate": {
+                  "denominator": "1",
+                  "numerator": "1"
+                }
+              }
+            ]
+          }
+        ],
+        "version": 1
+      }
+    },
+    {
+      "author": {
+        "PCM_SHA256": "b5cbaeea1cf9431813df1c653fd99a19d22aa72f8769ff99d07326bbfd2e34f1",
+        "audioCodec": "pcm_s16le",
+        "audioFormat": "s16LE-mono",
+        "audioSampleRate": 8000,
+        "audioSamples": 9600,
+        "audioStart": {
+          "denominator": "4",
+          "numerator": "-1"
+        },
+        "videoCodec": "mpeg4",
+        "videoPTS": [
+          {
+            "denominator": "1",
+            "numerator": "0"
+          },
+          {
+            "denominator": "12",
+            "numerator": "1"
+          },
+          {
+            "denominator": "24",
+            "numerator": "5"
+          },
+          {
+            "denominator": "24",
+            "numerator": "7"
+          },
+          {
+            "denominator": "2",
+            "numerator": "1"
+          },
+          {
+            "denominator": "12",
+            "numerator": "7"
+          },
+          {
+            "denominator": "6",
+            "numerator": "5"
+          },
+          {
+            "denominator": "1",
+            "numerator": "1"
+          }
+        ],
+        "videoSize": [
+          96,
+          64
+        ],
+        "waveform": "-10000+i"
+      },
+      "file": "unique-pcm-negative-quarter.mov",
+      "historicalRawPyAV19": {
+        "default-applied": {
+          "PCM_SHA256": "df460969c121a8661be07a65d39c79adbe1ed178cd0fa8d85ad8ee86644a4d4d",
+          "audioEOF": true,
+          "fullContentMatchesUniqueAuthoredSlice": true,
+          "leadingZeroSamples": 0,
+          "options": {
+            "advanced_editlist": "1",
+            "ignore_editlist": "0"
+          },
+          "samples": 7600,
+          "uniqueFirstAuthoredSampleIndex": 2000,
+          "videoEOF": true
+        },
+        "ignore-editlist": {
+          "PCM_SHA256": "b5cbaeea1cf9431813df1c653fd99a19d22aa72f8769ff99d07326bbfd2e34f1",
+          "audioEOF": true,
+          "fullContentMatchesUniqueAuthoredSlice": true,
+          "leadingZeroSamples": 0,
+          "options": {
+            "ignore_editlist": "1"
+          },
+          "samples": 9600,
+          "uniqueFirstAuthoredSampleIndex": 0,
+          "videoEOF": true
+        }
+      },
+      "kind": "unique-pcm-negative-quarter",
+      "muxOptions": {
+        "avoid_negative_ts": "disabled",
+        "use_editlist": "1",
+        "video_track_timescale": "12288"
+      },
+      "nativeMacPCM": {
+        "channels": 1,
+        "chunkCount": 1,
+        "completeEOF": true,
+        "contentPCM_SHA256": "df460969c121a8661be07a65d39c79adbe1ed178cd0fa8d85ad8ee86644a4d4d",
+        "contentSamples": 7600,
+        "firstAuthoredSampleIndex": 2000,
+        "format": "s16LE",
+        "fullPCM_SHA256": "df460969c121a8661be07a65d39c79adbe1ed178cd0fa8d85ad8ee86644a4d4d",
+        "leadingZeroSamples": 0,
+        "sampleCount": 7600,
+        "sampleRate": 8000
+      },
+      "sourceBytes": 21367,
+      "sourceSHA256": "a6e35375612af8a34f47ee017f5140e711e9c1aa6135b7f8a7860696dc82b6b8",
+      "timeline": {
+        "assetDuration": {
+          "denominator": "12",
+          "numerator": "13"
+        },
+        "basis": "asset-presentation",
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetDuration": {
+                  "denominator": "12",
+                  "numerator": "13"
+                },
+                "assetStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "mediaStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "rate": {
+                  "denominator": "1",
+                  "numerator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetDuration": {
+                  "denominator": "20",
+                  "numerator": "19"
+                },
+                "assetStart": {
+                  "denominator": "1",
+                  "numerator": "0"
+                },
+                "mediaStart": {
+                  "denominator": "4",
+                  "numerator": "1"
+                },
+                "rate": {
+                  "denominator": "1",
+                  "numerator": "1"
+                }
+              }
+            ]
+          }
+        ],
+        "version": 1
+      }
+    }
+  ],
+  "historicalEvidence": {
+    "P1Closed": false,
+    "actualMacNativePCM": true,
+    "actualWindowsAtPreparation": false,
+    "canonicalAudioSHA256AtComparison": "ac22a3e20722645516654f0901af6ff81c4b952c81083e8a519e82ec32c1bc1d",
+    "genericCanonicalClockProof": false,
+    "nativeMacReportSHA256": "582ec1b69da790bc05506fd6639281dd7cb2be1131222248f36e8d53b008a9ed",
+    "nativeOwnedComparisonReportSHA256": "1be537ac8fd0590a80c1fccabb068c5a4705f7cefc76f67a8ab42ee60b72c795",
+    "preparationManifestSHA256": "8efc182a15124012d6bf731ada95d3e1c9bc9db24303c04d3c20d8029ca21311"
+  },
+  "portableFilter": "Explicit allowlisted relative file names, rational timeline, authored values and SHA/count witnesses only; no native file paths, PCM payloads, private logs or runtime folders.",
+  "schemaVersion": 1,
+  "syntheticOnly": true,
+  "waveform": "-10000+i"
+}

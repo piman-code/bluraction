@@ -28,9 +28,9 @@ struct TimeRangeEditorTests {
         let end = try #require(fields.first { $0.placeholderString == "끝 (초)" })
         #expect(!start.isEnabled)
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let first = try #require(container.canvas.regionsBinding?().first)
+        let first = try XCTUnwrap(container.canvas.regionsBinding?().first)
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let second = try #require(container.canvas.regionsBinding?().last)
+        let second = try XCTUnwrap(container.canvas.regionsBinding?().last)
         start.stringValue = "0.25"; end.stringValue = "0.75"
         controller.perform(NSSelectorFromString("applyTimeRange"))
         let effect = try #require(container.canvas.effectForID?(second.id))

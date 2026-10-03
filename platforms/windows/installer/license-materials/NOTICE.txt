@@ -1,0 +1,18 @@
+BlurAction UNPUBLISHED PRIVATE CANDIDATE MATERIALS — REVIEW PENDING
+
+Fourteen required material IDs have nonempty acquired license/source texts and relative evidence references. Every review remains pending-unpublished-candidate. This prepares the material presence gate only. No actual onedir/binary manifest is bound; no redistribution approval or license choice is asserted. Upstream source candidates and wheel-declared versions are explicitly distinguished from Windows DLL observations. Qt commercial notices do not establish a license grant.
+
+numpy 2.3.5: BSD-3-Clause plus bundled notices
+pyinstaller 6.22.3: GPL-2.0-or-later with PyInstaller bootloader exception and bundled notices
+pillow 12.3.0: MIT-CMU plus bundled notices
+pyav 19.0.0: BSD-3-Clause wrapper; vendor codecs separately pending
+pillow-heif 1.8.0: BSD-3-Clause wrapper; wheel notice states GPLv2 aggregate, LGPLv3/GPLv2 dependencies pending
+opencv 4.14.0.94: Apache-2.0 wrapper plus bundled third-party notices
+pypdf 6.19.0: BSD-3-Clause
+pdfium source candidate 1afaa1a380fcd06cec420f3e5b6ec1d2ccb920dc: BSD-style PDFium plus full acquired third-party license text
+ffmpeg 9.0.2 PyAV vendor source candidate; Qt7.1.3 and OpenCV provider unbound: Multiple LGPL/GPL/source licenses; actual configuration and compatibility pending
+python 3.14.7: PSF-2.0 and incorporated historical license terms
+pyside6 6.11.1: Wheel metadata LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only; commercial alternative notice without grant
+qt 6.11.1: LGPL/GPL/commercial alternatives per selected module; license choice and GPL-only plugin exposure pending
+libheif 1.23.4 wheel-declared source candidate; DLL version verification pending: LGPLv3 per actual pillow-heif Windows wheel bundled notice
+heif-codecs libde2651.1.3/x2654.2 wheel-declared source candidates; DLL version verification pending: libde265 LGPLv3 and x265 GPLv2 per actual Windows wheel bundled notice

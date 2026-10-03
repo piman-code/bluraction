@@ -52,7 +52,7 @@ final class GroupsEraserProjectTests {
         let canvas = session.canvas
         session.tool(1)
         try session.drag(from: CGPoint(x: 20, y: 20), to: CGPoint(x: 80, y: 80))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
         session.tool(2)
         session.eraserMode(0)
         try session.drag(from: CGPoint(x: 10, y: 50), to: CGPoint(x: 90, y: 50))
@@ -64,12 +64,12 @@ final class GroupsEraserProjectTests {
         #expect(hole(drawing.id) == CGPoint(x: start.x + 40, y: start.y), "A canvas drag moves the hole")
 
         session.controller.perform(NSSelectorFromString("duplicateSelectedTapped"))
-        let copy = try #require(canvas.annotationsBinding?().last)
+        let copy = try XCTUnwrap(canvas.annotationsBinding?().last)
         #expect(hole(copy.id) == CGPoint(x: start.x + 52, y: start.y - 12), "A duplicate keeps its hole in place")
 
         session.tool(0)
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         try session.shiftClick(CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY))
         session.tool(1)
         try session.shiftClick(CGPoint(x: 60, y: 40))
@@ -105,10 +105,10 @@ final class GroupsEraserProjectTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         session.tool(1)
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
 
         try await session.seek(2)
         session.tool(2)
@@ -124,7 +124,7 @@ final class GroupsEraserProjectTests {
         // Partial (brush) erasing is stored on the drawing, from now on.
         session.tool(1)
         try session.drag(from: CGPoint(x: 60, y: 60), to: CGPoint(x: 100, y: 90))
-        let target = try #require(canvas.annotationsBinding?().last)
+        let target = try XCTUnwrap(canvas.annotationsBinding?().last)
         session.tool(2)
         session.eraserMode(0)
         try session.drag(from: CGPoint(x: 50, y: 75), to: CGPoint(x: 110, y: 75))
@@ -155,11 +155,11 @@ final class GroupsEraserProjectTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         let center = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
         session.tool(1)
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
-        let drawing = try #require(canvas.annotationsBinding?().first)
+        let drawing = try XCTUnwrap(canvas.annotationsBinding?().first)
         // Shift-picks survive switching tools, so regions and drawings can be grouped together.
         session.tool(0)
         try session.shiftClick(center)
@@ -172,7 +172,7 @@ final class GroupsEraserProjectTests {
         // Moving the drawing at 2 s moves the region by the same offset, both recorded at 2 s.
         try await session.seek(2)
         try session.drag(from: CGPoint(x: 10, y: 25), to: CGPoint(x: 30, y: 25))
-        let moved = try #require(canvas.regionsBinding?().first).boundingRect
+        let moved = try XCTUnwrap(canvas.regionsBinding?().first).boundingRect
         #expect(abs(moved.minX - (region.boundingRect.minX + 20)) < 0.01 && abs(moved.minY - region.boundingRect.minY) < 0.01)
         #expect(canvas.effectForID?(region.id)?.keyframes.last.map { abs($0.time - 2) < 0.01 } == true)
         session.controller.perform(NSSelectorFromString("undoTapped"))
@@ -229,11 +229,11 @@ final class GroupsEraserProjectTests {
         #expect(canvas.annotationsBinding?().last?.kind == .arrow)
 
         session.controller.addText("안녕", at: CGPoint(x: 20, y: 120))
-        let text = try #require(canvas.annotationsBinding?().last)
+        let text = try XCTUnwrap(canvas.annotationsBinding?().last)
         #expect(text.kind == .text && text.text == "안녕")
         #expect(abs(text.bounds.maxY - 120) < 0.01, "The click point is the text's top-left")
         session.controller.replaceText(of: text.id, with: "안녕하세요")
-        let longer = try #require(canvas.annotationsBinding?().last)
+        let longer = try XCTUnwrap(canvas.annotationsBinding?().last)
         #expect(longer.text == "안녕하세요" && longer.bounds.width > text.bounds.width * 1.5)
         #expect(abs(longer.bounds.height - text.bounds.height) < 0.01)
     }
@@ -246,14 +246,18 @@ final class GroupsEraserProjectTests {
         defer { session.close() }
         let canvas = session.container.canvas
         session.controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         try await session.seek(2)
         let center = CGPoint(x: region.boundingRect.midX, y: region.boundingRect.midY)
         try session.drag(from: center, to: CGPoint(x: center.x + 30, y: center.y))
         session.tool(1)
         try session.drag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 40, y: 40))
-        let data = try session.controller.projectData()
-        let project = try ProjectFile.decode(data)
+        // A bound native video is now saved as v3. Test executables have no app
+        // Bundle Info producer version, so supply only this test API's version.
+        let data = try session.controller.projectData(producerVersion: "test.groups")
+        let videoProject = try VideoProjectFile.decode(data)
+        #expect(videoProject.payload.version == 3)
+        let project = videoProject.edits
         #expect(project.regions.count == 1 && project.drawings.count == 1)
         #expect(project.regions[0].effect.keyframes.map(\.time) == [0, 2])
         #expect(project.regions[0].shape.boundingRect.maxX <= 1.0001, "Geometry is normalized")
@@ -263,9 +267,9 @@ final class GroupsEraserProjectTests {
         defer { reopened.close() }
         let container = try #require(reopened.window?.contentViewController as? MainContainerViewController)
         reopened.window?.setContentSize(NSSize(width: 900, height: 600))
-        reopened.openProject(project, media: URL(fileURLWithPath: project.mediaPath))
+        reopened.openVideoProject(videoProject, media: URL(fileURLWithPath: project.mediaPath))
         try await waitUntil { container.canvas.regionsBinding?().count == 1 }
-        let restored = try #require(container.canvas.regionsBinding?().first)
+        let restored = try XCTUnwrap(container.canvas.regionsBinding?().first)
         let effect = try #require(container.canvas.effectForID?(restored.id))
         #expect(effect.keyframes.map(\.time) == [0, 2])
         let sx = container.canvas.bounds.width / canvas.bounds.width
@@ -277,10 +281,43 @@ final class GroupsEraserProjectTests {
         let widthScale = DrawingAnnotation.widthScale(sx: container.canvas.bounds.width / canvas.bounds.width,
                                                       sy: container.canvas.bounds.height / canvas.bounds.height)
         #expect(abs(reopenedWidth - savedWidth * widthScale) < 0.0001)
-        let twice = try ProjectFile.decode(try reopened.projectData())
+        let twiceVideo = try VideoProjectFile.decode(reopened.projectData(producerVersion: "test.groups"))
+        #expect(twiceVideo.timeline == videoProject.timeline)
+        #expect(twiceVideo.sourceSHA256 == videoProject.sourceSHA256)
+        let twice = twiceVideo.edits
         #expect(abs(twice.drawings[0].lineWidth - project.drawings[0].lineWidth) < 1e-9)
 
-        var json = try #require(String(data: data, encoding: .utf8))
+        let currentJSON = try #require(String(data: data, encoding: .utf8))
+        #expect(currentJSON.contains("\"version\":3"))
+        let unsupportedCurrent = Data(currentJSON.replacingOccurrences(of: "\"version\":3", with: "\"version\":99").utf8)
+        #expect(throws: ProjectFile.ProjectError.self) { _ = try VideoProjectFile.decode(unsupportedCurrent) }
+
+        // Keep legacy encode/decode/open and every previous rejection oracle.
+        // A v3 editable projection is NOT a claim that the v1 decoder reads v3.
+        let legacyData = try project.encoded()
+        let legacy = try ProjectFile.decode(legacyData)
+        let checkedLegacy = try VideoProjectFile.decodeLegacy(legacyData)
+        #expect(legacy == project && checkedLegacy == project)
+        let legacyReopened = MainWindowController()
+        legacyReopened.showWindow(nil)
+        defer { legacyReopened.close() }
+        let legacyContainer = try #require(legacyReopened.window?.contentViewController as? MainContainerViewController)
+        legacyReopened.openProject(legacy, media: URL(fileURLWithPath: legacy.mediaPath))
+        try await waitUntil { legacyContainer.canvas.regionsBinding?().count == 1 }
+        let legacyRestored = try XCTUnwrap(legacyContainer.canvas.regionsBinding?().first)
+        let legacyEffect = try #require(legacyContainer.canvas.effectForID?(legacyRestored.id))
+        #expect(legacyEffect.keyframes.map(\.time) == [0, 2])
+        #expect(legacyContainer.canvas.annotationsBinding?().count == 1)
+        let promoted = try VideoProjectFile.decode(legacyReopened.projectData(producerVersion: "test.groups"))
+        #expect(promoted.edits.regions[0].shape.id == project.regions[0].shape.id)
+        #expect(promoted.edits.regions[0].effect.timeRange == project.regions[0].effect.timeRange)
+        #expect(promoted.edits.regions[0].effect.keyframes.map(\.time) == [0, 2])
+        #expect(promoted.edits.drawings[0].id == project.drawings[0].id)
+        #expect(promoted.edits.drawings[0].timeRange == project.drawings[0].timeRange)
+        #expect(abs(promoted.edits.drawings[0].lineWidth - project.drawings[0].lineWidth) < 1e-9)
+
+        var json = try #require(String(data: legacyData, encoding: .utf8))
+        #expect(json.contains("\"version\" : 1"))
         json = json.replacingOccurrences(of: "\"version\" : 1", with: "\"version\" : 99")
         #expect(throws: ProjectFile.ProjectError.self) { try ProjectFile.decode(Data(json.utf8)) }
         var wild = project
@@ -297,8 +334,10 @@ final class GroupsEraserProjectTests {
         // Next to the media, a project stores only the file name (no user folders).
         let media = URL(fileURLWithPath: project.mediaPath)
         let beside = media.deletingLastPathComponent().appendingPathComponent("edit.bluraction")
-        let local = try ProjectFile.decode(try session.controller.projectData(projectURL: beside))
+        let localCurrent = try VideoProjectFile.decode(session.controller.projectData(projectURL: beside, producerVersion: "test.groups"))
+        let local = localCurrent.edits
         #expect(local.mediaPath == media.lastPathComponent)
+        #expect(localCurrent.timeline == videoProject.timeline)
         #expect(local.mediaURL(relativeTo: beside).standardizedFileURL == media.standardizedFileURL)
         var sneaky = local
         sneaky.mediaPath = "../../secret.mp4"

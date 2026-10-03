@@ -1,0 +1,530 @@
+name: Verify Mac and Windows candidates
+
+# Development CI; first actual run 36953462804 exposed environment/stat-domain
+# failures. Passing CI is distinct from OS user acceptance and a release.
+# Candidate packaging is opt-in; no installation, signing, push or release step.
+on:
+  pull_request:
+  push:
+    # Development branches are checked after a reviewed batch by dispatch;
+    # PRs and main keep automatic required checks without duplicate push runs.
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target_platform:
+        description: Required native platform for this development check; all remains the release prerequisite
+        type: choice
+        options: [all, windows, mac, windows-video-diagnostic, mac-heic-cpu]
+        default: all
+      owned_windows_ffmpeg:
+        description: Run the reviewed disposable source build and native MF smoke; evidence only
+        type: boolean
+        default: false
+      prepare_windows_candidate:
+        description: Build a private Windows candidate after approving runner dependencies
+        type: boolean
+        default: false
+      windows_license_materials_path:
+        description: Existing approved real dependency-materials directory on the runner (empty blocks packaging)
+        type: string
+        default: ''
+      windows_test_family:
+        description: Optional exact Windows test family for a diagnosed regression; empty runs the full inventory
+        type: string
+        default: ''
+      personal_windows_installer:
+        description: Build an encrypted personal-test installer; no public release or plaintext artifact
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}-${{ inputs.owned_windows_ffmpeg && 'owned' || inputs.target_platform == 'mac-heic-cpu' && 'heic-cpu' || 'native' }}
+  cancel-in-progress: true
+
+jobs:
+  portable-project:
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac-heic-cpu' && inputs.target_platform != 'windows-video-diagnostic' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6; verified 2026-10-02
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Verify Swift-encoded portable contracts and metadata preflight
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m unittest discover -s Tests/PortableProjectTests -v
+          python -m unittest discover -s Tests/VerificationRunnerTests -v
+          python -m unittest discover -s Tests/PackagingTests -v
+
+  mac-native:
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'windows' && inputs.target_platform != 'windows-video-diagnostic' && inputs.target_platform != 'mac-heic-cpu' }}
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      # Runner default Xcode15 lacks Swift Testing. Keep macOS14 execution;
+      # select its installed Xcode16.2 only for this ephemeral job environment.
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Record native runner and Swift Testing toolchain
+        run: |
+          uname -a
+          test -d "$DEVELOPER_DIR"
+          swift --version
+          xcode-select -p
+      - name: Install approved synthetic fixture tool on the disposable runner
+        timeout-minutes: 15
+        run: |
+          # Official ffmpeg@7 provides a Sonoma arm64 bottle. This test-only
+          # GPL CLI is not linked into or bundled with the Mac application.
+          brew install ffmpeg@7
+          fixture_bin="$(brew --prefix ffmpeg@7)/bin/ffmpeg"
+          fixture_version="$("$fixture_bin" -version)"
+          printf '%s\n' "$fixture_version"
+          case "${fixture_version%%$'\n'*}" in
+            "ffmpeg version 7.1.5 "*|"ffmpeg version 7.1.5-"*) ;;
+            *) echo '::error::Unexpected synthetic fixture ffmpeg version'; exit 1 ;;
+          esac
+          # Select this exact tool for tests. Existing runner prefix files and
+          # symlinks are left intact, including previously dangling links.
+          test -x "$fixture_bin"
+          printf 'BLURACTION_FFMPEG=%s\n' "$fixture_bin" >> "$GITHUB_ENV"
+          printf 'Synthetic fixture tool selected: %s\n' "$fixture_bin"
+          shasum -a 256 "$fixture_bin"
+          brew info --json=v2 ffmpeg@7
+      - name: Diagnose ImageIO format and renderer capabilities
+        run: |
+          if python3 scripts/diagnose_image_io.py --timeout 90; then
+            echo 'ImageIO diagnostic completed51 readable encodes.'
+          else
+            diagnostic_status=$?
+            if [ "$diagnostic_status" -ne 3 ]; then exit "$diagnostic_status"; fi
+            echo '::warning::ImageIO encode failures observed. Mandatory native regressions still follow; no formats are skipped.'
+          fi
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        # Supply mandatory regressions even when the separate capability probe
+        # fails. Its failure remains visible in the job result and evidence.
+        if: ${{ !cancelled() }}
+        with:
+          python-version: '3.14'
+      - name: Require Mac-host HEIC source ownership and portable archive contracts
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python - <<'PYTHON'
+          import hashlib, json, sys, uuid
+          from pathlib import Path
+          from scripts.verify_windows import run_command
+          if sys.platform != 'darwin':
+              raise RuntimeError('Actual macOS required; Windows packaging skips do not prove this gate.')
+          root = Path.cwd()
+          build = root / '.build'
+          build.mkdir(exist_ok=True)
+          attempt = build / ('mac-heic-materials-tests-' + str(uuid.uuid4()))
+          attempt.mkdir(mode=0o700)
+          names = ('Tests/PackagingTests/test_mac_heic_source_materials.py',
+                   'scripts/relink_heic_cpu.py', 'scripts/package_mac_heic_sources.py',
+                   'shared/source_identity.py', '.github/workflows/verify.yml')
+          def inputs():
+              return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
+          before = inputs()
+          report = {'host': sys.platform, 'status': 'failed-or-incomplete', 'sourceInputs': before,
+                    'OSInput': False, 'installs': False, 'limitations': [
+                    'Controlled Apple command observations; no real Mach-O, signing, codec or legal-compliance proof.']}
+          child = '''import json, sys, unittest
+          from Tests.PackagingTests.test_mac_heic_source_materials import MacHEICSourceMaterialsTests
+          if sys.platform != 'darwin': raise RuntimeError('Actual macOS required')
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(MacHEICSourceMaterialsTests)
+          collected = suite.countTestCases()
+          result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
+          payload = {'host': sys.platform, 'collected': collected, 'completed': result.testsRun,
+                     'skipped': len(result.skipped), 'failures': len(result.failures), 'errors': len(result.errors),
+                     'expectedFailures': len(result.expectedFailures), 'unexpectedSuccesses': len(result.unexpectedSuccesses),
+                     'successful': result.wasSuccessful()}
+          print('MAC_HEIC_MATERIALS_RESULT ' + json.dumps(payload, sort_keys=True))
+          raise SystemExit(0 if payload['successful'] and collected == 19 and result.testsRun == 19 and not
+                           (result.skipped or result.expectedFailures or result.unexpectedSuccesses) else 1)
+          '''
+          log = attempt / 'tests.log'
+          try:
+              with log.open('x', encoding='utf-8') as stream:
+                  code, timed_out = run_command([sys.executable, '-c', child], stream, 60)
+              report.update(exit=code, timedOut=timed_out)
+              rows = [line[len('MAC_HEIC_MATERIALS_RESULT '):] for line in log.read_text(encoding='utf-8').splitlines()
+                      if line.startswith('MAC_HEIC_MATERIALS_RESULT ')]
+              if len(rows) != 1: raise RuntimeError('Missing unique structured Mac completion')
+              result = json.loads(rows[0]); report['completion'] = result
+              if code != 0 or timed_out or result['host'] != 'darwin' or not result['successful'] or result['collected'] != 19 or result['completed'] != 19 or any(
+                  result[key] != 0 for key in ('skipped','failures','errors','expectedFailures','unexpectedSuccesses')):
+                  raise RuntimeError('Required Mac19 completion failed or skipped; retain exact failures.')
+              report['status'] = 'mac-host-19-complete-zero-skips'
+          finally:
+              report['inputsUnchanged'] = inputs() == before
+              if not report['inputsUnchanged']: report['status'] = 'failed-or-incomplete'
+              if log.exists(): report['logSHA256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+              with (attempt / 'execution.json').open('x', encoding='utf-8') as stream:
+                  json.dump(report, stream, sort_keys=True, indent=2)
+          if report['status'] != 'mac-host-19-complete-zero-skips': raise RuntimeError('Mac HEIC materials gate incomplete')
+          PYTHON
+      - name: Build owned CPU HEIC helper for mandatory product regressions
+        if: ${{ !cancelled() }}
+        run: |
+          python build-recipes/macos-heic-cpu/verify_candidate.py --repository "$PWD"
+          python - <<'PYTHON'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path.cwd()
+          attempts = list((root / '.build').glob('mac-heic-cpu-verification-*'))
+          assert len(attempts) == 1, 'One fresh runner-owned HEIC attempt required'
+          attempt = attempts[0]
+          report = json.loads((attempt / 'execution.json').read_text())
+          assert report['status'] == 'source-build-and-six-cases-complete' and report['sourcesPreserved']
+          assert report['host'] == 'darwin' and report['macOS'].startswith('14.')
+          helper = attempt / 'source-build/heic_cpu_candidate'
+          assert helper.is_file() and not helper.is_symlink() and helper.resolve() == helper
+          digest = hashlib.sha256(helper.read_bytes()).hexdigest()
+          assert digest == report['helperSHA256']
+          rows = {'BLURACTION_TEST_HEIC_CPU_HELPER': str(helper),
+                  'BLURACTION_TEST_HEIC_CPU_HELPER_SHA256': digest,
+                  'BLURACTION_OWNED_HEIC_ROOT': str(attempt / 'source-build')}
+          assert all('\n' not in v and '\r' not in v for v in rows.values())
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              for name, value in rows.items(): stream.write(name + '=' + value + '\n')
+          PYTHON
+      - name: Native Mac regression checks
+        # Keep the mandatory product run even if its separate diagnostic
+        # crashes; both failures remain failures with their own evidence.
+        if: ${{ !cancelled() }}
+        run: python3 scripts/verify_mac.py
+      - name: Retain synthetic native verification logs and input hashes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mac-native-verification
+          path: |
+            .build/mac-verification-*/
+            .build/mac-heic-materials-tests-*/execution.json
+            .build/mac-heic-materials-tests-*/tests.log
+            .build/mac-heic-cpu-verification-*/execution.json
+            .build/mac-heic-cpu-verification-*/tool-acquisition.json
+            .build/mac-heic-cpu-verification-*/*.log
+            .build/mac-heic-cpu-verification-*/source-build/reports/*.json
+            .build/mac-heic-cpu-verification-*/source-build/logs/*
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/summary.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/execution.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/report.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/stdout.txt
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/stderr.txt
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/*.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/stdout.txt
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/stderr.txt
+            .build/image-io-diagnostic-*/execution.json
+            .build/image-io-diagnostic-*/native.json
+            .build/image-io-diagnostic-*/native.stderr
+            .build/image-io-diagnostic-*/attempt-*/native.json
+            .build/image-io-diagnostic-*/attempt-*/native.stderr
+            .build/image-io-diagnostic-*/attempt-*/observation.json
+            .build/image-io-diagnostic-*/compile.stdout
+            .build/image-io-diagnostic-*/compile.stderr
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build integrated candidate without operating installation
+        run: |
+          test -n "$BLURACTION_OWNED_HEIC_ROOT"
+          ./scripts/build_app.sh --build-only --no-install --heic-cpu-root="$BLURACTION_OWNED_HEIC_ROOT"
+
+  windows-native:
+    if: ${{ !inputs.owned_windows_ffmpeg && inputs.target_platform != 'mac' && inputs.target_platform != 'mac-heic-cpu' }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14.7'
+          architecture: x64
+      - name: Install exact candidate dependencies into an isolated runner environment
+        shell: pwsh
+        run: |
+          python -m venv .ci-venv
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated Windows environment creation failed.' }
+          & .ci-venv/Scripts/python.exe -m pip download --only-binary=:all: --dest .build/windows-input-wheels -r platforms/windows/requirements-dev.txt -r platforms/windows/installer/requirements-packaging.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows wheels unavailable; do not silently downgrade or skip a media feature.' }
+          & .ci-venv/Scripts/python.exe -m pip install --no-index --find-links .build/windows-input-wheels --only-binary=:all: --report .build/windows-install-report.json -r platforms/windows/requirements-dev.txt -r platforms/windows/installer/requirements-packaging.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Installing acquired Windows wheels failed.' }
+          & .ci-venv/Scripts/python.exe -m pip freeze
+      - name: Bind observed Windows inputs to exact acquired wheels
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/collect_windows_build_inputs.py --wheelhouse .build/windows-input-wheels --pip-report .build/windows-install-report.json --output .build/windows-input-evidence.json
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Windows input observation failed; do not infer packaging readiness.' }
+      - name: Retain sanitized input hashes without wheels or install URLs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-input-evidence
+          path: .build/windows-input-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Check required native media capabilities
+        if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
+        shell: pwsh
+        env:
+          APPROVED_PREPARE_CANDIDATE: ${{ inputs.prepare_windows_candidate }}
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/diagnose_source_identity.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual source stat-domain diagnostic could not complete.' }
+          if ($env:APPROVED_PREPARE_CANDIDATE -ne 'true') {
+            ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -VerifyRuntimeOnly
+          }
+          & .ci-venv/Scripts/python.exe -c "import av, cv2, PySide6; from PySide6.QtPdf import QPdfDocument; from PySide6.QtMultimedia import QMediaPlayer; assert 'h264_mf' in av.codecs_available, 'Windows H.264 encoder unavailable'; assert hasattr(cv2,'TrackerCSRT_create'), 'CSRT unavailable'; print('Qt', PySide6.__version__, 'PyAV', av.__version__, 'OpenCV', cv2.__version__); print('FFmpeg libraries', av.library_versions)"
+          if ($LASTEXITCODE -ne 0) { throw 'Required Windows media capabilities unavailable.' }
+      - name: Observe default and system-font offscreen backends without windows or OS input
+        if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/windows-font-diagnostic/run_font_diagnostic.py --repository "$PWD" --timeout 30
+          if ($LASTEXITCODE -ne 0) { throw 'Font observation incomplete; preserve the report before changing availability or fixed-width assertions.' }
+      - name: Verify model and Qt/media controllers with bounded subprocesses
+        if: ${{ inputs.target_platform != 'windows-video-diagnostic' }}
+        shell: pwsh
+        env:
+          SELECTED_WINDOWS_FAMILY: ${{ inputs.windows_test_family }}
+          APPROVED_PREPARE_CANDIDATE: ${{ inputs.prepare_windows_candidate }}
+        run: |
+          # The offscreen FreeType DB needs actual system fonts; native Windows
+          # resolved Courier New in CI8. No font is installed or bundled here.
+          $env:QT_QPA_FONTDIR = Join-Path $env:SystemRoot 'Fonts'
+          if (-not (Test-Path -LiteralPath $env:QT_QPA_FONTDIR -PathType Container)) { throw 'System font folder unavailable.' }
+          $FamilyArguments = @()
+          if ($env:SELECTED_WINDOWS_FAMILY) {
+            if ($env:SELECTED_WINDOWS_FAMILY -notmatch '\Atest_[A-Za-z0-9_]+\z') { throw 'Use one exact test family filename stem.' }
+            if ($env:APPROVED_PREPARE_CANDIDATE -eq 'true') { throw 'A selected family cannot satisfy candidate preparation.' }
+            $FamilyArguments = @('--family', $env:SELECTED_WINDOWS_FAMILY)
+          } else {
+            & .ci-venv/Scripts/python.exe -c "import os,subprocess,sys; suites=['PackagingTests','VerificationRunnerTests']; suites += [] if os.environ.get('APPROVED_PREPARE_CANDIDATE')=='true' else ['PortableProjectTests']; [subprocess.run([sys.executable,'-m','unittest','discover','-s','Tests/'+suite,'-v'],check=True,timeout=120) for suite in suites]"
+            if ($LASTEXITCODE -ne 0) { throw 'A required Windows regression check failed or timed out.' }
+          }
+          # Candidate builder runs the mandatory full inventory itself.
+          if ($env:APPROVED_PREPARE_CANDIDATE -ne 'true') {
+            & .ci-venv/Scripts/python.exe scripts/verify_windows.py --timeout 300 @FamilyArguments
+            if ($LASTEXITCODE -ne 0) { throw 'A required isolated Windows test family failed, timed out or did not complete.' }
+          }
+      - name: Observe authored raw YUV and independent RGB conversions
+        if: ${{ inputs.target_platform == 'windows-video-diagnostic' }}
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/windows-video-diagnostic/run_video_diagnostic.py --repository "$PWD"
+          if ($LASTEXITCODE -ne 0) { throw 'Video decoder observation incomplete; preserve exact pixels before changing product or hash assertions.' }
+      - name: Prepare onedir candidate only
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        shell: pwsh
+        env:
+          APPROVED_LICENSE_MATERIALS: ${{ inputs.windows_license_materials_path }}
+          SELECTED_WINDOWS_FAMILY: ${{ inputs.windows_test_family }}
+        run: |
+          if ($env:SELECTED_WINDOWS_FAMILY) { throw 'Selected-family verification cannot prepare a candidate, regardless of diagnostic mode.' }
+          if (-not $env:APPROVED_LICENSE_MATERIALS) {
+            throw 'Packaging remains pending: real dependency notices/configuration evidence are not supplied. No invented review record or manifest will be uploaded.'
+          }
+          $env:QT_QPA_FONTDIR = Join-Path $env:SystemRoot 'Fonts'
+          $Version = "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}"
+          $Inputs = Join-Path $PWD '.build/windows-candidate-inputs'
+          $Destination = Join-Path $PWD ".build/windows-packages/$Version"
+          git archive --format=zip --output .build/windows-source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Exact tracked source archive failed.' }
+          & .ci-venv/Scripts/python.exe scripts/create_windows_candidate_inputs.py --wheelhouse .build/windows-input-wheels --pip-report .build/windows-install-report.json --materials-root $env:APPROVED_LICENSE_MATERIALS --source-archive .build/windows-source.zip --commit $env:GITHUB_SHA --source-root "$PWD" --output $Inputs
+          if ($LASTEXITCODE -ne 0) { throw 'Actual candidate input receipt failed; no invented inputs accepted.' }
+          ./platforms/windows/build_package.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Version $Version -Destination $Destination -LicenseMaterials "$Inputs/materials" -InputReceipt "$Inputs/candidate-inputs.json" -ReceiptArtifacts "$Inputs/artifacts" -PrepareForReview
+          & .ci-venv/Scripts/python.exe shared/windows_bundle_inventory.py --bundle "$Destination/dist/BlurAction" --bundle-manifest "$Destination/bundle-manifest.json" --receipt "$Inputs/candidate-inputs.json" --artifacts-root "$Inputs/artifacts" --output "$Destination/native-provider-inventory.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual bundle provider observation failed.' }
+          & .ci-venv/Scripts/python.exe scripts/collect_windows_bundle_origins.py --analysis "$Destination/work/BlurAction/Analysis-00.toc" --bundle "$Destination/dist/BlurAction" --output "$Destination/native-build-origins.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Observed build TOC origins could not be recorded.' }
+      - name: Verify the actual frozen EXE with an isolated owned process tree
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate
+        shell: pwsh
+        run: |
+          $Version = "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}"
+          $Destination = Join-Path $PWD ".build/windows-packages/$Version"
+          & .ci-venv/Scripts/python.exe scripts/verify_windows_bundle.py --bundle "$Destination/dist/BlurAction" --output "$Destination/frozen-verification"
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen EXE smoke failed; source tests do not replace actual packaged execution.' }
+      - name: Compile and encrypt the explicitly requested personal installer
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate && inputs.personal_windows_installer
+        shell: pwsh
+        run: |
+          $Version = "0.8.0-dev1-ci${{ github.run_id }}-${{ github.run_attempt }}"
+          $Destination = Join-Path $PWD ".build/windows-packages/$Version"
+          $Inputs = Join-Path $PWD '.build/windows-candidate-inputs'
+          $InstallerOutput = Join-Path $PWD '.build/personal-installer'
+          ./platforms/windows/installer/build_personal_installer.ps1 -Python "$PWD/.ci-venv/Scripts/python.exe" -Bundle "$Destination/dist/BlurAction" -BundleManifest "$Destination/bundle-manifest.json" -InputReceipt "$Inputs/candidate-inputs.json" -ReceiptArtifacts "$Inputs/artifacts" -Version $Version -FrozenReport "$Destination/frozen-verification/execution.json" -OutputDirectory $InstallerOutput
+          if ($LASTEXITCODE -ne 0) { throw 'Personal installer compilation failed.' }
+          $RecordPath = Join-Path $InstallerOutput 'personal-installer-record.json'
+          $Record = Get-Content -LiteralPath $RecordPath -Raw | ConvertFrom-Json
+          $OpenSSL = Join-Path $env:ProgramFiles 'Git/usr/bin/openssl.exe'
+          if (-not (Test-Path -LiteralPath $OpenSSL)) { throw 'Runner OpenSSL absent; no plaintext upload permitted.' }
+          & .ci-venv/Scripts/python.exe scripts/seal_personal_installer.py --installer (Join-Path $InstallerOutput $Record.installer) --record $RecordPath --certificate build-recipes/windows-personal-test/recipient.pem --output .build/personal-delivery --openssl $OpenSSL
+          if ($LASTEXITCODE -ne 0) { throw 'Personal installer encryption failed.' }
+      - name: Deliver only encrypted personal installer
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate && inputs.personal_windows_installer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: personal-installer-encrypted
+          path: |
+            .build/personal-delivery/personal-installer.p7m
+            .build/personal-delivery/delivery.json
+          if-no-files-found: error
+          retention-days: 3
+      - name: Retain synthetic Windows family logs and input hashes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-native-verification
+          path: |
+            .build/windows-verification-*/
+            .build/windows-font-diagnostic-*/
+            .build/video-decoder-diagnostic-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Retain candidate manifest for review, without uploading unchecked binaries
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate && hashFiles('.build/windows-candidate-inputs/candidate-inputs.json') != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-candidate-manifest
+          path: |
+            .build/windows-packages/**/bundle-manifest.json
+            .build/windows-packages/**/pyinstaller-input-build.json
+            .build/windows-packages/**/native-provider-inventory.json
+            .build/windows-packages/**/native-build-origins.json
+            .build/windows-packages/**/frozen-verification/execution.json
+            .build/windows-packages/**/frozen-verification/smoke/report.json
+            .build/windows-candidate-inputs/candidate-inputs.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  owned-candidate:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.owned_windows_ffmpeg }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      RECIPE_DIRECTORY: build-recipes/windows-owned-ffmpeg
+      PYTHONUTF8: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+          architecture: x64
+      - name: Parse the exact PowerShell recipe before any tool acquisition
+        shell: pwsh
+        run: |
+          $tokens=$null; $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/build-recipes/windows-owned-ffmpeg/BuildOwnedCandidate.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Format-List; throw 'Reviewed PowerShell recipe has syntax errors.' }
+      - name: Build only inside a new disposable attempt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $recipe = [IO.Path]::GetFullPath((Join-Path $repo $env:RECIPE_DIRECTORY))
+          if (-not $recipe.StartsWith($repo + [IO.Path]::DirectorySeparatorChar,
+              [StringComparison]::OrdinalIgnoreCase)) { throw 'Recipe must stay inside reviewed checkout.' }
+          $attempt = Join-Path $env:RUNNER_TEMP ('bluraction-owned-ffmpeg-' + [guid]::NewGuid().ToString())
+          "OWNED_CANDIDATE_ROOT=$attempt" >> $env:GITHUB_ENV
+          & (Join-Path $recipe 'BuildOwnedCandidate.ps1') -Repository $repo -Destination $attempt -Python (Join-Path $env:pythonLocation 'python.exe')
+      - name: Preserve synthetic reports and locked source/build provenance
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: owned-ffmpeg-build-evidence
+          # No wheel, DLL, source archive, user media, whole .build or QA upload.
+          path: |
+            ${{ env.OWNED_CANDIDATE_ROOT }}/reports/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/logs/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/msvc-environment/stdout.txt
+            ${{ env.OWNED_CANDIDATE_ROOT }}/msvc-environment/stderr.txt
+            ${{ env.OWNED_CANDIDATE_ROOT }}/msvc-environment/environment.json
+            ${{ env.OWNED_CANDIDATE_ROOT }}/candidate-material-manifest.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve candidate binaries only in an actually private repository
+        if: ${{ success() && github.event.repository.private == true }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: unpublished-owned-ffmpeg-candidate
+          path: |
+            ${{ env.OWNED_CANDIDATE_ROOT }}/repaired-wheel/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/downloads/
+            ${{ env.OWNED_CANDIDATE_ROOT }}/candidate-material-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+# This workflow proves only the stages it actually executes. Explorer drag/drop,
+# OS dialogs, clean-user installation, packaged HEIC codecs, signed distribution and user
+# acceptance require the manual-OS checklist and specific candidate evidence.
+
+  mac-heic-cpu:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.owned_windows_ffmpeg && inputs.target_platform == 'mac-heic-cpu' }}
+    runs-on: macos-14
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Compile pinned CPU HEIC candidate and inspect six authored outputs
+        run: |
+          sw_vers
+          uname -m
+          test -d "$DEVELOPER_DIR"
+          python build-recipes/macos-heic-cpu/verify_candidate.py --repository "$PWD"
+      - name: Retain synthetic HEIC checks and build provenance only
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: mac-heic-cpu-evidence
+          path: |
+            .build/mac-heic-cpu-verification-*/execution.json
+            .build/mac-heic-cpu-verification-*/tool-acquisition.json
+            .build/mac-heic-cpu-verification-*/*.log
+            .build/mac-heic-cpu-verification-*/source-build/reports/*.json
+            .build/mac-heic-cpu-verification-*/source-build/logs/*
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/summary.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/execution.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/report.json
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/*.rgba
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/candidate.heic
+            .build/mac-heic-cpu-verification-*/mac-heic-cpu-*/*/imageio/*
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

@@ -21,14 +21,17 @@ struct ProjectFile: Codable, Equatable {
     var mediaPath: String
     var regions: [Region]
     var drawings: [DrawingAnnotation]
+    /// Optional backward-compatible v1 integrity extension used by both OS adapters.
+    var sourceSHA256: String? = nil
 
     enum ProjectError: LocalizedError {
-        case tooLarge, unsupportedVersion, invalidContent
+        case tooLarge, unsupportedVersion, invalidContent, sourceNeedsRelink
         var errorDescription: String? {
             switch self {
             case .tooLarge: return "프로젝트 파일이 너무 큽니다."
             case .unsupportedVersion: return "이 버전의 BlurAction이 열 수 없는 프로젝트 형식입니다."
             case .invalidContent: return "프로젝트 파일 내용이 올바르지 않습니다."
+            case .sourceNeedsRelink: return "다른 OS에서 저장했거나 이동한 원본입니다. 원본 파일을 다시 연결하세요."
             }
         }
     }
@@ -43,8 +46,24 @@ struct ProjectFile: Codable, Equatable {
     /// Resolves `mediaPath` against the project's folder when it is a bare file name.
     func mediaURL(relativeTo projectURL: URL?) -> URL {
         if mediaPath.hasPrefix("/") || projectURL == nil { return URL(fileURLWithPath: mediaPath) }
-        let name = (mediaPath as NSString).lastPathComponent // never climb out of the folder
+        let name = Self.portableFileName(mediaPath) // never climb out of the folder, either OS separator
         return projectURL!.deletingLastPathComponent().appendingPathComponent(name)
+    }
+
+    static func portableFileName(_ path: String) -> String {
+        path.replacingOccurrences(of: "\\", with: "/").components(separatedBy: "/").last ?? path
+    }
+
+    var needsPlatformRelink: Bool {
+        let bytes = Array(mediaPath.utf8)
+        let drive = bytes.count >= 2 && ((65...90).contains(bytes[0]) || (97...122).contains(bytes[0])) && bytes[1] == 58
+        return drive || mediaPath.hasPrefix("\\") || mediaPath.hasPrefix("//")
+    }
+
+    func validateSource(_ url: URL) throws {
+        if let expected = sourceSHA256, try PageWorkspace.digest(of: url) != expected {
+            throw PageWorkspace.WorkspaceError.sourceChanged
+        }
     }
 
     func encoded() throws -> Data {
@@ -72,7 +91,8 @@ struct ProjectFile: Codable, Equatable {
         func ok(_ frames: [RegionKeyframe]) -> Bool {
             frames.count <= 100_000 && frames.allSatisfy { $0.time.isFinite && $0.time >= 0 && ok($0.rect) }
         }
-        guard !mediaPath.isEmpty, mediaPath.count <= 4096, !mediaPath.contains("\0"),
+        guard sourceSHA256.map({ $0.count == 64 && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }) ?? true,
+              !mediaPath.isEmpty, mediaPath.count <= 4096, !mediaPath.contains("\0"),
               regions.count <= 1_000, drawings.count <= 5_000 else { return false }
         // Every item needs its own ID: editing code indexes items by ID.
         let ids = regions.map(\.shape.id) + drawings.map(\.id)

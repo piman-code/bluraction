@@ -1,0 +1,20 @@
+# Reproducible UTF-8 source/fixture bytes on both OS checkouts.
+# This is repository metadata only; no global Git setting is changed.
+* text=auto eol=lf
+*.pdf -text
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.heic -text
+*.heif -text
+*.tif -text
+*.tiff -text
+*.icns -text
+*.mov -text
+*.mp4 -text
+*.mkv -text
+*.avi -text
+*.webm -text
+*.wav -text
+# Preserve exact imported upstream notice/evidence bytes and whitespace.
+platforms/windows/installer/license-materials/** -text -whitespace

@@ -1,0 +1,17 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "dependency": "numpy",
+    "version": "2.3.5",
+    "role": "windows-wheel",
+    "filename": "numpy-2.3.5-cp314-cp314-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/a3/2e/235b4d96619931192c91660805e5e49242389742a7a82c27665021db690c/numpy-2.3.5-cp314-cp314-win_amd64.whl",
+    "sha256": "e6a0bc88393d65807d751a614207b7129a310ca4fe76a74e5c7da5fa5671417e",
+    "size": 12919388
+  },
+  "limitations": [
+    "Acquired Windows wheel license bytes; candidate bundler output and exact collected transitive binaries remain unbound."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

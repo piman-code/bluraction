@@ -11,6 +11,7 @@ final class DocumentModel: ObservableObject {
     @Published var displayName = ""
     @Published var videoSize: CGSize = .zero
     @Published var duration: Double = 0
+    @Published private(set) var firstVideoFrameTime: Double = 0
     @Published var videoFPS: Double = 0
     @Published var videoBitRate: Double = 0
     @Published var videoCodec = "—"
@@ -22,6 +23,9 @@ final class DocumentModel: ObservableObject {
     @Published var imageSize: CGSize = .zero
     @Published var currentCGImage: CGImage?
     @Published var errorMessage: String?
+    private(set) var sourceSHA256: String?
+    private(set) var videoProjectBinding: VideoProjectSourceBinding?
+    private(set) var videoProjectReview: String?
 
     /// Called once after the latest load succeeds or fails, on the main actor.
     /// Image loads can complete synchronously; install this before calling load.
@@ -37,11 +41,16 @@ final class DocumentModel: ObservableObject {
         var bitRate: Double = 0
         var codec = "—"
         var hasAudio = false
+        var firstFrameTime: Double = 0
     }
     typealias VideoLoader = (URL) async throws -> VideoMetadata
     private let videoLoader: VideoLoader
+    private let usesInjectedVideoLoader: Bool
 
+    /// Injected metadata loaders can use nonexistent synthetic URLs in tests.
+    /// Production loads, real files, and projects with an expected SHA always require a fingerprint.
     init(videoLoader: VideoLoader? = nil) {
+        usesInjectedVideoLoader = videoLoader != nil
         self.videoLoader = videoLoader ?? { url in
             let asset = VideoAssetPolicy.asset(url: url)
             guard let track = try await asset.loadTracks(withMediaType: .video).first else {
@@ -61,23 +70,97 @@ final class DocumentModel: ObservableObject {
                 switch fourCC { case "avc1": return "H.264"; case "hvc1", "hev1": return "HEVC"; default: return fourCC }
             } ?? "—"
             let hasAudio = !(try await asset.loadTracks(withMediaType: .audio)).isEmpty
-            guard size.width > 0, size.height > 0, duration.isFinite, duration >= 0 else {
+            guard size.width > 0, size.height > 0, duration.isFinite, duration > 0 else {
                 throw LoadError.noVideo
             }
+            let firstFrameTime = try await Self.firstVideoFrameTime(track: track, duration: duration)
+            // A readable moov/track is not proof that its encoded samples decode.
+            // Do this before the candidate's success callback can replace dirty work.
+            let decodedTime = try await Self.validateFirstVideoFrame(asset: asset, firstFrameTime: firstFrameTime)
+            guard decodedTime < duration else { throw LoadError.videoFirstFrameDecode }
             return VideoMetadata(size: size, transform: transform, duration: duration,
-                                 fps: fps, bitRate: bitRate, codec: codec, hasAudio: hasAudio)
+                                 fps: fps, bitRate: bitRate, codec: codec, hasAudio: hasAudio,
+                                 firstFrameTime: decodedTime)
         }
     }
 
     enum LoadError: LocalizedError, Equatable {
-        case imageDecode, imageTooLarge, noVideo, videoTooLarge
+        case imageDecode, imageTooLarge, noVideo, videoTooLarge, videoFirstFrameDecode
         var errorDescription: String? {
             switch self {
             case .imageDecode: return "이미지를 읽을 수 없습니다. 손상되었거나 지원하지 않는 형식입니다."
             case .imageTooLarge: return "이미지가 너무 큽니다. 한 변은 16,384픽셀, 전체는 24,000,000픽셀(24MP) 이하여야 합니다."
             case .noVideo: return "재생할 수 있는 비디오 트랙이 없습니다."
             case .videoTooLarge: return "영상 프레임이 너무 큽니다. 한 변은 16,384픽셀, 전체는 33,177,600픽셀 이하여야 합니다."
+            case .videoFirstFrameDecode: return "영상의 첫 프레임을 읽을 수 없습니다. 손상되었거나 지원하지 않는 영상입니다. 기존 작업은 유지됩니다."
             }
+        }
+    }
+
+    /// Track segment targets use the asset's presentation timeline, unlike compressed
+    /// sample PTS which can remain zero after a leading empty edit-list segment.
+    static func firstVideoFrameTime(track: AVAssetTrack, duration: Double) async throws -> Double {
+        try Task.checkCancellation()
+        guard duration.isFinite, duration > 0 else { throw LoadError.noVideo }
+        let segments = try await track.load(.segments)
+        try Task.checkCancellation()
+        guard !segments.isEmpty, segments.count <= 100_000 else { throw LoadError.noVideo }
+        var first: Double?
+        for segment in segments {
+            try Task.checkCancellation()
+            let target = segment.timeMapping.target
+            let start = target.start.seconds, length = target.duration.seconds
+            guard start.isFinite, length.isFinite, start >= 0, length > 0,
+                  (start + length).isFinite, start + length <= duration + 0.000001 else {
+                throw LoadError.noVideo
+            }
+            if !segment.isEmpty {
+                let source = segment.timeMapping.source
+                guard source.start.seconds.isFinite, source.duration.seconds.isFinite,
+                      source.duration.seconds > 0,
+                      (source.start.seconds + source.duration.seconds).isFinite,
+                      start < duration else { throw LoadError.noVideo }
+                first = min(first ?? start, start)
+            }
+        }
+        guard let first else { throw LoadError.noVideo }
+        return first
+    }
+
+    /// Decode the opening media segment with tolerance for its initial H.264 sample.
+    /// Keep pixels local; the preview still owns its normal cache and the zero-based timeline.
+    @discardableResult
+    static func validateFirstVideoFrame(asset: AVAsset, firstFrameTime: Double = 0,
+                                       onDecodeStarted: (() -> Void)? = nil) async throws -> Double {
+        try Task.checkCancellation()
+        guard firstFrameTime.isFinite, firstFrameTime >= 0,
+              (firstFrameTime + 1.0 / 30.0).isFinite else { throw LoadError.noVideo }
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        return try await withTaskCancellationHandler {
+            do {
+                try Task.checkCancellation()
+                // Observation seam only; production always performs the actual
+                // decoder call below, and never supplies this callback.
+                onDecodeStarted?()
+                let decoded = try await generator.image(at: CMTime(seconds: firstFrameTime + 1.0 / 30.0, preferredTimescale: 600))
+                try Task.checkCancellation()
+                try validateVideoDimensions(size: CGSize(width: decoded.image.width, height: decoded.image.height), transform: .identity)
+                let actualTime = decoded.actualTime.seconds
+                guard actualTime.isFinite, actualTime >= 0 else { throw LoadError.videoFirstFrameDecode }
+                return actualTime
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError { throw error }
+                if let error = error as? LoadError { throw error }
+                throw LoadError.videoFirstFrameDecode
+            }
+        } onCancel: {
+            // Cancellation handlers can run off the main actor. The generator
+            // is confined to this actor; requestID/Task guards reject any late result.
+            Task { @MainActor in generator.cancelAllCGImageGeneration() }
         }
     }
 
@@ -92,7 +175,7 @@ final class DocumentModel: ObservableObject {
         currentCGImage.map { NSImage(cgImage: $0, size: imageSize) }
     }
     var asset: AVURLAsset? { url.map { VideoAssetPolicy.asset(url: $0) } }
-    static let imageExtensions: Set<String> = [
+    nonisolated static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "tif", "bmp", "gif"
     ]
     /// Common AVFoundation movie suffixes remain recognizable when LaunchServices
@@ -100,15 +183,22 @@ final class DocumentModel: ObservableObject {
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v"]
     // A single image passes through decode, orientation, preview and export buffers.
     // Keep the source below roughly 96 MiB RGBA to leave room for those copies.
-    private static let maxImageSide = 16_384
-    private static let maxImagePixels = 24_000_000
+    nonisolated private static let maxImageSide = 16_384
+    nonisolated private static let maxImagePixels = 24_000_000
     nonisolated private static let maxVideoSide: CGFloat = 16_384
     nonisolated private static let maxVideoPixels: CGFloat = 33_177_600
-    static func isImage(url: URL) -> Bool {
+    nonisolated static func isImage(url: URL) -> Bool {
         imageExtensions.contains(url.pathExtension.lowercased())
     }
 
-    func load(url: URL) {
+    /// Invalidates an unfinished candidate load without publishing a stale completion.
+    func cancelLoading() {
+        loadTask?.cancel()
+        loadTask = nil
+        requestID = UUID()
+    }
+
+    func load(url: URL, expectedSourceSHA256: String? = nil, videoProject: VideoProjectFile? = nil) {
         loadTask?.cancel()
         loadTask = nil
         let id = UUID()
@@ -120,6 +210,7 @@ final class DocumentModel: ObservableObject {
         videoSize = .zero
         imageSize = .zero
         duration = 0
+        firstVideoFrameTime = 0
         videoFPS = 0
         videoBitRate = 0
         videoCodec = "—"
@@ -128,10 +219,19 @@ final class DocumentModel: ObservableObject {
         preferredTransform = .identity
         currentCGImage = nil
         errorMessage = nil
+        sourceSHA256 = nil
+        videoProjectBinding = nil
+        videoProjectReview = nil
 
-        if Self.isImage(url: url) {
+        if videoProject == nil && Self.isImage(url: url) {
             do {
+                let digest = try PageWorkspace.digest(of: url)
+                if let expectedSourceSHA256, digest != expectedSourceSHA256 {
+                    throw PageWorkspace.WorkspaceError.sourceChanged
+                }
                 let image = try Self.decodeImage(url: url)
+                guard try PageWorkspace.digest(of: url) == digest else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                sourceSHA256 = digest
                 currentCGImage = image
                 imageSize = CGSize(width: image.width, height: image.height)
                 hasImage = true
@@ -142,19 +242,71 @@ final class DocumentModel: ObservableObject {
             return
         }
         let loader = videoLoader
+        let requiresVideoBinding = videoProject != nil || !usesInjectedVideoLoader
+        let permitsSyntheticSource = usesInjectedVideoLoader && expectedSourceSHA256 == nil
+            && !FileManager.default.fileExists(atPath: url.path)
         loadTask = Task { [weak self] in
             do {
+                try Task.checkCancellation()
+                let digest: String?
+                let captured: VideoProjectSourceBinding.Source?
+                if permitsSyntheticSource {
+                    digest = nil
+                    captured = nil
+                } else if requiresVideoBinding {
+                    captured = try await VideoProjectSourceBinding.capture(url)
+                    digest = captured?.sha256
+                } else {
+                    captured = nil
+                    digest = try await Task.detached { try PageWorkspace.digest(of: url) }.value
+                }
+                try Task.checkCancellation()
+                if let expectedSourceSHA256, digest != expectedSourceSHA256 {
+                    throw PageWorkspace.WorkspaceError.sourceChanged
+                }
                 let metadata = try await loader(url)
+                try Task.checkCancellation()
+                var binding: VideoProjectSourceBinding?
+                var bindingReview: String?
+                if let captured {
+                    do {
+                        let observed = try await VideoProjectSourceBinding.observe(url: url)
+                        guard observed.source == captured else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                        if let videoProject { try videoProject.verify(binding: observed) }
+                        binding = observed
+                    } catch {
+                        try Task.checkCancellation()
+                        if videoProject != nil || !(error is VideoAssetTimeline.ReadError) { throw error }
+                        // Keep existing native formats readable. Their unbound
+                        // clock cannot be silently promoted to a v3 descriptor.
+                        bindingReview = "이 영상의 정확한 프로젝트 시간축은 추가 검토가 필요합니다. 기존 영상 형식으로 저장됩니다."
+                    }
+                }
+                if let digest {
+                    let after = try await Task.detached { try PageWorkspace.digest(of: url) }.value
+                    guard after == digest else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                }
+                if let captured {
+                    let finalSource = try await VideoProjectSourceBinding.capture(url)
+                    guard finalSource == captured else { throw PageWorkspace.WorkspaceError.sourceChanged }
+                }
                 guard let self, self.requestID == id, !Task.isCancelled else { return }
                 try Self.validateVideoDimensions(size: metadata.size, transform: metadata.transform)
+                guard metadata.duration.isFinite, metadata.duration >= 0,
+                      metadata.firstFrameTime.isFinite, metadata.firstFrameTime >= 0,
+                      metadata.firstFrameTime <= metadata.duration else { throw LoadError.noVideo }
                 self.videoSize = metadata.size
                 self.preferredTransform = metadata.transform
                 self.duration = metadata.duration
+                self.firstVideoFrameTime = metadata.firstFrameTime
                 self.videoFPS = metadata.fps.isFinite ? metadata.fps : 0
                 self.videoBitRate = metadata.bitRate.isFinite ? metadata.bitRate : 0
                 self.videoCodec = metadata.codec
                 self.hasAudio = metadata.hasAudio
                 self.hasVideo = true
+                self.sourceSHA256 = digest
+                self.videoProjectBinding = binding
+                self.videoProjectReview = bindingReview
                 self.loadTask = nil
                 self.onLoad?()
             } catch {
@@ -166,8 +318,50 @@ final class DocumentModel: ObservableObject {
         }
     }
 
+    /// Shows one rendered page of a multi-page workspace using the existing still-image editor.
+    func load(pageImage image: CGImage, sourceURL: URL, name: String) {
+        loadTask?.cancel()
+        loadTask = nil
+        requestID = UUID()
+        url = sourceURL
+        displayName = name
+        hasVideo = false
+        hasImage = true
+        videoSize = .zero
+        imageSize = CGSize(width: image.width, height: image.height)
+        duration = 0
+        firstVideoFrameTime = 0
+        videoFPS = 0
+        videoBitRate = 0
+        videoCodec = "—"
+        hasAudio = false
+        sourceBytes = (try? sourceURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        preferredTransform = .identity
+        currentCGImage = image
+        errorMessage = nil
+        sourceSHA256 = nil // Multi-page source integrity is checked by PageWorkspace.
+        videoProjectBinding = nil
+        videoProjectReview = nil
+        onLoad?()
+    }
+
+    func validateSourceUnchanged(expectedSourceSHA256: String? = nil) throws {
+        if let expectedSourceSHA256, sourceSHA256 != expectedSourceSHA256 {
+            throw PageWorkspace.WorkspaceError.sourceChanged
+        }
+        if let url, let sourceSHA256, try PageWorkspace.digest(of: url) != sourceSHA256 {
+            throw PageWorkspace.WorkspaceError.sourceChanged
+        }
+        if let videoProjectBinding { try videoProjectBinding.source.validate() }
+    }
+
+    func validatedVideoProjectBinding() async throws -> VideoProjectSourceBinding {
+        guard let binding = videoProjectBinding else { throw ProjectFile.ProjectError.invalidContent }
+        return try await binding.revalidated()
+    }
+
     /// Decode frame zero and bake all eight EXIF orientations into the pixels.
-    static func decodeImage(url: URL) throws -> CGImage {
+    nonisolated static func decodeImage(url: URL) throws -> CGImage {
         let headerOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL,
                 headerOptions),
@@ -194,7 +388,7 @@ final class DocumentModel: ObservableObject {
         return result
     }
 
-    static func validateImageDimensions(width: Int, height: Int) throws {
+    nonisolated static func validateImageDimensions(width: Int, height: Int) throws {
         guard width > 0, height > 0 else { throw LoadError.imageDecode }
         guard width <= maxImageSide, height <= maxImageSide,
               height <= maxImagePixels / width else { throw LoadError.imageTooLarge }

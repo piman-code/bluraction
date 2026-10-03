@@ -13,6 +13,10 @@ final class MainContainerViewController: NSViewController {
     let playPauseButton = NSButton(title: "▶", target: nil, action: nil)
     let timeLabel = NSTextField(labelWithString: "00:00.00 / 00:00.00")
     let slider = TrackingSlider()
+    let pageControls = NSStackView()
+    let previousPageButton = NSButton(title: "◀ 이전", target: nil, action: nil)
+    let nextPageButton = NSButton(title: "다음 ▶", target: nil, action: nil)
+    let pageLabel = NSTextField(labelWithString: "1 / 1")
 
     var mediaSize: CGSize = .zero {
         didSet { if isViewLoaded { view.needsLayout = true } }
@@ -84,7 +88,18 @@ final class MainContainerViewController: NSViewController {
         slider.toolTip = "영상 재생 위치 (초). 아래 띠의 주황 점(기록 위치)과 파란 끝(적용 구간)은 끌어서 옮깁니다."
         slider.heightAnchor.constraint(greaterThanOrEqualToConstant: 30).isActive = true
 
-        let stack = NSStackView(views: [playPauseButton, timeLabel, slider])
+        pageControls.orientation = .horizontal
+        pageControls.alignment = .centerY
+        pageControls.spacing = 12
+        pageLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        pageLabel.alignment = .center
+        pageLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 70).isActive = true
+        for item in [previousPageButton, pageLabel, nextPageButton] as [NSView] {
+            pageControls.addArrangedSubview(item)
+        }
+        pageControls.isHidden = true
+
+        let stack = NSStackView(views: [playPauseButton, timeLabel, slider, pageControls])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8

@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreImage
 import AudioToolbox
+import BlurActionMediaSafety
 
 private final class ExportCancellation: @unchecked Sendable {
     private let lock = NSLock()
@@ -39,6 +40,16 @@ final class BlurredVideoExporter: ObservableObject {
     @Published private(set) var wasCancelled = false
     private var cancelFlag = false
     private var cancellation = ExportCancellation()
+    typealias SourceFingerprinter = @MainActor (URL) async throws -> String
+    private let sourceFingerprinter: SourceFingerprinter
+
+    /// The injected fingerprinter lets tests suspend the final integrity check.
+    /// Production hashing still runs off-main and propagates all read failures.
+    init(sourceFingerprinter: @escaping SourceFingerprinter = { url in
+        try await Task.detached { try PageWorkspace.digest(of: url) }.value
+    }) {
+        self.sourceFingerprinter = sourceFingerprinter
+    }
 
     nonisolated static let maximumFramePixels = 134_217_728.0
     nonisolated static let maximumDimension = 32_768.0
@@ -69,6 +80,7 @@ final class BlurredVideoExporter: ObservableObject {
     func export(input: URL, pairs: [(shape: RegionShape, effect: RegionEffect)],
                 quality: QualityPreset, canvasBounds: CGSize,
                 annotations: [DrawingAnnotation] = [],
+                expectedSourceSHA256: String? = nil,
                 progressCallback: ((Double, String) -> Void)? = nil) async {
         guard !isExporting else { return }
         cancelFlag = false
@@ -84,12 +96,23 @@ final class BlurredVideoExporter: ObservableObject {
         defer { isExporting = false; try? FileManager.default.removeItem(at: temp) }
         do {
             try checkCancellation()
+            if let expectedSourceSHA256 {
+                let current = try await sourceFingerprinter(input)
+                guard current == expectedSourceSHA256 else { throw PageWorkspace.WorkspaceError.sourceChanged }
+            }
+            try checkCancellation()
             try await Self.runExport(input: input, output: temp, pairs: pairs, quality: quality,
                                      canvasBounds: canvasBounds, annotations: annotations, cancellation: cancellation) { p, text in
                 self.progress = p
                 self.statusText = text
                 progressCallback?(p, text)
             }
+            try checkCancellation()
+            if let expectedSourceSHA256 {
+                let current = try await sourceFingerprinter(input)
+                guard current == expectedSourceSHA256 else { throw PageWorkspace.WorkspaceError.sourceChanged }
+            }
+            // cancel() may run while the final hash is suspended; never publish after it.
             try checkCancellation()
             let output = try publish(temp, for: input)
             lastOutputURL = output
@@ -136,18 +159,23 @@ final class BlurredVideoExporter: ObservableObject {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw ExportError.noVideoTrack }
         let natural = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
-        let duration = try await asset.load(.duration).seconds
+        let assetDuration = try await asset.load(.duration)
+        let duration = assetDuration.seconds
         let fps = Double(try await track.load(.nominalFrameRate))
         let estimatedRate = Double(try await track.load(.estimatedDataRate))
         let rect = CGRect(origin: .zero, size: natural).applying(transform)
         let size = CGSize(width: ceil(rect.width), height: ceil(rect.height))
         try validateOutputSize(size)
-        guard duration.isFinite, duration > 0,
+        guard assetDuration.isValid, assetDuration.isNumeric, assetDuration.timescale > 0,
+              duration.isFinite, duration > 0,
               canvasBounds.width.isFinite, canvasBounds.height.isFinite,
               canvasBounds.width > 0, canvasBounds.height > 0 else { throw ExportError.videoSizeUnknown }
         try cancellation.check()
         let reader = try AVAssetReader(asset: asset)
         let writer = try AVAssetWriter(outputURL: output, fileType: output.pathExtension == "mov" ? .mov : .mp4)
+        // Preserve the asset's exact endpoint, including fractional edit-list
+        // boundaries. A default movie timescale can round that endpoint.
+        writer.movieTimeScale = assetDuration.timescale
         defer {
             if reader.status == .reading { reader.cancelReading() }
             if writer.status == .writing { writer.cancelWriting() }
@@ -169,14 +197,23 @@ final class BlurredVideoExporter: ObservableObject {
             kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         var audio: [(AVAssetReaderTrackOutput, AVAssetWriterInput)] = []
         for audioTrack in try await asset.loadTracks(withMediaType: .audio) {
-            let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
             let descriptions = try await audioTrack.load(.formatDescriptions)
-            guard let desc = descriptions.first, let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) else {
+            guard let desc = descriptions.first, CMFormatDescriptionGetMediaType(desc) == kCMMediaType_Audio else {
                 throw ExportError.readSampleFailed
             }
-            let channels = min(2, max(1, Int(asbd.pointee.mChannelsPerFrame)))
-            let audioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 44100, AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: 128000])
+            // Editing only changes video pixels. Copy the original audio samples
+            // (including trim attachments and zero-sample edit markers) without
+            // resampling, downmixing or a second lossy encode. The original
+            // format hint is required for passthrough into restricted containers.
+            let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+            let audioIn = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: desc)
+            let enabled = try await audioTrack.load(.isEnabled)
+            let volume = try await audioTrack.load(.preferredVolume)
+            let language = try await audioTrack.load(.languageCode)
+            let extendedLanguage = try await audioTrack.load(.extendedLanguageTag)
+            if let error = BAAudioApplyMetadata(audioIn, enabled, volume, language, extendedLanguage) {
+                throw error
+            }
             guard reader.canAdd(out), writer.canAdd(audioIn) else { throw ExportError.writerInitFailed }
             reader.add(out); writer.add(audioIn)
             audio.append((out, audioIn))
@@ -230,6 +267,10 @@ final class BlurredVideoExporter: ObservableObject {
         }
         guard frameCount > 0, reader.status == .completed else { throw reader.error ?? ExportError.readSampleFailed }
         try cancellation.check()
+        // Pixel-buffer appends carry PTS but not the original sample duration.
+        // Without an explicit end, the writer can extend the last VFR frame or
+        // encoded audio packet beyond the source asset's presentation interval.
+        writer.endSession(atSourceTime: assetDuration)
         await writer.finishWriting()
         try cancellation.check()
         guard writer.status == .completed else { throw writer.error ?? ExportError.finalizeFailed("출력 미완료") }

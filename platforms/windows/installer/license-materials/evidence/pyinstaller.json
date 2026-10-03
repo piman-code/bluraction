@@ -1,0 +1,17 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "dependency": "pyinstaller",
+    "version": "6.22.3",
+    "role": "windows-wheel",
+    "filename": "pyinstaller-6.22.3-py3-none-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/24/83/c5422204772a27aef643280fdc887b7ef55679989096b21dceb1b9625fc4/pyinstaller-6.22.3-py3-none-win_amd64.whl",
+    "sha256": "500bd58c7bf7e584a8435adccbd763a0b918d5c12b08d74ff50fd79b2915458b",
+    "size": 1454907
+  },
+  "limitations": [
+    "Acquired Windows wheel license bytes; candidate bundler output and exact collected transitive binaries remain unbound."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

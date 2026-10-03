@@ -1,0 +1,14 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "filename": "pillow_heif-1.8.0-cp314-cp314-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/6e/a6/79861065ea4719817e0a4a3d41160393d41643378d1b5a939012aaec695e/pillow_heif-1.8.0-cp314-cp314-win_amd64.whl",
+    "size": 6783029,
+    "SHA256": "257c81a049f6d11b2289908fbeb9affbae9adba943fec1bb6ce0926083d5fad6"
+  },
+  "limitations": [
+    "No redistribution license choice or corresponding-source completeness asserted. Exact collected DLL mapping pending."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}
