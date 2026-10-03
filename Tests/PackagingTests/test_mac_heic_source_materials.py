@@ -73,6 +73,7 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
 
     def test_changed_bytes_during_copy_are_rejected_without_overwriting_input(self):
         original = self.file('race.txt', b'original')
+        before = original.stat()
         output = self.root / 'owned-partial.txt'
         actual_read = os.read; observed = []
         def read(fd, size):
@@ -80,6 +81,18 @@ class MacHEICSourceMaterialsTests(unittest.TestCase):
             if block and not observed:
                 observed.append(True)
                 original.write_bytes(b'changed!')
+                after_write = original.stat()
+                if sys.platform == 'win32':
+                    print('COPY_RACE_METADATA ' + json.dumps({
+                        'before_mtime_ns': before.st_mtime_ns,
+                        'after_write_mtime_ns': after_write.st_mtime_ns,
+                        'before_ctime_ns': before.st_ctime_ns,
+                        'after_write_ctime_ns': after_write.st_ctime_ns}))
+                # This guard observes metadata, not every possible same-metadata
+                # mutation. Make this same-size race observable independently of
+                # filesystem timestamp update/coalescing behavior; never sleep.
+                os.utime(original, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+                self.assertNotEqual(original.stat().st_mtime_ns, before.st_mtime_ns)
             return block
         with patch.object(relink.os, 'read', side_effect=read):
             with self.assertRaisesRegex(ValueError, 'changed'):

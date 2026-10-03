@@ -377,7 +377,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Retain candidate manifest for review, without uploading unchecked binaries
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.prepare_windows_candidate && hashFiles('.build/windows-candidate-inputs/candidate-inputs.json') != '' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-candidate-manifest
