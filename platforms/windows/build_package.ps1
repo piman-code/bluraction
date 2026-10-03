@@ -4,6 +4,8 @@ param(
     [string]$Destination = "",
     [string]$LicenseMaterials = "",
     [string]$LicenseReview = "",
+    [string]$InputReceipt = "",
+    [string]$ReceiptArtifacts = "",
     [switch]$VerifyRuntimeOnly,
     [switch]$PrepareForReview,
     [switch]$FinalizeReviewedBundle
@@ -15,6 +17,50 @@ if ($PrepareForReview -and $FinalizeReviewedBundle) { throw "Choose one packagin
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 if (-not $Destination) { $Destination = Join-Path $RepoRoot ".build/windows-packages/$Version" }
 if (-not $VerifyRuntimeOnly -and -not $PrepareForReview -and -not $LicenseReview) { throw "ZIP creation requires an exact reviewed license record. Use PrepareForReview for a private review candidate." }
+if (-not $VerifyRuntimeOnly -and -not $PrepareForReview -and (-not $InputReceipt -or -not $ReceiptArtifacts)) {
+    throw "Final ZIP requires an exact input receipt and its actual acquisition artifacts. PrepareForReview still permits a private candidate without them."
+}
+
+# Resolve an explicit executable or a PATH command in the caller's directory.
+# Keep the exact application after Push-Location; aliases/functions/scripts are
+# not Python interpreters. This only resolves a file and never installs tools.
+if ([string]::IsNullOrWhiteSpace($Python)) { throw "Python executable is required." }
+if ([IO.Path]::IsPathRooted($Python) -or $Python.Contains('\') -or $Python.Contains('/')) {
+    $PythonItem = Get-Item -LiteralPath $Python -Force
+} else {
+    if ([Management.Automation.WildcardPattern]::ContainsWildcardCharacters($Python)) {
+        throw "Use an exact Python application name or literal executable path."
+    }
+    $PythonCommand = @(Get-Command -Name $Python -CommandType Application -ErrorAction Stop)[0]
+    $PythonItem = Get-Item -LiteralPath $PythonCommand.Source -Force
+}
+if ($PythonItem.PSIsContainer -or $PythonItem.Extension -ine '.exe') {
+    throw "Python must resolve to an actual executable application."
+}
+$Python = $PythonItem.FullName
+
+function Assert-PackageReceipt([string]$Mode, [string]$Materials, [string]$BundlePath = "", [string]$ManifestPath = "") {
+    if (-not $InputReceipt -or -not $ReceiptArtifacts) { throw "Supply both InputReceipt and ReceiptArtifacts." }
+    $Arguments = @("--mode", $Mode, "--receipt", $InputReceipt, "--artifacts-root", $ReceiptArtifacts,
+        "--materials-root", $Materials, "--source-root", $RepoRoot)
+    if ($Mode -eq "finalize") { $Arguments += @("--bundle", $BundlePath, "--bundle-manifest", $ManifestPath,
+        "--license-review", $LicenseReview, "--version", $Version) }
+    # Stdlib/file metadata only; the helper never imports codecs or grants a
+    # license verdict. A supplied invalid receipt fails before native imports.
+    $Json = & $Python -c "import subprocess,sys; subprocess.run([sys.executable,sys.argv[1],*sys.argv[2:]],check=True,timeout=300)" `
+        (Join-Path $RepoRoot "shared/windows_package_receipt.py") @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "Actual package input receipt failed. Preserve its diagnostics; no approximate provider mapping is accepted." }
+    $Result = ($Json -join "`n") | ConvertFrom-Json
+    if (-not $Result.ok -or $Result.host -cne "win32" -or
+        $Result.receipt_sha256 -cne (Get-FileHash -LiteralPath $InputReceipt -Algorithm SHA256).Hash.ToLowerInvariant()) {
+        throw "Receipt validation did not positively complete with unchanged exact bytes."
+    }
+    if ($Mode -eq "finalize" -and $Result.license_review_sha256 -cne
+        (Get-FileHash -LiteralPath $LicenseReview -Algorithm SHA256).Hash.ToLowerInvariant()) {
+        throw "Strictly validated review bytes changed before packaging."
+    }
+    return $Result.receipt_sha256
+}
 
 function Assert-DeclaredDependencyPins([switch]$IncludePackaging) {
     $PinArguments = @("--requirements", (Join-Path $PSScriptRoot "requirements-dev.txt"))
@@ -62,6 +108,14 @@ if ($VerifyRuntimeOnly) {
     }
     Write-Output "Pinned actual PDF/HEIF backend checks completed. No package or installation created."
     return
+}
+
+# Bind user-relative receipt inputs once, before Push-Location changes cwd.
+# Resolve-Path retains the named input; the helper still rejects reparse paths.
+if ($InputReceipt -or $ReceiptArtifacts) {
+    if (-not $InputReceipt -or -not $ReceiptArtifacts) { throw "Supply both InputReceipt and ReceiptArtifacts." }
+    $InputReceipt = (Resolve-Path -LiteralPath $InputReceipt).Path
+    $ReceiptArtifacts = (Resolve-Path -LiteralPath $ReceiptArtifacts).Path
 }
 
 function Require-RegularFile([string]$Path, [switch]$AllowEmpty) {
@@ -163,7 +217,9 @@ function Assert-ReviewedBundle([string]$BundlePath, [string]$ManifestPath, [stri
         $Relative = $File.FullName.Substring($Prefix.Length).Replace('\', '/')
         if (-not $Recorded.Contains($Relative)) { throw "Unreviewed bundle file: $Relative" }
     }
-    return @{ manifestHash = $ManifestHash; reviewHash = (Get-FileHash -LiteralPath $ReviewPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+    $ReceiptHash = Assert-PackageReceipt "finalize" (Join-Path $BundlePath "licenses") $BundlePath $ManifestPath
+    if ($Review.input_receipt_sha256 -cne $ReceiptHash) { throw "License review must bind this exact external input-receipt SHA-256." }
+    return @{ manifestHash = $ManifestHash; reviewHash = (Get-FileHash -LiteralPath $ReviewPath -Algorithm SHA256).Hash.ToLowerInvariant(); receiptHash = $ReceiptHash }
 }
 
 if ($FinalizeReviewedBundle) {
@@ -179,6 +235,11 @@ if ($FinalizeReviewedBundle) {
         throw "Candidate output must be outside source license materials."
     }
     Assert-DeclaredDependencyPins -IncludePackaging
+    $InputHash = $null
+    if ($InputReceipt -or $ReceiptArtifacts) {
+        $InputHash = Assert-PackageReceipt "prepare" $MaterialsPath
+        $SelectedInputs = Get-Content -LiteralPath $InputReceipt -Raw | ConvertFrom-Json
+    }
     & $Python -c "import PySide6, PIL, numpy, av, cv2, PyInstaller; assert hasattr(cv2,'TrackerCSRT_create')"
     if ($LASTEXITCODE -ne 0) { throw "Required dependencies are missing. Install only in an approved isolated environment." }
     New-Item -ItemType Directory -Path $Destination | Out-Null
@@ -205,12 +266,28 @@ datas, binaries, hiddenimports = collect_all('pillow_heif')
 hiddenimports += ['_pillow_heif']
 datas, binaries = collect_delvewheel_libs_directory('pillow_heif', datas=datas, binaries=binaries)
 '@ | Set-Content (Join-Path $Hooks "hook-pillow_heif.py") -Encoding utf8
-        & $Python -m PyInstaller --noconfirm --clean --windowed --onedir --name BlurAction `
+        & $Python -m PyInstaller --noconfirm --clean --noupx --windowed --onedir --name BlurAction `
             --paths $RepoRoot --distpath $Dist --workpath $BuildWork --specpath $BuildWork `
             --additional-hooks-dir $Hooks --collect-all PySide6.QtPdf --collect-all av --collect-all cv2 `
             --collect-all pypdf --hidden-import pillow_heif --hidden-import _pillow_heif `
             (Join-Path $PSScriptRoot "launcher.py")
         if ($LASTEXITCODE -ne 0) { throw "Packaging failed." }
+        if ($InputHash) {
+            $AfterInputs = Assert-PackageReceipt "prepare" $MaterialsPath
+            if ($AfterInputs -cne $InputHash) { throw "Selected receipt changed while packaging." }
+            $ToolInput = @($SelectedInputs.artifacts | Where-Object { $_.kind -eq "wheel" -and $_.distribution -ieq "pyinstaller" })[0]
+            $BuildRecord = [ordered]@{
+                status = "pyinstaller-build-completed"; exit = 0; timed_out = $false
+                source_archive_sha256 = $SelectedInputs.app_source.sha256
+                python_executable_sha256 = $SelectedInputs.runtime.executable_sha256
+                pyinstaller_wheel_sha256 = $ToolInput.sha256
+                executable_sha256 = (Get-FileHash -LiteralPath (Join-Path $Dist "BlurAction/BlurAction.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+                candidate_input_receipt_sha256 = $InputHash
+            }
+            # External sidecar: never insert this record or its receipt into
+            # the hashed bundle. Curate its actual path/hash in the final receipt.
+            $BuildRecord | ConvertTo-Json | Set-Content (Join-Path $Destination "pyinstaller-input-build.json") -Encoding utf8
+        }
         Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination (Join-Path $Dist "BlurAction/LICENSE.txt")
         Copy-Item -LiteralPath $MaterialsPath -Destination (Join-Path $Dist "BlurAction/licenses") -Recurse -Force
         Assert-LicenseMaterials (Join-Path $Dist "BlurAction/licenses")
@@ -230,6 +307,7 @@ if ($PrepareForReview) {
     Write-Output "Private onedir candidate and exact manifest prepared for review. No ZIP, installer, installation or publication."
     Write-Output "Manifest: $ManifestPath"
     Write-Output "Review these actual DLLs; PyAV's wrapper license does not certify FFmpeg GPL configuration or patent rights."
+    if (-not $InputReceipt) { Write-Output "Input provenance pending: no receipt supplied. This candidate cannot be finalized without exact acquired inputs and an actual bound build record." }
     return
 }
 $ReviewPath = (Resolve-Path -LiteralPath $LicenseReview).Path
@@ -243,7 +321,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 try {
     # Do not retain a ZIP if its input changed during archiving.
     $After = Assert-ReviewedBundle $BundlePath $ManifestPath $ReviewPath
-    if ($After.manifestHash -cne $Before.manifestHash -or $After.reviewHash -cne $Before.reviewHash) {
+    if ($After.manifestHash -cne $Before.manifestHash -or $After.reviewHash -cne $Before.reviewHash -or $After.receiptHash -cne $Before.receiptHash) {
         throw "Reviewed manifest/review bytes changed during archiving."
     }
 } catch {

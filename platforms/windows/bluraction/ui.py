@@ -1560,6 +1560,11 @@ class BlurActionWindow(QMainWindow):
         self.update_quality_info()
         self.actions['delete'].setEnabled(bool(selected) and not self.workspace.busy)
         self.actions['duplicate'].setEnabled(bool(selected) and not self.workspace.busy)
+        reorderable = any(self.workspace.item_id(item, region) in self.workspace.selection_ids
+                          and not (item['effect'] if region else item).get('locked', False)
+                          for item, region in self.workspace.items())
+        for name in ('front', 'back', 'to_front', 'to_back'):
+            self.actions[name].setEnabled(reorderable and not self.workspace.busy)
         self.actions['undo'].setEnabled(self.workspace.can_undo)
         self.actions['redo'].setEnabled(self.workspace.can_redo)
         self.canvas.busy = self.workspace.busy or self.canvas.preview_pending
@@ -2224,7 +2229,16 @@ class BlurActionWindow(QMainWindow):
             event.ignore()
             return
         if event.mimeData().hasUrls() and all(url.isLocalFile() for url in event.mimeData().urls()):
-            self.open_paths([url.toLocalFile() for url in event.mimeData().urls()])
+            paths = [Path(url.toLocalFile()) for url in event.mimeData().urls()]
+            projects = [path for path in paths if path.suffix.lower() == '.bluraction']
+            if projects and len(paths) != 1:
+                self.show_error('프로젝트는 한 파일씩 열어 주세요. 원본 파일과 함께 놓을 수 없습니다.')
+                event.ignore()
+                return
+            if projects:
+                self.open_project(projects[0])
+            else:
+                self.open_paths(paths)
             event.acceptProposedAction()
 
     def closeEvent(self, event):

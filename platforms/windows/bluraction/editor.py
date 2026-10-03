@@ -512,14 +512,31 @@ class Workspace:
                 frame['rect'][0] = translated(frame['rect'][0])
 
     def reorder_selected(self, offset):
-        self._checkpoint()
+        self._available()
+        reordered = {}
         for key, region in [('regions', True), ('drawings', False)]:
-            items = self.page.state[key]
-            selected = [i for i in items if self.item_id(i, region) in self.selection_ids]
-            for item in (reversed(selected) if offset > 0 else selected):
-                index = items.index(item)
-                items.pop(index)
-                items.insert(max(0, min(len(items), index + offset)), item)
+            items = list(self.page.state[key])
+            selected = [i for i in items if self.item_id(i, region) in self.selection_ids
+                        and not (i['effect'] if region else i).get('locked', False)]
+            selected_ids = {self.item_id(item, region) for item in selected}
+            # Move a selected block across unselected neighbors, never across
+            # itself. This preserves relative order even at either boundary.
+            for _ in range(min(abs(offset), len(items))):
+                indices = range(len(items) - 2, -1, -1) if offset > 0 else range(1, len(items))
+                changed = False
+                for index in indices:
+                    neighbor = index + (1 if offset > 0 else -1)
+                    if (self.item_id(items[index], region) in selected_ids
+                            and self.item_id(items[neighbor], region) not in selected_ids):
+                        items[index], items[neighbor] = items[neighbor], items[index]
+                        changed = True
+                if not changed:
+                    break
+            if items != self.page.state[key]:
+                reordered[key] = items
+        if reordered:
+            self._checkpoint()
+            self.page.state.update(reordered)
 
     def duplicate_selected(self, offset=None):
         self._available()

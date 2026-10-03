@@ -4,10 +4,37 @@ param(
     [Parameter(Mandatory=$true)][string]$LicenseReview,
     [Parameter(Mandatory=$true)][string]$Version,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [string]$Compiler = ""
+    [string]$Compiler = "",
+    [string]$Python = "python",
+    [string]$InputReceipt = "",
+    [string]$ReceiptArtifacts = ""
 )
 $ErrorActionPreference = "Stop"
 if ($env:OS -ne "Windows_NT") { throw "Compile the Windows installer on Windows; macOS is not installer evidence." }
+# Resolve an explicit executable or a PATH command in the caller's directory.
+# Keep the exact application after Push-Location; aliases/functions/scripts are
+# not Python interpreters. This only resolves a file and never installs tools.
+if ([string]::IsNullOrWhiteSpace($Python)) { throw "Python executable is required." }
+if ([IO.Path]::IsPathRooted($Python) -or $Python.Contains('\') -or $Python.Contains('/')) {
+    $PythonItem = Get-Item -LiteralPath $Python -Force
+} else {
+    if ([Management.Automation.WildcardPattern]::ContainsWildcardCharacters($Python)) {
+        throw "Use an exact Python application name or literal executable path."
+    }
+    $PythonCommand = @(Get-Command -Name $Python -CommandType Application -ErrorAction Stop)[0]
+    $PythonItem = Get-Item -LiteralPath $PythonCommand.Source -Force
+}
+if ($PythonItem.PSIsContainer -or $PythonItem.Extension -ine '.exe') {
+    throw "Python must resolve to an actual executable application."
+}
+$Python = $PythonItem.FullName
+
+if (-not $InputReceipt -or -not $ReceiptArtifacts) { throw "Installer requires an exact external input receipt and actual acquisition artifacts." }
+# Fix the caller's relative input paths once. The helper's regular/reparse
+# guards remain mandatory; this creates no copied receipt or acquisition files.
+$InputReceipt = (Resolve-Path -LiteralPath $InputReceipt).Path
+$ReceiptArtifacts = (Resolve-Path -LiteralPath $ReceiptArtifacts).Path
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../../..")).Path
 if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw "Use a bounded filename-safe candidate version." }
 $BundlePath = (Resolve-Path -LiteralPath $Bundle).Path
 $ManifestPath = (Resolve-Path -LiteralPath $BundleManifest).Path
@@ -110,7 +137,19 @@ foreach ($File in $AllFiles) {
     $Relative = $File.FullName.Substring($Prefix.Length).Replace('\', '/')
     if (-not $Recorded.Contains($Relative)) { throw "Unreviewed bundle file: $Relative" }
 }
-return @{ manifestHash = $ManifestHash; reviewHash = (Get-FileHash -LiteralPath $ReviewPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+$Arguments = @("--mode", "finalize", "--receipt", $InputReceipt, "--artifacts-root", $ReceiptArtifacts,
+    "--materials-root", (Join-Path $BundlePath "licenses"), "--source-root", $RepoRoot,
+    "--bundle", $BundlePath, "--bundle-manifest", $ManifestPath,
+    "--license-review", $ReviewPath, "--version", $Version)
+$Json = & $Python -c "import subprocess,sys; subprocess.run([sys.executable,sys.argv[1],*sys.argv[2:]],check=True,timeout=300)" `
+    (Join-Path $RepoRoot "shared/windows_package_receipt.py") @Arguments
+if ($LASTEXITCODE -ne 0) { throw "Installer input receipt did not positively complete. No package input/source guess is accepted." }
+$Receipt = ($Json -join "`n") | ConvertFrom-Json
+$ReceiptHash = (Get-FileHash -LiteralPath $InputReceipt -Algorithm SHA256).Hash.ToLowerInvariant()
+if (-not $Receipt.ok -or $Receipt.host -cne "win32" -or $Receipt.receipt_sha256 -cne $ReceiptHash -or
+    $Review.input_receipt_sha256 -cne $ReceiptHash -or $Receipt.license_review_sha256 -cne
+    (Get-FileHash -LiteralPath $ReviewPath -Algorithm SHA256).Hash.ToLowerInvariant()) { throw "Reviewed receipt bytes changed or do not match the license record." }
+return @{ manifestHash = $ManifestHash; reviewHash = (Get-FileHash -LiteralPath $ReviewPath -Algorithm SHA256).Hash.ToLowerInvariant(); receiptHash = $ReceiptHash }
 }
 
 $Before = Assert-ReviewedInputs
@@ -138,11 +177,12 @@ if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "Compiler r
 # Compiler inputs must still be the exact reviewed bytes, including hidden files
 # and directory entries. A failed recheck never produces an accepted report.
 $After = Assert-ReviewedInputs
-if ($After.manifestHash -cne $Before.manifestHash -or $After.reviewHash -cne $Before.reviewHash) { throw "Reviewed inputs changed during compilation; installer remains unverified." }
+if ($After.manifestHash -cne $Before.manifestHash -or $After.reviewHash -cne $Before.reviewHash -or $After.receiptHash -cne $Before.receiptHash) { throw "Reviewed inputs changed during compilation; installer remains unverified." }
 $Record = [ordered]@{
     state = "installer_compiled_not_installed_or_user_accepted"
     version = $Version
     bundle_manifest_sha256 = $ManifestHash
+    input_receipt_sha256 = $Before.receiptHash
     installer = [IO.Path]::GetFileName($Installer)
     installer_sha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
     signature_status = (Get-AuthenticodeSignature -LiteralPath $Installer).Status.ToString()
