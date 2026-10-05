@@ -114,9 +114,11 @@ struct RegionTimingTests {
         fixture.controller.perform(NSSelectorFromString("togglePlay"))
         try await waitFor { fixture.player.rate > 0 && fixture.player.currentTime().seconds > 2.1 }
         let before = fixture.player.currentTime().seconds
+        // Edits stamp the frame on screen, which trails the player clock by up to one frame (12 fps fixture).
+        let frameLag = 1.0 / 12 + 0.03
         fixture.container.canvas.mouseDown(with: try fixture.mouse(.leftMouseDown, 30, 30))
         let captured = try #require(fixture.container.canvas.creationStartTime)
-        #expect(captured >= before - 0.03)
+        #expect(captured >= before - frameLag)
         #expect(captured <= fixture.player.currentTime().seconds + 0.03)
         try await waitFor { fixture.player.currentTime().seconds > captured + 0.25 }
         fixture.container.canvas.mouseDragged(with: try fixture.mouse(.leftMouseDragged, 110, 120))
@@ -129,7 +131,7 @@ struct RegionTimingTests {
         fixture.controller.perform(NSSelectorFromString("addRegionTapped"))
         let added = try XCTUnwrap(fixture.container.canvas.regionsBinding?().last)
         let effect = try #require(fixture.container.canvas.effectForID?(added.id))
-        #expect(effect.timeRange.lowerBound >= toolbarStart - 0.03)
+        #expect(effect.timeRange.lowerBound >= toolbarStart - frameLag)
         #expect(effect.timeRange.lowerBound <= fixture.player.currentTime().seconds + 0.03)
         #expect(effect.timeRange.upperBound == 12)
         #expect(!effect.isActive(at: 0))
