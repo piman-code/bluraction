@@ -68,7 +68,8 @@ final class MainWindowController: NSWindowController {
     private let textBoldCheckbox = NSButton(checkboxWithTitle: "굵게", target: nil, action: nil)
     private let textBackgroundPopup = NSPopUpButton()
     /// Extra items picked with Shift-click for grouping (may mix regions and drawings).
-    private var multiSelection: [UUID] = []
+    /// Several picked items (group, delete, track together). Readable for tests.
+    private(set) var multiSelection: [UUID] = []
     private var eraseFromNow = true
     /// A project waiting for its media to finish loading before its items are applied.
     private var pendingProject: ProjectFile?
@@ -98,6 +99,13 @@ final class MainWindowController: NSWindowController {
     private let findFacesButton = NSButton(title: "얼굴 찾기", target: nil, action: nil)
     private let findTextButton = NSButton(title: "글자 찾기", target: nil, action: nil)
     private let trackAfterFindCheckbox = NSButton(checkboxWithTitle: "영상: 찾은 뒤 앞뒤로 자동 추적", target: nil, action: nil)
+    private let selectFoundButton = NSButton(title: "찾은 것 고르기", target: nil, action: nil)
+    private let deleteFoundButton = NSButton(title: "찾은 것 지우기", target: nil, action: nil)
+    /// Areas the latest find created, and the document and page it ran on. Areas copied to other
+    /// pages keep their ids, so the buttons only act on the page the find ran on.
+    private var lastFound: (ids: [UUID], url: URL?, page: Int?) = ([], nil, nil)
+    /// The running find, so 취소 or closing the window can stop it.
+    private var findTask: Task<Result<[CGRect], Error>, Never>?
     private let pickHiddenCheckbox = NSButton(checkboxWithTitle: "숨긴 블러 영역도 캔버스에서 고르기", target: nil, action: nil)
     /// Detector used by 자동 찾기; tests replace it (real face images are not used in tests).
     var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] = AutoDetector.detect
@@ -152,7 +160,8 @@ final class MainWindowController: NSWindowController {
     private var motionRecording: Bool { trackMotion && doc.hasVideo }
     private var defaultCoverStyle: RegionEffect.CoverStyle = .blur
     private var gestureStartTime: Double?
-    private var isExporting = false
+    /// Editing is locked while exporting, tracking or finding. Readable for tests.
+    private(set) var isExporting = false
     private var refreshingList = false
     private var endObserver: NSObjectProtocol?
     private let imageFormatPopup = NSPopUpButton()
@@ -210,7 +219,10 @@ final class MainWindowController: NSWindowController {
         // Closing the window stops a running tracking task instead of letting it finish unseen.
         windowCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
                                                                      object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.trackingCancellation?.cancel() }
+            MainActor.assumeIsolated {
+                self?.trackingCancellation?.cancel()
+                self?.findTask?.cancel()
+            }
         }
         window.setContentSize(NSSize(width: 1180, height: 700))
         window.center()
@@ -759,10 +771,20 @@ final class MainWindowController: NSWindowController {
         findHint.preferredMaxLayoutWidth = 260
         let findRow = NSStackView(views: [findFacesButton, findTextButton])
         findRow.spacing = 6
+        for (button, action, tip) in [(selectFoundButton, #selector(selectFoundTapped), "방금 찾은 영역들을 다시 함께 고릅니다(그룹·추적·삭제에 씀)."),
+                                      (deleteFoundButton, #selector(deleteFoundTapped), "방금 찾은 영역들을 한꺼번에 지웁니다(잠긴 것은 남김, ⌘Z로 되돌림).")] {
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.target = self
+            button.action = action
+            button.toolTip = tip
+        }
+        let foundRow = NSStackView(views: [selectFoundButton, deleteFoundButton])
+        foundRow.spacing = 6
         findTools.orientation = .vertical
         findTools.alignment = .leading
         findTools.spacing = 6
-        for view in [findTitle, findRow, trackAfterFindCheckbox, findHint] as [NSView] { findTools.addArrangedSubview(view) }
+        for view in [findTitle, findRow, foundRow, trackAfterFindCheckbox, findHint] as [NSView] { findTools.addArrangedSubview(view) }
         pickHiddenCheckbox.state = .off
         pickHiddenCheckbox.target = self
         pickHiddenCheckbox.action = #selector(pickHiddenChanged(_:))
@@ -1452,6 +1474,7 @@ final class MainWindowController: NSWindowController {
         else if pendingDocument != nil { cancelPendingMediaLoad() }
         else if let pageExportCancellation { pageExportCancellation.cancel() }
         else if let trackingCancellation { trackingCancellation.cancel() }
+        else if let findTask { findTask.cancel() }
         else { exporter.cancel() }
     }
     func cancelCurrentOperation() { cancelTapped() }
@@ -1662,18 +1685,39 @@ final class MainWindowController: NSWindowController {
         let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: time)
         setExporting(true)
         workflowHint.stringValue = "\(target.label) 찾는 중…"
+        progressIndicator.isIndeterminate = true
+        progressIndicator.isHidden = false
+        progressIndicator.startAnimation(nil)
+        cancelButton.isHidden = false
+        progressLabel.stringValue = "\(target.label) 찾는 중… (취소할 수 있음)"
+        let task = Task.detached(priority: .userInitiated) { () -> Result<[CGRect], Error> in
+            do {
+                let image: CIImage
+                if let still { image = CIImage(cgImage: still) }
+                else if let url, let time { image = try await AutoDetector.frame(of: url, at: time) }
+                else { throw AutoDetector.DetectError.frameUnavailable }
+                try Task.checkCancellation()
+                let found = try detect(target, image)
+                try Task.checkCancellation()
+                return .success(found)
+            } catch { return .failure(error) }
+        }
+        findTask = task
         Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) { () -> Result<[CGRect], Error> in
-                do {
-                    let image: CIImage
-                    if let still { image = CIImage(cgImage: still) }
-                    else if let url, let time { image = try await AutoDetector.frame(of: url, at: time) }
-                    else { throw AutoDetector.DetectError.frameUnavailable }
-                    return .success(try detect(target, image))
-                } catch { return .failure(error) }
-            }.value
+            let result = await task.value
             guard let self else { completion?(); return }
+            self.findTask = nil
+            self.progressIndicator.stopAnimation(nil)
+            self.progressIndicator.isIndeterminate = false
+            self.progressIndicator.isHidden = true
+            self.cancelButton.isHidden = true
+            self.progressLabel.stringValue = ""
             self.setExporting(false)
+            if task.isCancelled {
+                self.workflowHint.stringValue = "\(target.label) 찾기를 취소했습니다."
+                completion?()
+                return
+            }
             guard context == FindContext(url: self.doc.url, page: self.pageWorkspace?.currentIndex,
                                          time: self.doc.hasVideo ? self.playheadTime : nil) else {
                 self.workflowHint.stringValue = "찾는 동안 화면이 바뀌어 결과를 넣지 않았습니다. 다시 찾아 주세요."
@@ -1743,6 +1787,7 @@ final class MainWindowController: NSWindowController {
             created.append(id)
         }
         canvas.setRegionsFromExternal(pairs.map(\.shape))
+        lastFound = (created, doc.url, pageWorkspace?.currentIndex)
         if let first = created.first { canvas.selectRegion(id: first) }
         multiSelection = created.count > 1 ? created : []
         workflowHint.stringValue = "\(target.label) \(created.count)개를 찾아 가렸습니다. 필요 없는 것은 지우세요. ⌘Z로 한 번에 되돌립니다."
@@ -1751,6 +1796,36 @@ final class MainWindowController: NSWindowController {
             // Finding and its tracking undo together.
             startTracking(ids: created, choice: .both, undoWithPrevious: true)
         }
+    }
+
+    /// Areas from the latest find that still exist on the page it ran on, in creation order.
+    private var foundIDsStillHere: [UUID] {
+        guard lastFound.url == doc.url, lastFound.page == pageWorkspace?.currentIndex else { return [] }
+        let present = Set(pairs.map(\.shape.id))
+        return lastFound.ids.filter(present.contains)
+    }
+
+    /// Picks the latest find's areas again, together. Internal for tests.
+    @objc func selectFoundTapped() {
+        let ids = foundIDsStillHere
+        guard !isExporting, let first = ids.first else { NSSound.beep(); return }
+        endGesture()
+        selectItem(first)
+        multiSelection = ids.count > 1 ? ids : []
+        workflowHint.stringValue = "찾은 영역 \(ids.count)개를 골랐습니다. ⌘G 그룹, Delete 삭제, 자동 추적으로 함께 다룹니다."
+        canvas.refreshOverlay()
+        refreshRegionList()
+        refreshSelectedEditor()
+    }
+
+    /// Removes the latest find's areas in one undo step; locked ones stay. Internal for tests.
+    @objc func deleteFoundTapped() {
+        let ids = foundIDsStillHere.filter { !layerState($0).locked }
+        guard !isExporting, !ids.isEmpty else { NSSound.beep(); return }
+        endGesture()
+        multiSelection.removeAll()
+        eraseItems(regions: Set(ids), drawings: [])
+        workflowHint.stringValue = "찾은 영역 \(ids.count)개를 지웠습니다. ⌘Z로 되돌립니다."
     }
 
     // MARK: - Layer list: drag to reorder
@@ -1817,7 +1892,8 @@ final class MainWindowController: NSWindowController {
                         annotationColorWell, annotationPickButton, annotationFillPopup, coverSegment, coverColorWell, coverPickButton,
                         trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox, eraserTargetPopup,
                         textFontPopup, textBoldCheckbox, textBackgroundPopup, trackDirectionPopup, smoothTrackingCheckbox,
-                        reacquireFacesCheckbox, findFacesButton, findTextButton, trackAfterFindCheckbox, pickHiddenCheckbox] as [NSControl] {
+                        reacquireFacesCheckbox, findFacesButton, findTextButton, trackAfterFindCheckbox, pickHiddenCheckbox,
+                        selectFoundButton, deleteFoundButton] as [NSControl] {
             control.isEnabled = !value
         }
         mainContainer.playPauseButton.isEnabled = !value && doc.hasVideo
@@ -3310,6 +3386,9 @@ final class MainWindowController: NSWindowController {
         autoTrackButton.isEnabled = doc.hasVideo && (hasSelection || multiSelection.count > 1) && !isExporting
         trackAfterFindCheckbox.isHidden = !doc.hasVideo
         for button in [findFacesButton, findTextButton] { button.isEnabled = doc.mediaKind != .none && !isExporting }
+        let foundLeft = !foundIDsStillHere.isEmpty && !isExporting
+        selectFoundButton.isEnabled = foundLeft
+        deleteFoundButton.isEnabled = foundLeft
         let canStep = doc.hasVideo && !isExporting && doc.videoFPS > 0
         previousFrameButton.isEnabled = canStep
         nextFrameButton.isEnabled = canStep

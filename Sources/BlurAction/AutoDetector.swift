@@ -66,6 +66,7 @@ enum AutoDetector {
     /// fast mode clips the first syllables of Korean name tags) and text-shaped areas that cannot be
     /// read (decorative, vertical or slanted sign lettering).
     private static func textPass(_ image: CIImage) throws -> [CGRect] {
+        try Task.checkCancellation() // 취소 stops between passes
         let lines = VNRecognizeTextRequest()
         lines.recognitionLevel = .accurate
         lines.recognitionLanguages = ["ko-KR", "en-US"]
