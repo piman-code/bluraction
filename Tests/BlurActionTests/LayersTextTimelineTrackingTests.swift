@@ -328,16 +328,16 @@ final class LayersTextTimelineTrackingTests {
                              "-filter_complex", "[0][1]overlay=x='20+t*60':y=66", "-c:v", "libx264", "-pix_fmt", "yuv420p", input.path])
         // Normalized, bottom-left: x 20/320, y (180-66-48)/180.
         let box = CGRect(x: 20.0 / 320, y: 66.0 / 180, width: 48.0 / 320, height: 48.0 / 180)
-        let outcome = try ObjectTracker.track(url: input, from: 0, until: 2.5, box: box, cancellation: .init()) { _ in }
+        let outcome = try await ObjectTracker.track(url: input, from: 0, until: 2.5, box: box, cancellation: .init()) { _ in }
         let at2 = try #require(outcome.samples.min { abs($0.time - 2) < abs($1.time - 2) })
         #expect(abs(at2.box.midX * 320 - (20 + 120 + 24)) < 12, "Tracked x \(at2.box.midX * 320)")
         #expect(abs(at2.box.midY * 180 - 90) < 12)
 
         let cancelled = ObjectTracker.Cancellation()
         cancelled.cancel()
-        #expect(try ObjectTracker.track(url: input, from: 0, until: 2.5, box: box, cancellation: cancelled) { _ in }.cancelled)
-        #expect(throws: ObjectTracker.TrackError.self) {
-            try ObjectTracker.track(url: input, from: 0, until: 1, box: CGRect(x: 0, y: 0, width: 0.001, height: 0.001), cancellation: .init()) { _ in }
+        #expect(try await ObjectTracker.track(url: input, from: 0, until: 2.5, box: box, cancellation: cancelled) { _ in }.cancelled)
+        await #expect(throws: ObjectTracker.TrackError.self) {
+            try await ObjectTracker.track(url: input, from: 0, until: 1, box: CGRect(x: 0, y: 0, width: 0.001, height: 0.001), cancellation: .init()) { _ in }
         }
 
         // Through the app: select an area on the target at 0 s and track it.

@@ -91,6 +91,17 @@ final class MainWindowController: NSWindowController {
     private let trackMotionHint = NSTextField(wrappingLabelWithString: "켜면 옮긴 시점의 위치가 기록되어 영역·그림이 움직임을 따라갑니다. 재생 중 끌어도, 멈춘 채 프레임을 넘기며 옮겨도 됩니다. 끄면 기록된 경로 전체가 함께 옮겨집니다.")
     private let motionTools = NSStackView()
     private let autoTrackButton = NSButton(title: "선택 항목 자동 추적", target: nil, action: nil)
+    private let trackDirectionPopup = NSPopUpButton()
+    private let smoothTrackingCheckbox = NSButton(checkboxWithTitle: "흔들림 줄이기", target: nil, action: nil)
+    private let reacquireFacesCheckbox = NSButton(checkboxWithTitle: "놓친 얼굴 다시 찾기", target: nil, action: nil)
+    private let findTools = NSStackView()
+    private let findFacesButton = NSButton(title: "얼굴 찾기", target: nil, action: nil)
+    private let findTextButton = NSButton(title: "글자 찾기", target: nil, action: nil)
+    private let trackAfterFindCheckbox = NSButton(checkboxWithTitle: "영상: 찾은 뒤 앞뒤로 자동 추적", target: nil, action: nil)
+    private let pickHiddenCheckbox = NSButton(checkboxWithTitle: "숨긴 블러 영역도 캔버스에서 고르기", target: nil, action: nil)
+    /// Detector used by 자동 찾기; tests replace it (real face images are not used in tests).
+    var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] = AutoDetector.detect
+    private var windowCloseObserver: NSObjectProtocol?
     private var trackingCancellation: ObjectTracker.Cancellation?
     private var annotationColorRow: NSStackView?
     private let regionTitle = NSTextField(labelWithString: "레이어 (위가 앞)")
@@ -196,6 +207,11 @@ final class MainWindowController: NSWindowController {
         // init 후 명시적으로 view controller/UI를 모두 구성.
         // NSWindowController의 loadWindow/windowDidLoad는 호출 시점이 미묘해서 직접 호출 흐름을 만든다.
         setupUI()
+        // Closing the window stops a running tracking task instead of letting it finish unseen.
+        windowCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                                                     object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.trackingCancellation?.cancel() }
+        }
         window.setContentSize(NSSize(width: 1180, height: 700))
         window.center()
     }
@@ -206,6 +222,7 @@ final class MainWindowController: NSWindowController {
         if let timeObserver { player?.removeTimeObserver(timeObserver) }
         playerItemStatusObserver?.invalidate()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
     }
 
     /// 모든 UI 구성을 init 시점에 명시적으로 수행.
@@ -325,7 +342,11 @@ final class MainWindowController: NSWindowController {
             guard let self else { return [] }
             return self.annotations.filter { !$0.hidden }.map { $0.displayed(at: self.editTime) }
         }
-        canvas.isLocked = { [weak self] id in self?.layerState(id).locked ?? false }
+        canvas.isLocked = { [weak self] id in
+            guard let self else { return false }
+            let state = self.layerState(id)
+            return state.locked || (state.hidden && self.pickHiddenCheckbox.state != .on)
+        }
         canvas.annotationStyleBinding = { [weak self] in
             guard let self else { return (.systemYellow, 4, 0) }
             return (self.annotationColorWell.color, CGFloat(self.annotationWidthSlider.doubleValue), self.selectedFillOpacity)
@@ -709,7 +730,43 @@ final class MainWindowController: NSWindowController {
         autoTrackButton.target = self
         autoTrackButton.action = #selector(autoTrackTapped)
         autoTrackButton.toolTip = "선택한 영역·그림 안의 대상을 지금부터 끝까지 자동으로 따라가며 위치를 기록합니다 (Vision). ⌘Z로 되돌립니다."
-        for view in [trackMotionCheckbox, trackMotionHint, autoTrackButton] as [NSView] { motionTools.addArrangedSubview(view) }
+        trackDirectionPopup.addItems(withTitles: ["앞으로 추적", "뒤로 추적", "앞뒤로 추적"])
+        trackDirectionPopup.toolTip = "지금부터 항목 끝까지(앞으로), 영상 처음 쪽으로(뒤로), 또는 양쪽으로 따라갑니다. 여러 항목을 고르면 함께 추적합니다."
+        smoothTrackingCheckbox.state = .on
+        smoothTrackingCheckbox.toolTip = "추적 위치의 잔떨림을 앞뒤 몇 프레임 평균으로 줄입니다."
+        reacquireFacesCheckbox.state = .on
+        reacquireFacesCheckbox.toolTip = "얼굴이 든 영역을 놓치면 1.5초 동안 그 근처에서 얼굴을 다시 찾아 이어서 따라갑니다. 번호판·글자 같은 다른 대상에는 쓰지 않습니다."
+        let trackRow = NSStackView(views: [trackDirectionPopup, autoTrackButton])
+        trackRow.spacing = 6
+        autoTrackButton.title = "자동 추적"
+        let trackOptions = NSStackView(views: [smoothTrackingCheckbox, reacquireFacesCheckbox])
+        trackOptions.spacing = 8
+        for view in [trackMotionCheckbox, trackMotionHint, trackRow, trackOptions] as [NSView] { motionTools.addArrangedSubview(view) }
+        let findTitle = NSTextField(labelWithString: "자동 찾기")
+        findTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        for (button, action, tip) in [(findFacesButton, #selector(findFacesTapped), "지금 화면에서 얼굴을 찾아 모두 가립니다 (Vision)."),
+                                      (findTextButton, #selector(findTextTapped), "지금 화면에서 글자(번호판·명찰·간판 등)를 찾아 가립니다 (Vision).")] {
+            button.bezelStyle = .rounded
+            button.target = self
+            button.action = action
+            button.toolTip = tip
+        }
+        trackAfterFindCheckbox.state = .on
+        trackAfterFindCheckbox.toolTip = "영상에서 찾은 영역을 바로 앞뒤로 자동 추적해 움직임을 따라가게 합니다."
+        let findHint = NSTextField(wrappingLabelWithString: "찾은 곳마다 새 영역이 생깁니다. 이미 가린 곳은 건너뛰고, 잘못 찾은 것은 지우면 됩니다.")
+        findHint.font = .systemFont(ofSize: 11)
+        findHint.textColor = .secondaryLabelColor
+        findHint.preferredMaxLayoutWidth = 260
+        let findRow = NSStackView(views: [findFacesButton, findTextButton])
+        findRow.spacing = 6
+        findTools.orientation = .vertical
+        findTools.alignment = .leading
+        findTools.spacing = 6
+        for view in [findTitle, findRow, trackAfterFindCheckbox, findHint] as [NSView] { findTools.addArrangedSubview(view) }
+        pickHiddenCheckbox.state = .off
+        pickHiddenCheckbox.target = self
+        pickHiddenCheckbox.action = #selector(pickHiddenChanged(_:))
+        pickHiddenCheckbox.toolTip = "끄면 숨긴 블러 영역은 캔버스에서 눌러도 잡히지 않습니다(레이어 목록에서는 고를 수 있음)."
         motionTools.isHidden = true
         eraserHint.font = .systemFont(ofSize: 11)
         eraserHint.textColor = .secondaryLabelColor
@@ -768,7 +825,7 @@ final class MainWindowController: NSWindowController {
         arrangeTools.orientation = .vertical
         arrangeTools.alignment = .leading
         arrangeTools.spacing = 6
-        for view in [arrangeTitle, orderRow, groupRow, arrangeHint] as [NSView] { arrangeTools.addArrangedSubview(view) }
+        for view in [arrangeTitle, orderRow, groupRow, arrangeHint, pickHiddenCheckbox] as [NSView] { arrangeTools.addArrangedSubview(view) }
         refreshEraserControls()
         toolSegment.toolTip = "블러(B) · 그리기(D) · 지우개(E)"
         toolChanged(toolSegment)
@@ -843,6 +900,9 @@ final class MainWindowController: NSWindowController {
         col.minWidth = 160
         col.resizingMask = .autoresizingMask
         regionList.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        regionList.allowsMultipleSelection = true
+        regionList.registerForDraggedTypes([.blurActionLayerRow])
+        regionList.setDraggingSourceOperationMask(.move, forLocal: true)
         regionList.addTableColumn(col)
         regionList.reloadData()
         regionScroll.documentView = regionList
@@ -968,7 +1028,7 @@ final class MainWindowController: NSWindowController {
         for v in [workflowHint,
                   toolSegment, modeSegment, annotationColorRow, annotationWidthTitle, annotationWidthSlider, annotationFillPopup, textTools,
                   annotationHint, eraserTools,
-                  coverTitle, coverSegment, effectTitle, blurRow, featherTitle, featherRow, coverColorRow, arrangeTools, regionTitle,
+                  coverTitle, coverSegment, effectTitle, blurRow, featherTitle, featherRow, coverColorRow, findTools, arrangeTools, regionTitle,
                   scrollContainer, timeRangeEditor, motionTools, preciseTools,
                   qualityTitle, qualityPopup, qualityInfoLabel, buttonRow, progressIndicator, progressLabel] {
             sidebarStack.addArrangedSubview(v)
@@ -1399,18 +1459,61 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Automatic tracking (Vision)
 
+    enum TrackChoice: Int { case forward, backward, both }
+
+    /// True once a running tracking task has been asked to stop (window close or 취소). Internal for tests.
+    var trackingStopRequested: Bool { trackingCancellation?.isCancelled ?? false }
+    var isTracking: Bool { trackingCancellation != nil }
+
     @objc private func autoTrackTapped() {
-        guard doc.hasVideo, !isExporting, let url = doc.url, let id = currentSelectionID, let rect = selectedDisplayedRect,
-              let start = playheadTime, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
+        let ids = multiSelection.count > 1 ? multiSelection : [currentSelectionID].compactMap { $0 }
+        startTracking(ids: ids, choice: TrackChoice(rawValue: trackDirectionPopup.indexOfSelectedItem) ?? .forward)
+    }
+
+    private func displayedRect(of id: UUID, at time: Double) -> CGRect? {
+        if let pair = pairs.first(where: { $0.shape.id == id }) { return RegionEditing.displayed(pair, at: time).boundingRect }
+        return annotations.first(where: { $0.id == id }).map { $0.displayed(at: time).bounds }
+    }
+
+    /// Follows every listed item from the playhead (several at once, in the chosen direction).
+    /// Internal for tests.
+    func startTracking(ids: [UUID], choice: TrackChoice, undoWithPrevious: Bool = false) {
+        guard doc.hasVideo, !isExporting, let url = doc.url, let start = playheadTime,
+              canvas.bounds.width > 0, canvas.bounds.height > 0 else {
             NSSound.beep()
             workflowHint.stringValue = "영상에서 따라갈 영역이나 그림을 먼저 선택하세요."
             return
         }
-        guard !layerState(id).locked else { NSSound.beep(); workflowHint.stringValue = "잠긴 레이어는 추적할 수 없습니다."; return }
-        let end = selectedTiming.map { $0.lowerBound == 0 && $0.upperBound == 0 ? doc.duration : min(doc.duration, $0.upperBound) } ?? doc.duration
-        guard end - start > 0.05 else { NSSound.beep(); workflowHint.stringValue = "이 항목은 지금 이후로 표시되는 시간이 없습니다."; return }
         let size = canvas.bounds.size
-        let box = CGRect(x: rect.minX / size.width, y: rect.minY / size.height, width: rect.width / size.width, height: rect.height / size.height)
+        var items: [UUID] = [], boxes: [CGRect] = [], tooSmall = 0
+        for id in ids where !layerState(id).locked {
+            guard let rect = displayedRect(of: id, at: start), rect.width > 0, rect.height > 0 else { continue }
+            let box = CGRect(x: rect.minX / size.width, y: rect.minY / size.height,
+                             width: rect.width / size.width, height: rect.height / size.height)
+            // The tracker needs at least 1% of the picture each way; skip only the tiny ones.
+            guard box.width >= ObjectTracker.minimumSide, box.height >= ObjectTracker.minimumSide else { tooSmall += 1; continue }
+            items.append(id)
+            boxes.append(box)
+        }
+        guard !items.isEmpty else {
+            NSSound.beep()
+            workflowHint.stringValue = ids.isEmpty ? "영상에서 따라갈 영역이나 그림을 먼저 선택하세요."
+                : tooSmall > 0 ? "너무 작아서 따라갈 수 없습니다. 영역을 조금 더 크게 잡으세요." : "잠긴 레이어는 추적할 수 없습니다."
+            return
+        }
+        let end = items.map { id -> Double in
+            let range = timing(of: id)
+            return range.map { $0.lowerBound == 0 && $0.upperBound == 0 ? doc.duration : min(doc.duration, $0.upperBound) } ?? doc.duration
+        }.max() ?? doc.duration
+        guard choice != .forward || end - start > 0.05 else {
+            NSSound.beep(); workflowHint.stringValue = "이 항목은 지금 이후로 표시되는 시간이 없습니다."; return
+        }
+        guard choice != .backward || start > 0.05 else {
+            NSSound.beep(); workflowHint.stringValue = "지금이 영상의 시작이라 뒤로 따라갈 구간이 없습니다."; return
+        }
+        var options = ObjectTracker.Options()
+        options.smoothing = smoothTrackingCheckbox.state == .on
+        options.reacquireFaces = reacquireFacesCheckbox.state == .on
         stopPlayback()
         endGesture()
         let cancellation = ObjectTracker.Cancellation()
@@ -1419,19 +1522,42 @@ final class MainWindowController: NSWindowController {
         progressIndicator.doubleValue = 0
         progressIndicator.isHidden = false
         cancelButton.isHidden = false
-        progressLabel.stringValue = "자동 추적 중… (취소하면 여기까지만 기록)"
+        progressLabel.stringValue = "자동 추적 중… \(items.count)개 (취소하면 여기까지만 기록)"
         let indicator = progressIndicator
+        let report: @Sendable (Double) -> Void = { value in DispatchQueue.main.async { indicator.doubleValue = value } }
+        let initial = Dictionary(uniqueKeysWithValues: zip(items, boxes))
         Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { try ObjectTracker.track(url: url, from: start, until: end, box: box, cancellation: cancellation) { value in
-                    DispatchQueue.main.async { indicator.doubleValue = value }
-                } }
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<[UUID: ObjectTracker.Outcome], Error> in
+                do {
+                    var backward: [ObjectTracker.Outcome]?, forward: [ObjectTracker.Outcome]?
+                    if choice != .forward {
+                        var back = options
+                        back.direction = .backward
+                        backward = try await ObjectTracker.trackMany(url: url, from: start, until: 0, boxes: boxes, options: back,
+                                                                     cancellation: cancellation) { report(choice == .both ? $0 / 2 : $0) }
+                    }
+                    if choice != .backward, !cancellation.isCancelled {
+                        var ahead = options
+                        ahead.direction = .forward
+                        forward = try await ObjectTracker.trackMany(url: url, from: start, until: end, boxes: boxes, options: ahead,
+                                                                    cancellation: cancellation) { report(choice == .both ? 0.5 + $0 / 2 : $0) }
+                    }
+                    var outcomes: [UUID: ObjectTracker.Outcome] = [:]
+                    for (index, id) in items.enumerated() {
+                        let samples = ((backward?[index].samples ?? []) + (forward?[index].samples ?? [])).sorted { $0.time < $1.time }
+                        outcomes[id] = ObjectTracker.Outcome(samples: samples,
+                                                             lostTarget: (backward?[index].lostTarget ?? false) || (forward?[index].lostTarget ?? false),
+                                                             cancelled: cancellation.isCancelled)
+                    }
+                    return .success(outcomes)
+                } catch { return .failure(error) }
             }.value
-            self?.finishTracking(result, itemID: id, start: start, initialBox: box)
+            self?.finishTracking(result, start: start, initialBoxes: initial, undoWithPrevious: undoWithPrevious, skipped: tooSmall)
         }
     }
 
-    private func finishTracking(_ result: Result<ObjectTracker.Outcome, Error>, itemID id: UUID, start: Double, initialBox: CGRect) {
+    private func finishTracking(_ result: Result<[UUID: ObjectTracker.Outcome], Error>, start: Double, initialBoxes: [UUID: CGRect],
+                                undoWithPrevious: Bool, skipped: Int = 0) {
         trackingCancellation = nil
         setExporting(false)
         progressIndicator.isHidden = true
@@ -1440,48 +1566,228 @@ final class MainWindowController: NSWindowController {
         switch result {
         case .failure(let error):
             showError(error.localizedDescription)
-        case .success(let outcome):
-            applyTracking(outcome, itemID: id, start: start, initialBox: initialBox)
+        case .success(let outcomes):
+            applyTrackingResults(outcomes, start: start, initialBoxes: initialBoxes, newUndoStep: !undoWithPrevious)
+            if skipped > 0 { workflowHint.stringValue += " 너무 작은 \(skipped)개는 건너뛰었습니다." }
         }
     }
 
-    /// Writes tracked boxes as recorded positions from `start` on (replacing positions recorded in
-    /// that span). Regions take the tracked box; drawings keep their size and follow its movement.
-    /// Internal for tests.
+    /// One item's tracked boxes as recorded positions (compatibility entry point). Internal for tests.
     func applyTracking(_ outcome: ObjectTracker.Outcome, itemID id: UUID, start: Double, initialBox: CGRect) {
+        applyTrackingResults([id: outcome], start: start, initialBoxes: [id: initialBox])
+    }
+
+    /// Writes tracked boxes as recorded positions around `start`, replacing positions recorded in
+    /// the tracked span, in one undo step. Regions take the tracked box; drawings keep their size and
+    /// follow its movement. Tracking back before an item's start extends its time range.
+    /// Internal for tests.
+    func applyTrackingResults(_ outcomes: [UUID: ObjectTracker.Outcome], start: Double, initialBoxes: [UUID: CGRect],
+                              newUndoStep: Bool = true) {
         let size = canvas.bounds.size
-        guard let last = outcome.samples.last?.time, size.width > 0, size.height > 0 else {
-            workflowHint.stringValue = outcome.cancelled ? "자동 추적을 취소했습니다." : "대상을 따라가지 못했습니다. 영역을 대상에 딱 맞게 잡고 다시 시도하세요."
+        let usable = outcomes.filter { !$0.value.samples.isEmpty }
+        guard !usable.isEmpty, size.width > 0, size.height > 0 else {
+            let cancelled = outcomes.values.contains { $0.cancelled }
+            workflowHint.stringValue = cancelled ? "자동 추적을 취소했습니다." : "대상을 따라가지 못했습니다. 영역을 대상에 딱 맞게 잡고 다시 시도하세요."
             return
         }
         func canvasRect(_ box: CGRect) -> CGRect {
             CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
         }
         func merged(_ frames: [RegionKeyframe], anchor: CGRect, tracked: [RegionKeyframe]) -> [RegionKeyframe] {
-            var result = frames.filter { $0.time < start - MotionTrack.sameTime || $0.time > last + MotionTrack.sameTime }
+            let low = min(start, tracked.first?.time ?? start), high = max(start, tracked.last?.time ?? start)
+            var result = frames.filter { $0.time < low - MotionTrack.sameTime || $0.time > high + MotionTrack.sameTime }
             for frame in [RegionKeyframe(time: start, rect: anchor)] + tracked { result = MotionTrack.inserting(frame, into: result) }
             return result
         }
-        if let index = pairs.firstIndex(where: { $0.shape.id == id }) {
-            let anchor = RegionEditing.displayed(pairs[index], at: start).boundingRect
-            let tracked = outcome.samples.map { RegionKeyframe(time: $0.time, rect: canvasRect($0.box)) }
-            checkpoint()
-            pairs[index].effect.keyframes = merged(pairs[index].effect.keyframes, anchor: anchor, tracked: tracked)
-        } else if let index = annotations.firstIndex(where: { $0.id == id }) {
-            let anchor = annotations[index].displayed(at: start).bounds
-            let origin = canvasRect(initialBox)
-            let tracked = outcome.samples.map { sample -> RegionKeyframe in
-                let box = canvasRect(sample.box)
-                return RegionKeyframe(time: sample.time, rect: anchor.offsetBy(dx: box.midX - origin.midX, dy: box.midY - origin.midY))
+        func extended(_ range: ClosedRange<Double>, from earliest: Double) -> ClosedRange<Double> {
+            guard !(range.lowerBound == 0 && range.upperBound == 0), earliest < range.lowerBound else { return range }
+            return max(0, earliest)...range.upperBound
+        }
+        if newUndoStep { checkpoint() }
+        var positions = 0, lost = 0, earliest = start, latest = start
+        for (id, outcome) in usable {
+            let samples = outcome.samples
+            positions += samples.count
+            if outcome.lostTarget { lost += 1 }
+            earliest = min(earliest, samples.first?.time ?? start)
+            latest = max(latest, samples.last?.time ?? start)
+            if let index = pairs.firstIndex(where: { $0.shape.id == id }) {
+                let anchor = RegionEditing.displayed(pairs[index], at: start).boundingRect
+                let tracked = samples.map { RegionKeyframe(time: $0.time, rect: canvasRect($0.box)) }
+                pairs[index].effect.keyframes = merged(pairs[index].effect.keyframes, anchor: anchor, tracked: tracked)
+                pairs[index].effect.timeRange = extended(pairs[index].effect.timeRange, from: samples.first?.time ?? start)
+            } else if let index = annotations.firstIndex(where: { $0.id == id }) {
+                let anchor = annotations[index].displayed(at: start).bounds
+                let origin = canvasRect(initialBoxes[id] ?? .zero)
+                let tracked = samples.map { sample -> RegionKeyframe in
+                    let box = canvasRect(sample.box)
+                    return RegionKeyframe(time: sample.time, rect: anchor.offsetBy(dx: box.midX - origin.midX, dy: box.midY - origin.midY))
+                }
+                annotations[index].keyframes = merged(annotations[index].keyframes, anchor: anchor, tracked: tracked)
+                annotations[index].timeRange = extended(annotations[index].timeRange, from: samples.first?.time ?? start)
             }
-            checkpoint()
-            annotations[index].keyframes = merged(annotations[index].keyframes, anchor: anchor, tracked: tracked)
-        } else { return }
-        var note = "자동 추적: \(outcome.samples.count)개 위치를 \(format(last))까지 기록했습니다."
-        if outcome.lostTarget { note += " 대상이 가려지거나 사라져 거기서 멈췄습니다." }
-        if outcome.cancelled { note += " (취소한 곳까지)" }
+        }
+        var note = usable.count > 1
+            ? "자동 추적: \(usable.count)개 항목, \(positions)개 위치를 \(format(earliest))~\(format(latest)) 구간에 기록했습니다."
+            : "자동 추적: \(positions)개 위치를 \(format(earliest))~\(format(latest)) 구간에 기록했습니다."
+        if lost > 0 { note += usable.count > 1 ? " \(lost)개는 대상이 가려지거나 사라져 중간에 멈췄습니다." : " 대상이 가려지거나 사라져 거기서 멈췄습니다." }
+        if outcomes.values.contains(where: { $0.cancelled }) { note += " (취소한 곳까지)" }
         workflowHint.stringValue = note + " ⌘Z로 되돌립니다."
         refreshAfterEdit()
+    }
+
+    private func timing(of id: UUID) -> ClosedRange<Double>? {
+        if let pair = pairs.first(where: { $0.shape.id == id }) { return pair.effect.timeRange }
+        return annotations.first(where: { $0.id == id })?.timeRange
+    }
+
+    // MARK: - Automatic finding (faces, text)
+
+    @objc private func findFacesTapped() { findAndCover(.faces) }
+    @objc private func findTextTapped() { findAndCover(.text) }
+
+    /// Finds faces or text in the image page or the video frame on screen and covers each with a
+    /// new area (current cover style), skipping places already covered. One undo step; on video the
+    /// new areas can be tracked both ways right away. Internal for tests.
+    func findAndCover(_ target: AutoDetector.Target, completion: (() -> Void)? = nil) {
+        guard !isExporting, doc.mediaKind != .none, canvas.bounds.width > 0, canvas.bounds.height > 0 else { NSSound.beep(); return }
+        let detect = autoDetect
+        let time = doc.hasVideo ? playheadTime : nil
+        let url = doc.url
+        let still = doc.hasVideo ? nil : doc.currentCGImage
+        stopPlayback()
+        endGesture()
+        // Editing, page changes, seeking and opening files wait until the result is placed, and the
+        // result is only placed where it was looked for.
+        let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: time)
+        setExporting(true)
+        workflowHint.stringValue = "\(target.label) 찾는 중…"
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<[CGRect], Error> in
+                do {
+                    let image: CIImage
+                    if let still { image = CIImage(cgImage: still) }
+                    else if let url, let time { image = try await AutoDetector.frame(of: url, at: time) }
+                    else { throw AutoDetector.DetectError.frameUnavailable }
+                    return .success(try detect(target, image))
+                } catch { return .failure(error) }
+            }.value
+            guard let self else { completion?(); return }
+            self.setExporting(false)
+            guard context == FindContext(url: self.doc.url, page: self.pageWorkspace?.currentIndex,
+                                         time: self.doc.hasVideo ? self.playheadTime : nil) else {
+                self.workflowHint.stringValue = "찾는 동안 화면이 바뀌어 결과를 넣지 않았습니다. 다시 찾아 주세요."
+                completion?()
+                return
+            }
+            self.coverFound(result, target: target, time: time)
+            completion?()
+        }
+    }
+
+    private struct FindContext: Equatable {
+        let url: URL?
+        let page: Int?
+        let time: Double?
+        static func == (a: FindContext, b: FindContext) -> Bool {
+            a.url == b.url && a.page == b.page && (a.time == nil) == (b.time == nil)
+                && abs((a.time ?? 0) - (b.time ?? 0)) < MotionTrack.sameTime
+        }
+    }
+
+    private func coverFound(_ result: Result<[CGRect], Error>, target: AutoDetector.Target, time: Double?) {
+        let boxes: [CGRect]
+        switch result {
+        case .failure(let error): workflowHint.stringValue = error.localizedDescription; return
+        case .success(let found): boxes = found
+        }
+        let size = canvas.bounds.size
+        guard !isExporting, size.width > 0, size.height > 0 else { return }
+        // Areas with eraser marks may have holes, so they never count as covering.
+        let covering = pairs.filter { $0.effect.isActive(at: time) && $0.effect.erasures.isEmpty }
+            .map { RegionEditing.displayed($0, at: time) }
+        /// Points spread over the cover this find would make (an oval for faces, the box for text);
+        /// the place is skipped only when existing areas' actual shapes hold every one (a sliver left showing gets covered).
+        func alreadyCovered(_ box: CGRect) -> Bool {
+            guard !covering.isEmpty else { return false }
+            let rect = CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
+            var inside = 0, total = 0
+            for row in 0..<12 {
+                for column in 0..<12 {
+                    let u = (Double(column) + 0.5) / 12, v = (Double(row) + 0.5) / 12
+                    if target == .faces, (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5) > 0.25 { continue }
+                    let point = CGPoint(x: rect.minX + u * rect.width, y: rect.minY + v * rect.height)
+                    total += 1
+                    if covering.contains(where: { $0.contains(point: point, threshold: 0.5) }) { inside += 1 }
+                }
+            }
+            return total > 0 && inside == total
+        }
+        let fresh = boxes.filter { !alreadyCovered($0) }
+        guard !fresh.isEmpty else {
+            workflowHint.stringValue = boxes.isEmpty ? "\(target.label)을 찾지 못했습니다." : "찾은 \(target.label)은 이미 모두 가려져 있습니다."
+            return
+        }
+        let existing = pairs.filter { $0.effect.name?.hasPrefix(target.label + " ") == true }.count
+        var created: [UUID] = []
+        checkpoint()
+        for (offset, box) in fresh.enumerated() {
+            let rect = CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
+            let id = UUID()
+            let shape: RegionShape = target == .faces ? .ellipse(id: id, origin: rect.origin, size: rect.size)
+                                                       : .rectangle(id: id, origin: rect.origin, size: rect.size)
+            var effect = RegionEffect.created(at: time, videoDuration: doc.hasVideo ? doc.duration : nil)
+            applyDefaultCover(to: &effect)
+            effect.name = "\(target.label) \(existing + offset + 1)"
+            pairs.append((shape, effect))
+            created.append(id)
+        }
+        canvas.setRegionsFromExternal(pairs.map(\.shape))
+        if let first = created.first { canvas.selectRegion(id: first) }
+        multiSelection = created.count > 1 ? created : []
+        workflowHint.stringValue = "\(target.label) \(created.count)개를 찾아 가렸습니다. 필요 없는 것은 지우세요. ⌘Z로 한 번에 되돌립니다."
+        refreshAfterEdit()
+        if doc.hasVideo, trackAfterFindCheckbox.state == .on {
+            // Finding and its tracking undo together.
+            startTracking(ids: created, choice: .both, undoWithPrevious: true)
+        }
+    }
+
+    // MARK: - Layer list: drag to reorder
+
+    /// Moves a layer to sit above list row `row` (top of the list = front). Drawings move among
+    /// drawings and regions among regions. One undo step. Internal for tests.
+    @discardableResult
+    func moveLayer(_ id: UUID, toRow row: Int) -> Bool {
+        guard !isExporting else { return false }
+        let rows = layerRows
+        guard let from = rows.firstIndex(where: { $0.id == id }), row >= 0, row <= rows.count else { return false }
+        let drawingCount = annotations.count
+        func reordered<T>(_ topFirst: [T], from: Int, to: Int) -> [T]? {
+            var items = topFirst
+            let item = items.remove(at: from)
+            let destination = to > from ? to - 1 : to
+            guard destination != from, destination >= 0, destination <= items.count else { return nil }
+            items.insert(item, at: destination)
+            return items
+        }
+        if rows[from].isDrawing {
+            guard row <= drawingCount, let top = reordered(Array(annotations.reversed()), from: from, to: row) else { return false }
+            endGesture(); checkpoint()
+            annotations = top.reversed()
+        } else {
+            guard row >= drawingCount,
+                  let top = reordered(Array(pairs.reversed()), from: from - drawingCount, to: row - drawingCount) else { return false }
+            endGesture(); checkpoint()
+            pairs = top.reversed()
+        }
+        refreshAfterEdit()
+        return true
+    }
+
+    @objc private func pickHiddenChanged(_ sender: NSButton) {
+        canvas.resetInteraction()
+        canvas.refreshOverlay()
     }
 
     private var hasEffectiveBlur: Bool {
@@ -1510,7 +1816,8 @@ final class MainWindowController: NSWindowController {
         for control in [blurSlider, featherSlider, toolSegment, modeSegment, annotationColorPopup, annotationWidthSlider, qualityPopup, imageFormatPopup,
                         annotationColorWell, annotationPickButton, annotationFillPopup, coverSegment, coverColorWell, coverPickButton,
                         trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox, eraserTargetPopup,
-                        textFontPopup, textBoldCheckbox, textBackgroundPopup] as [NSControl] {
+                        textFontPopup, textBoldCheckbox, textBackgroundPopup, trackDirectionPopup, smoothTrackingCheckbox,
+                        reacquireFacesCheckbox, findFacesButton, findTextButton, trackAfterFindCheckbox, pickHiddenCheckbox] as [NSControl] {
             control.isEnabled = !value
         }
         mainContainer.playPauseButton.isEnabled = !value && doc.hasVideo
@@ -1685,6 +1992,7 @@ final class MainWindowController: NSWindowController {
         effectTitle.isHidden = !showsStrength; blurSlider.isHidden = !showsStrength; blurValueLabel.isHidden = !showsStrength
         featherTitle.isHidden = !blurTool; featherSlider.isHidden = !blurTool; featherValueLabel.isHidden = !blurTool
         coverColorRow.isHidden = !(blurTool && style == .solid)
+        findTools.isHidden = !blurTool
     }
 
     private var selectedFillOpacity: CGFloat {
@@ -2999,7 +3307,9 @@ final class MainWindowController: NSWindowController {
             control.isEnabled = canEditPosition
         }
         recordPositionButton.isEnabled = canEditRange && playheadTime != nil
-        autoTrackButton.isEnabled = doc.hasVideo && hasSelection && !isExporting
+        autoTrackButton.isEnabled = doc.hasVideo && (hasSelection || multiSelection.count > 1) && !isExporting
+        trackAfterFindCheckbox.isHidden = !doc.hasVideo
+        for button in [findFacesButton, findTextButton] { button.isEnabled = doc.mediaKind != .none && !isExporting }
         let canStep = doc.hasVideo && !isExporting && doc.videoFPS > 0
         previousFrameButton.isEnabled = canStep
         nextFrameButton.isEnabled = canStep
@@ -3102,14 +3412,29 @@ final class MainWindowController: NSWindowController {
 
     private func deleteSelected() {
         guard !isExporting else { return }
+        let lockedHint = "잠긴 레이어입니다. 레이어 목록에서 잠금을 풀면 지울 수 있습니다."
+        if multiSelection.count > 1, let current = currentSelectionID, multiSelection.contains(current) {
+            // Several chosen: remove the unlocked ones even when the last one clicked is locked.
+            let ids = Set(multiSelection.filter { !layerState($0).locked })
+            guard !ids.isEmpty else { NSSound.beep(); workflowHint.stringValue = lockedHint; return }
+            endGesture()
+            multiSelection.removeAll()
+            eraseItems(regions: ids, drawings: ids)
+            return
+        }
         if let id = currentSelectionID, layerState(id).locked {
             NSSound.beep()
-            workflowHint.stringValue = "잠긴 레이어입니다. 레이어 목록에서 잠금을 풀면 지울 수 있습니다."
+            workflowHint.stringValue = lockedHint
             return
         }
         if let id = selectedDrawingID {
             endGesture()
             eraseItems(regions: [], drawings: [id])
+            return
+        }
+        if let id = selectedID {
+            endGesture()
+            eraseItems(regions: [id], drawings: [])
             return
         }
         canvas.deleteSelected()
@@ -3542,7 +3867,10 @@ final class MainWindowController: NSWindowController {
         refreshingList = true
         defer { refreshingList = false }
         regionList.reloadData()
-        if let id = currentSelectionID, let row = layerRows.firstIndex(where: { $0.id == id }) {
+        let rows = layerRows
+        if multiSelection.count > 1 {
+            regionList.selectRowIndexes(IndexSet(multiSelection.compactMap { id in rows.firstIndex { $0.id == id } }), byExtendingSelection: false)
+        } else if let id = currentSelectionID, let row = rows.firstIndex(where: { $0.id == id }) {
             regionList.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         } else { regionList.deselectAll(nil) }
         exportButton.isEnabled = !isExporting && doc.mediaKind != .none && hasEffectiveEffect
@@ -3900,11 +4228,58 @@ extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !refreshingList else { return }
         let rows = layerRows
-        let row = regionList.selectedRow
-        guard row >= 0, row < rows.count else { return }
-        selectItem(rows[row].id)
+        let picked = regionList.selectedRowIndexes.filter { $0 < rows.count }.map { rows[$0].id }
+        guard !picked.isEmpty else { return }
+        if picked.count > 1 {
+            // Several rows: they become the multi-selection (group, delete, track together).
+            let primary = rows.indices.contains(regionList.selectedRow) ? rows[regionList.selectedRow].id : picked[0]
+            multiSelection = picked
+            selectItem(primary)
+            multiSelection = picked
+            workflowHint.stringValue = "\(picked.count)개 선택됨 · ⌘G 그룹, Delete 삭제, 자동 추적은 함께 따라갑니다."
+            canvas.refreshOverlay()
+        } else {
+            multiSelection.removeAll()
+            selectItem(picked[0])
+        }
         refreshSelectedEditor()
         liveBlur.refresh()
+    }
+
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        let rows = layerRows
+        guard !isExporting, rows.indices.contains(row) else { return nil }
+        let item = NSPasteboardItem()
+        item.setString(rows[row].id.uuidString, forType: .blurActionLayerRow)
+        return item
+    }
+
+    /// The one dragged layer. Dragging several selected rows carries one item per row and moves nothing,
+    /// so the row under the pointer is never confused with the first selected row.
+    private func draggedLayerID(_ info: NSDraggingInfo) -> UUID? {
+        guard (info.draggingSource as? NSTableView) === regionList,
+              let items = info.draggingPasteboard.pasteboardItems, items.count == 1,
+              let text = items[0].string(forType: .blurActionLayerRow) else { return nil }
+        return UUID(uuidString: text)
+    }
+
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession,
+                   willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        if rowIndexes.count > 1 { workflowHint.stringValue = "레이어 순서는 한 번에 한 줄씩 끌어서 바꿉니다." }
+    }
+
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+                   proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        guard dropOperation == .above, let id = draggedLayerID(info),
+              let from = layerRows.firstIndex(where: { $0.id == id }) else { return [] }
+        let drawingCount = annotations.count
+        return (layerRows[from].isDrawing ? row <= drawingCount : row >= drawingCount) ? .move : []
+    }
+
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
+                   dropOperation: NSTableView.DropOperation) -> Bool {
+        guard let id = draggedLayerID(info) else { return false }
+        return moveLayer(id, toRow: row)
     }
 
     /// 레이어 행 우클릭 — 캔버스 우클릭과 같은 메뉴(+ 이름 바꾸기·숨기기·잠금)
@@ -3929,3 +4304,7 @@ final class RegionTableView: NSTableView {
 }
 
 final class FlippedDocumentView: NSView { override var isFlipped: Bool { true } }
+
+extension NSPasteboard.PasteboardType {
+    static let blurActionLayerRow = NSPasteboard.PasteboardType("local.piman.BlurAction.layer-row")
+}
