@@ -1,0 +1,22 @@
+[
+  {
+    "path": "synthetic-three-pages.pdf",
+    "sha256": "19e82483b58906587fca77fb039478f62e34ef1fb37ef8c66cc37e33fe409158",
+    "provenance": "generated synthetic macOS regression fixture, no user media"
+  },
+  {
+    "path": "synthetic-01.png",
+    "sha256": "64c428a48e0f6bfff83b8f1b32de9d7d4cbed8937706f29cc212a053cbf7ede7",
+    "provenance": "generated synthetic macOS regression fixture, no user media"
+  },
+  {
+    "path": "synthetic-02.png",
+    "sha256": "b627609eb57dcd75a3c37ac0ba8842ccad285543255acae25996f366cddb5f27",
+    "provenance": "generated synthetic macOS regression fixture, no user media"
+  },
+  {
+    "path": "synthetic-03.png",
+    "sha256": "2994ae9875de801e1fb8d296154678e4aa338ecd5880b132a81250627789c47e",
+    "provenance": "generated synthetic macOS regression fixture, no user media"
+  }
+]

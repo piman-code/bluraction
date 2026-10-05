@@ -1,0 +1,15 @@
+# macOS HEIC CPU candidate
+
+This development recipe builds libheif1.23.5, Kvazaar2.3.2 and libde2651.1.3 from SHA-256 pinned official release sources. Plugin loading and other codec backends are disabled. The owned runtime permits precisely the HEVC Kvazaar encoder and libheif’s always-registered internal mask codec. This is an isolated diagnostic; it does not replace an installed application or publish files to a user destination.
+
+`verify_candidate.py --repository ABSOLUTE_REPOSITORY` acquires SHA-pinned CMake4.4.3 and pkgconf3.0.7.post0 wheel tools into a fresh private `.build` directory, compiles the source recipe and an independent Apple ImageIO reader, then checks six self-authored image cases. No global installation, input automation, source photographs or user projects are used. Every native child has a deadline and an owned process group; the driver preserves failed attempts and completed case journals.
+
+The helper receives final upright, unassociated sRGB RGBA8 through stdin. It cannot receive source paths, profiles, GPS, EXIF, thumbnails or alternate original items. Output remains in an owned0700 directory. Encoding explicitly selects Kvazaar, emits fresh NCLX1/13/6/full, reopens through libde265 and checks dimensions, metadata, auxiliary items and every alpha byte. Independent ImageIO decode additionally checks type, dimensions, source SHA and every alpha byte. The finite black-center check is a privacy oracle for these authored covers, not a general color error allowance.
+
+Local Mac27 observations completed six cases using helper source41352bb602af8f04856ea3c122b10eb74c0ed68222b99bd555b4f5b8db0e6c7c. Mac14 CI, product integration, cancellation/publication races and arbitrary source-color/HDR compatibility remain unverified. Exact working source and the host are recorded for every new execution; historical results never count as a new build pass. A restricted native service environment returned zero bitmap bytes; the same immutable helper and reader succeeded when native services were available. No alpha assertion was weakened.
+
+Kvazaar’s released libheif backend uses 8-bit 4:2:0 color plus monochrome alpha. Quality100 does not promise RGB losslessness or 4:4:4. This first candidate slice does not reduce the agreed application scope: high-depth/HDR, P3 conversion and full HEIC compatibility still need separate implementation and validation.
+
+The source route avoids x265 but LGPL obligations remain. Actual source COPYING/LICENSE/CREDITS bytes, configure logs, dylib closure and tool hashes are retained privately. Application bundling still requires exact corresponding source, notices, replacement/relink instructions, architecture/runtime closure and signing/notarization review. No binary redistribution clearance is claimed.
+
+Official sources: [libheif1.23.5](https://github.com/strukturag/libheif/releases/tag/v1.23.5), [Kvazaar2.3.2](https://github.com/ultravideo/kvazaar/releases/tag/v2.3.2), [libde2651.1.3](https://github.com/strukturag/libde265/releases/tag/v1.1.3), [CMake tools](https://pypi.org/project/cmake/4.4.3/), [pkgconf tools](https://pypi.org/project/pkgconf/3.0.7.post0/).

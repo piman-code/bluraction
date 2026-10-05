@@ -196,7 +196,7 @@ final class EditorInteractionTests {
         canvas.mouseDown(with: try event(.leftMouseDown, 150, 30))
         canvas.mouseDragged(with: try event(.leftMouseDragged, 220, 130, shift: true))
         canvas.mouseUp(with: try event(.leftMouseUp, 220, 130, shift: true))
-        let ellipse = try #require(canvas.regionsBinding?().last)
+        let ellipse = try XCTUnwrap(canvas.regionsBinding?().last)
         if case .ellipse = ellipse {} else { Issue.record("Ellipse mode must create an ellipse") }
         #expect(ellipse.boundingRect.size == CGSize(width: 70, height: 70))
         mode(2)
@@ -211,7 +211,7 @@ final class EditorInteractionTests {
         canvas.mouseDragged(with: try event(.leftMouseDragged, 480, 100))
         canvas.mouseUp(with: try event(.leftMouseUp, 450, 30))
         #expect(canvas.regionsBinding?().count == 4)
-        let polygon = try #require(canvas.regionsBinding?().last)
+        let polygon = try XCTUnwrap(canvas.regionsBinding?().last)
         let edge = polygon.replacing(rect: CGRect(x: canvas.bounds.width - polygon.boundingRect.width,
                                                  y: 30, width: polygon.boundingRect.width, height: polygon.boundingRect.height))
         canvas.regionsUpdate?([edge]); canvas.selectRegion(id: edge.id)
@@ -315,7 +315,7 @@ final class EditorInteractionTests {
         #expect(annotations.count == 2)
         tool(0)
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let region = try #require(canvas.regionsBinding?().last)
+        let region = try XCTUnwrap(canvas.regionsBinding?().last)
         canvas.selectRegion(id: region.id)
         try deleteKey()
         #expect(canvas.regionsBinding?().isEmpty == true)
@@ -326,7 +326,7 @@ final class EditorInteractionTests {
         try drawRectangle(at: 210)
         #expect(annotations.count == 3)
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        let second = try #require(canvas.regionsBinding?().last)
+        let second = try XCTUnwrap(canvas.regionsBinding?().last)
         canvas.selectRegion(id: second.id)
         try deleteKey()
         #expect(canvas.regionsBinding?().isEmpty == true)
@@ -361,7 +361,7 @@ final class EditorInteractionTests {
         controller.perform(NSSelectorFromString("undoTapped"))
         #expect(canvas.regionsBinding?().isEmpty == true, "One continuous slider gesture must consume exactly one undo")
         controller.perform(NSSelectorFromString("redoTapped"))
-        let region = try #require(canvas.regionsBinding?().first)
+        let region = try XCTUnwrap(canvas.regionsBinding?().first)
         canvas.selectRegion(id: region.id)
         let key = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
@@ -372,7 +372,7 @@ final class EditorInteractionTests {
         #expect(canvas.regionsBinding?().first == region)
         window.makeFirstResponder(canvas)
         #expect(canvas.performKeyEquivalent(with: key))
-        let moved = try #require(canvas.regionsBinding?().first)
+        let moved = try XCTUnwrap(canvas.regionsBinding?().first)
         #expect(abs(moved.boundingRect.minX - region.boundingRect.minX - 0.1) < 0.001)
     }
 

@@ -279,9 +279,15 @@ final class ImageDocumentTests {
         try write(source, to: input)
         let before = try Data(contentsOf: input)
         func export(_ url: URL, type: UTType = .png, quality: Double = 1) throws {
+            // Test-only explicit owned helper; production never reads this env.
+            var cpuHelper: HEICCPUEncoder.Helper?
+            if type == .heic, let path = ProcessInfo.processInfo.environment["BLURACTION_TEST_HEIC_CPU_HELPER"] {
+                let expected = try #require(ProcessInfo.processInfo.environment["BLURACTION_TEST_HEIC_CPU_HELPER_SHA256"])
+                cpuHelper = .init(url: URL(fileURLWithPath: path), sha256: expected)
+            }
             try BlurredImageExporter.export(source: source, pairs: [],
                 canvasSize: CGSize(width: 48, height: 32), inputURL: input,
-                outputURL: url, type: type, quality: quality)
+                outputURL: url, type: type, quality: quality, heicCPUHelper: cpuHelper)
         }
         let symlink = dir.appendingPathComponent("alias.png")
         try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: input)
@@ -299,7 +305,12 @@ final class ImageDocumentTests {
         #expect(try Data(contentsOf: existing) == sentinel)
         for type in [UTType.png, .jpeg, .heic, .tiff] {
             let output = dir.appendingPathComponent("result.\(type.preferredFilenameExtension!)")
-            try export(output, type: type)
+            do {
+                try export(output, type: type)
+            } catch {
+                Issue.record("Image export failed: \(type.identifier), \(source.width)x\(source.height), \(error)")
+                throw error
+            }
             let encoded = try #require(CGImageSourceCreateWithURL(output as CFURL, nil))
             #expect(CGImageSourceCreateImageAtIndex(encoded, 0, nil) != nil)
             #expect(CGImageSourceGetType(encoded) as String? == type.identifier)

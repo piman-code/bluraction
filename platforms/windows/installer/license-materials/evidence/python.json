@@ -1,0 +1,20 @@
+{
+  "status": "official-source-and-wheel-notice-materials-pending",
+  "evidence": [
+    {
+      "name": "python-3.14.7-LICENSE",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.7/LICENSE",
+      "exit": 0,
+      "http_and_effective_url": "200 https://raw.githubusercontent.com/python/cpython/v3.14.7/LICENSE",
+      "bytes": 13804,
+      "sha256": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231",
+      "status": "acquired",
+      "path": "official-acquisitions/python-3.14.7-LICENSE.txt"
+    }
+  ],
+  "holds": [
+    "Exact source tag license; final embedded/runtime binary and transitive notices still require exact artifact binding.3.14.8 was not substituted."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

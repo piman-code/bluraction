@@ -1,0 +1,17 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "dependency": "pillow",
+    "version": "12.3.0",
+    "role": "windows-wheel",
+    "filename": "pillow-12.3.0-cp314-cp314-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/f1/e0/492879f69d94f91f60fc8cd05ba03650e9520afebb2fb7aa12777d7c7f38/pillow-12.3.0-cp314-cp314-win_amd64.whl",
+    "sha256": "fdafc9cce40277e0f7a0feabce0ee50dd2fa1800f3b38015e51296b5e814048d",
+    "size": 7237707
+  },
+  "limitations": [
+    "Acquired Windows wheel license bytes; candidate bundler output and exact collected transitive binaries remain unbound."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

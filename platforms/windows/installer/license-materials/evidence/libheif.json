@@ -1,0 +1,33 @@
+{
+  "status": "official-source-and-wheel-notice-materials-pending",
+  "evidence": {
+    "wheel": {
+      "filename": "pillow_heif-1.8.0-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/6e/a6/79861065ea4719817e0a4a3d41160393d41643378d1b5a939012aaec695e/pillow_heif-1.8.0-cp314-cp314-win_amd64.whl",
+      "size": 6783029,
+      "SHA256": "257c81a049f6d11b2289908fbeb9affbae9adba943fec1bb6ce0926083d5fad6"
+    },
+    "actual_bundled_notice_sha256": "e66e5864371a3b082902dbb80424203d8ff5c7e2a9e239e403e7433cda1510c1",
+    "declarations": {
+      "libheif": "1.23.4",
+      "libde265": "1.1.3",
+      "x265": "4.2"
+    },
+    "declared_upstream_versions_not_binary_observations": true,
+    "official": {
+      "name": "libheif-1.23.4-COPYING",
+      "url": "https://raw.githubusercontent.com/strukturag/libheif/v1.23.4/COPYING",
+      "exit": 0,
+      "http_and_effective_url": "200 https://raw.githubusercontent.com/strukturag/libheif/v1.23.4/COPYING",
+      "bytes": 44366,
+      "sha256": "fa81ce652315b013359d6e8e4744335f31a50c7c192907176d3632f78a3b4596",
+      "status": "acquired",
+      "path": "official-acquisitions/libheif-1.23.4-COPYING.txt"
+    }
+  },
+  "holds": [
+    "Notice/source candidate provenance only; no Darwin library version used. Exact Windows DLL version/build/source/relink correspondence and legal review pending."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

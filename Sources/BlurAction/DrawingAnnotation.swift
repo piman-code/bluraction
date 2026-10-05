@@ -107,15 +107,44 @@ struct DrawingAnnotation: Equatable, Identifiable, Codable {
     /// Font families offered in the text controls (only installed ones are listed).
     static var availableFontFamilies: [String] {
         ["Apple SD Gothic Neo", "AppleMyungjo", "Helvetica Neue", "Georgia", "Menlo", "Noteworthy"]
-            .filter { NSFont(name: $0, size: 12) != nil || NSFontManager.shared.availableMembers(ofFontFamily: $0) != nil }
+            .filter { fontIsAvailable($0) }
+    }
+
+    /// Availability and rendering interpret the same portable generic names.
+    /// Keep the requested spelling in the annotation; only resolve at rendering.
+    static func fontIsAvailable(_ family: String?, bold: Bool = false, size: CGFloat = 12) -> Bool {
+        resolvedFont(size: size, family: family, bold: bold) != nil
+    }
+
+    private static func resolvedFont(size: CGFloat, family: String?, bold: Bool) -> NSFont? {
+        let size = max(1, size)
+        let weight: NSFont.Weight = bold ? .semibold : .regular
+        func named(_ name: String) -> NSFont? {
+            NSFontManager.shared.font(withFamily: name, traits: bold ? .boldFontMask : [], weight: 5, size: size)
+                ?? NSFont(name: name, size: size)
+        }
+        switch family?.lowercased() ?? "" {
+        case "", "system", "sans serif", "sans-serif":
+            return .systemFont(ofSize: size, weight: weight)
+        case "monospace":
+            return .monospacedSystemFont(ofSize: size, weight: weight)
+        case "serif":
+            guard let descriptor = NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.serif) else { return nil }
+            return NSFont(descriptor: descriptor, size: size)
+        case "cursive":
+            return ["Apple Chancery", "Snell Roundhand", "Zapfino"].lazy.compactMap(named).first
+        case "fantasy":
+            return ["Papyrus", "Herculanum", "Copperplate"].lazy.compactMap(named).first
+        default:
+            return family.flatMap(named)
+        }
     }
 
     static func font(size: CGFloat, family: String?, bold: Bool) -> NSFont {
         let size = max(1, size)
-        if let family, let base = NSFontManager.shared.font(withFamily: family, traits: bold ? .boldFontMask : [], weight: 5, size: size)
-            ?? NSFont(name: family, size: size) {
-            return base
-        }
+        if let resolved = resolvedFont(size: size, family: family, bold: bold) { return resolved }
+        // Missing explicit requests remain in the model. Output validation must
+        // refuse them; this fallback is only a preview while editing old files.
         return .systemFont(ofSize: size, weight: bold ? .semibold : .regular)
     }
 

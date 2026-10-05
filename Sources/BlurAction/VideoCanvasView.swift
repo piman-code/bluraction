@@ -63,7 +63,16 @@ final class VideoCanvasView: NSView {
     var modeUpdate: ((Mode) -> Void)?
     var viewSizeBinding: (() -> CGSize)?
     var videoSizeBinding: (() -> CGSize)?
+    /// Media dimensions also exist for still images; only videos have playhead timing.
+    var isVideoBinding: (() -> Bool)?
+    /// Standalone canvases paint their saved drawings. The app's compositor owns that paint.
+    var drawsSavedAnnotations = true
+    /// Loading an empty canvas is allowed; a busy host can refuse loads independently of editing.
+    var canLoadFilesBinding: (() -> Bool)?
+    // Older standalone hosts supplied only video dimensions. The app supplies the explicit flag.
+    private var hasVideoTime: Bool { isVideoBinding?() ?? ((videoSizeBinding?() ?? .zero) != .zero) }
     var onFileLoad: ((URL) -> Void)?
+    var onFilesLoad: (([URL]) -> Void)?
     var liveBlurRefreshCallback: (() -> Void)?
     var addRegionHandler: (() -> Void)?
     var deleteSelectedHandler: (() -> Void)?
@@ -261,11 +270,13 @@ final class VideoCanvasView: NSView {
         let highlightedAnnotationID = liveAnnotationSelectionID
         let annotations = annotationsBinding?() ?? []
         let mode = modeBinding?() ?? .rectangle
-        let hasTime = videoSizeBinding?() != .zero
+        let hasTime = hasVideoTime
         if let cg = NSGraphicsContext.current?.cgContext, !annotations.isEmpty {
             // Same drawing code as export. Items outside their time show as a faint guide.
-            for annotation in annotations where !hasTime || annotation.isVisible(at: currentTime) {
-                annotation.render(in: cg, time: hasTime ? currentTime : nil)
+            if drawsSavedAnnotations {
+                for annotation in annotations where !hasTime || annotation.isVisible(at: currentTime) {
+                    annotation.render(in: cg, time: hasTime ? currentTime : nil)
+                }
             }
             cg.saveGState()
             cg.setAlpha(0.25)
@@ -334,7 +345,7 @@ final class VideoCanvasView: NSView {
             if r.id == eraseHoverID { drawEraseHighlight(NSBezierPath(cgPath: r.path())) }
         }
         drawMotionPath()
-        if recordingKeyframes { drawRecordingBadge() }
+        if hasTime && recordingKeyframes { drawRecordingBadge() }
 
         // 폴리곤 진행 중
         if (mode == .polygonClick || mode == .polygonFree), polygonBuffer.count >= 1 {
@@ -457,6 +468,7 @@ final class VideoCanvasView: NSView {
 
     /// Recorded positions of the selected item: dashed path through keyframe centers.
     private func drawMotionPath() {
+        guard hasVideoTime else { return }
         guard let points = motionPathProvider?(), points.count >= 2 else { return }
         let path = NSBezierPath()
         path.move(to: points[0])
@@ -1047,13 +1059,13 @@ final class VideoCanvasView: NSView {
     /// Only items shown at the current time can be erased (earlier traces stay untouched).
     private func eraseTargets(at pt: NSPoint) -> (regions: [UUID], drawings: [UUID]) {
         let now = currentTimeProvider?() ?? 0
-        let timed = videoSizeBinding?() != .zero
+        let timed = hasVideoTime
         let locked = isLocked ?? { _ in false }
         if let drawing = (annotationsBinding?() ?? []).reversed().first(where: {
-            !locked($0.id) && (!timed || $0.isVisible(at: now)) && $0.hitTest(pt)
+            !locked($0.id) && $0.isVisible(at: timed ? now : nil) && $0.hitTest(pt)
         }) { return ([], [drawing.id]) }
         if let region = (regionsBinding?() ?? []).reversed().first(where: {
-            !locked($0.id) && (!timed || effectForID?($0.id)?.isActive(at: now) != false) && $0.contains(point: pt, threshold: 6)
+            !locked($0.id) && effectForID?($0.id)?.isActive(at: timed ? now : nil) != false && $0.contains(point: pt, threshold: 6)
         }) { return ([region.id], []) }
         return ([], [])
     }
@@ -1344,6 +1356,7 @@ final class VideoCanvasView: NSView {
               FileManager.default.isReadableFile(atPath: url.path) else { return false }
 
         let ext = url.pathExtension.lowercased()
+        if ext == "pdf" { return true }
         if DocumentModel.imageExtensions.contains(ext) { return true }
         if DocumentModel.videoExtensions.contains(ext) { return true }
         guard let type = UTType(filenameExtension: ext) else { return false }
@@ -1351,39 +1364,51 @@ final class VideoCanvasView: NSView {
     }
 
     static func supportedDroppedURL(from pasteboard: NSPasteboard) -> URL? {
+        guard let urls = supportedDroppedURLs(from: pasteboard), urls.count == 1 else { return nil }
+        return urls[0]
+    }
+
+    static func supportedDroppedURLs(from pasteboard: NSPasteboard) -> [URL]? {
         guard let objects = pasteboard.readObjects(forClasses: [NSURL.self]) else {
             dropLog.notice("pasteboard-unreadable")
             return nil
         }
-        guard objects.count == 1, let url = objects.first as? URL else {
+        let urls = objects.compactMap { $0 as? URL }
+        guard !objects.isEmpty, objects.count <= 200, urls.count == objects.count else {
             dropLog.notice("file-count-invalid")
             return nil
         }
-        guard isSupportedDropFile(url) else {
+        guard urls.allSatisfy(isSupportedDropFile),
+              urls.count == 1 || urls.allSatisfy({ $0.pathExtension.lowercased() == "pdf" ||
+                  DocumentModel.isImage(url: $0) }) else {
             dropLog.notice("unsupported-file")
             return nil
         }
-        return url
+        return urls
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         Self.dropLog.notice("dragging-entered")
-        guard onFileLoad != nil else {
+        guard canLoadFilesBinding?() != false else { return [] }
+        guard onFileLoad != nil || onFilesLoad != nil else {
             Self.dropLog.notice("load-callback-missing")
             return []
         }
-        guard Self.supportedDroppedURL(from: sender.draggingPasteboard) != nil else { return [] }
+        guard Self.supportedDroppedURLs(from: sender.draggingPasteboard) != nil else { return [] }
         Self.dropLog.notice("dragging-accepted")
         return .copy
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         Self.dropLog.notice("perform-drag-operation")
-        guard let url = Self.supportedDroppedURL(from: sender.draggingPasteboard), let onFileLoad else {
+        guard canLoadFilesBinding?() != false else { return false }
+        guard let urls = Self.supportedDroppedURLs(from: sender.draggingPasteboard) else {
             Self.dropLog.notice("perform-rejected")
             return false
         }
-        onFileLoad(url)
+        if let onFilesLoad { onFilesLoad(urls) }
+        else if urls.count == 1, let onFileLoad { onFileLoad(urls[0]) }
+        else { return false }
         Self.dropLog.notice("load-callback-invoked")
         return true
     }
@@ -1444,7 +1469,9 @@ final class VideoCanvasView: NSView {
         case .mosaic: cover = "모자이크 \(Int(effect.blurRadius))px"
         case .solid: cover = "단색"
         }
-        let motion = effect.keyframes.isEmpty ? "" : " · 이동 기록 \(effect.keyframes.count)"
+        let timed = hasVideoTime
+        let motion = !timed || effect.keyframes.isEmpty ? "" : " · 이동 기록 \(effect.keyframes.count)"
+        if !timed { return "\(cover) · 경계 \(Int(effect.featherRadius))px" }
         if effect.appliesToEntireVideo {
             return "전체 적용 · \(cover) · 경계 \(Int(effect.featherRadius))px\(motion)"
         }
@@ -1453,6 +1480,6 @@ final class VideoCanvasView: NSView {
     }
 
     private func isEffectActive(_ e: RegionEffect, at time: Double) -> Bool {
-        e.isActive(at: time)
+        e.isActive(at: hasVideoTime ? time : nil)
     }
 }

@@ -1,6 +1,8 @@
 # Build output and local app bundles
 .build/
 /BlurAction.app/
+/backups/
+/gui-fixtures-*/
 *.bundle-backup
 
 # Local tooling and data
@@ -12,3 +14,8 @@ Samples/
 # the current icon source is Resources/AppIcon.png.
 /scripts/make_icon.py
 /AppIcon.png
+
+# Local validation evidence and recoverable snapshots (never public payload)
+/qa-*/
+__pycache__/
+*.py[cod]

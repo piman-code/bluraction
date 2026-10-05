@@ -10,10 +10,17 @@ let package = Package(
         .executable(name: "BlurAction", targets: ["BlurAction"])
     ],
     targets: [
+        .target(
+            name: "BlurActionMediaSafety",
+            path: "Sources/BlurActionMediaSafety",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedFramework("AVFoundation"), .linkedFramework("Foundation")]
+        ),
         .executableTarget(
             name: "BlurAction",
+            dependencies: ["BlurActionMediaSafety"],
             path: "Sources/BlurAction"
         ),
-        .testTarget(name: "BlurActionTests", dependencies: ["BlurAction"], path: "Tests/BlurActionTests")
+        .testTarget(name: "BlurActionTests", dependencies: ["BlurAction", "BlurActionMediaSafety"], path: "Tests/BlurActionTests")
     ]
 )

@@ -1,0 +1,141 @@
+name: Required native video project roundtrip
+
+# Synthetic sources only. This gate is separate from native regression suites,
+# clean-OS installation, Finder/Explorer acceptance and final release approval.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: video-roundtrip-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac-emit:
+    runs-on: macos-14
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Generate projects through actual native Mac controllers
+        run: |
+          test -d "$DEVELOPER_DIR"
+          mkdir -p .build
+          python scripts/video-project-roundtrip/run_stage.py --stage mac-emit --output .build/roundtrip-mac-emit
+      - name: Transfer only completed allowlisted synthetic payload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: roundtrip-mac-payload
+          path: .build/roundtrip-mac-emit/payload/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain first-stage evidence separately
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: roundtrip-mac-emit-evidence
+          path: |
+            .build/roundtrip-mac-emit/report.json
+            .build/roundtrip-mac-emit/stage.log
+            .build/roundtrip-mac-emit/build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-edit:
+    needs: mac-emit
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+          architecture: x64
+      - name: Prepare isolated fixed native dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-venv
+          & .ci-venv/Scripts/python.exe -m pip install --only-binary=:all: -r platforms/windows/requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Required pinned native wheels unavailable.' }
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: roundtrip-mac-payload
+          path: .build/roundtrip-incoming-mac
+      - name: Open edit undo redo and save on actual Windows
+        shell: pwsh
+        run: |
+          & .ci-venv/Scripts/python.exe scripts/video-project-roundtrip/run_stage.py --stage windows-edit --input .build/roundtrip-incoming-mac --output .build/roundtrip-windows-edit
+          if ($LASTEXITCODE -ne 0) { throw 'Required native Windows roundtrip stage failed.' }
+      - name: Transfer only completed allowlisted synthetic payload
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: roundtrip-windows-payload
+          path: .build/roundtrip-windows-edit/payload/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain second-stage evidence separately
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: roundtrip-windows-edit-evidence
+          path: |
+            .build/roundtrip-windows-edit/report.json
+            .build/roundtrip-windows-edit/stage.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  mac-verify:
+    needs: windows-edit
+    runs-on: macos-14
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: roundtrip-windows-payload
+          path: .build/roundtrip-incoming-windows
+      - name: Verify preserved edits and save again through native Mac controllers
+        run: |
+          test -d "$DEVELOPER_DIR"
+          python scripts/video-project-roundtrip/run_stage.py --stage mac-verify --input .build/roundtrip-incoming-windows --output .build/roundtrip-mac-verify
+      - name: Retain completed return projects and observations
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: roundtrip-mac-return-payload
+          path: .build/roundtrip-mac-verify/payload/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain final-stage evidence separately
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: roundtrip-mac-verify-evidence
+          path: |
+            .build/roundtrip-mac-verify/report.json
+            .build/roundtrip-mac-verify/stage.log
+            .build/roundtrip-mac-verify/build.log
+          if-no-files-found: warn
+          retention-days: 14

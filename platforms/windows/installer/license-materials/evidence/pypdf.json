@@ -1,0 +1,18 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "distribution": "pypdf",
+    "version": "6.19.0",
+    "filename": "pypdf-6.19.0-py3-none-any.whl",
+    "sha256": "7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14",
+    "officialURL": "https://files.pythonhosted.org/packages/3c/2c/c43c03eaf630435f023f1dc61ec4a4a78951ad5530a62c71cc89bde307b7/pypdf-6.19.0-py3-none-any.whl",
+    "size": 395480,
+    "officialDigestMatched": true,
+    "license_install_RECORD_matched": true
+  },
+  "limitations": [
+    "Pure py3-none-any official wheel; not a Windows native backend test."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

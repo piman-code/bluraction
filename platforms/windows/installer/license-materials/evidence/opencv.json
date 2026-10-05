@@ -1,0 +1,14 @@
+{
+  "status": "acquired-static-candidate-evidence",
+  "artifact": {
+    "filename": "opencv_contrib_python_headless-4.14.0.94-cp37-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/44/95/a7bef7e3f059bcf450638a56485fb1d83ef3c3ebc06bae4a8f96ff30793d/opencv_contrib_python_headless-4.14.0.94-cp37-abi3-win_amd64.whl",
+    "size": 47303290,
+    "SHA256": "498ee35b13a4f1274564634d4d45ed19edd7949db8b548b84fcbabacc54aa2ed"
+  },
+  "limitations": [
+    "No redistribution license choice or corresponding-source completeness asserted. Exact collected DLL mapping pending."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

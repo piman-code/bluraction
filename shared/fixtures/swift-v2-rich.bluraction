@@ -1,0 +1,1182 @@
+{
+  "currentIndex" : 1,
+  "pages" : [
+    {
+      "drawings" : [
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000001",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "rectangle",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000002",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "ellipse",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000003",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "line",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000004",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "freehand",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000005",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "arrow",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000006",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "text",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        }
+      ],
+      "mediaPath" : "synthetic.png",
+      "regions" : [
+        {
+          "effect" : {
+            "blurRadius" : 25,
+            "color" : {
+              "alpha" : 0.8,
+              "blue" : 0.4,
+              "green" : 0.2,
+              "red" : 0
+            },
+            "enabled" : true,
+            "erasures" : [
+              {
+                "from" : 3,
+                "points" : [
+                  [
+                    0.2,
+                    0.3
+                  ],
+                  [
+                    0.4,
+                    0.5
+                  ]
+                ],
+                "width" : 0.02
+              }
+            ],
+            "featherRadius" : 12,
+            "groupID" : "33333333-3333-4333-8333-333333333333",
+            "keyframes" : [
+              {
+                "rect" : [
+                  [
+                    0.1,
+                    0.2
+                  ],
+                  [
+                    0.3,
+                    0.4
+                  ]
+                ],
+                "time" : 2
+              }
+            ],
+            "locked" : true,
+            "name" : "가림",
+            "style" : "solid",
+            "timeRange" : [
+              2,
+              5
+            ]
+          },
+          "shape" : {
+            "rectangle" : {
+              "id" : "11111111-1111-4111-8111-111111111111",
+              "origin" : [
+                0.1,
+                0.2
+              ],
+              "size" : [
+                0.3,
+                0.4
+              ]
+            }
+          }
+        },
+        {
+          "effect" : {
+            "blurRadius" : 25,
+            "color" : {
+              "alpha" : 0.8,
+              "blue" : 0.4,
+              "green" : 0.2,
+              "red" : 0
+            },
+            "enabled" : true,
+            "erasures" : [
+              {
+                "from" : 3,
+                "points" : [
+                  [
+                    0.2,
+                    0.3
+                  ],
+                  [
+                    0.4,
+                    0.5
+                  ]
+                ],
+                "width" : 0.02
+              }
+            ],
+            "featherRadius" : 12,
+            "groupID" : "33333333-3333-4333-8333-333333333333",
+            "keyframes" : [
+              {
+                "rect" : [
+                  [
+                    0.1,
+                    0.2
+                  ],
+                  [
+                    0.3,
+                    0.4
+                  ]
+                ],
+                "time" : 2
+              }
+            ],
+            "locked" : true,
+            "name" : "가림",
+            "style" : "solid",
+            "timeRange" : [
+              2,
+              5
+            ]
+          },
+          "shape" : {
+            "ellipse" : {
+              "id" : "11111111-1111-4111-8111-111111111112",
+              "origin" : [
+                0.5,
+                0.2
+              ],
+              "size" : [
+                0.2,
+                0.4
+              ]
+            }
+          }
+        },
+        {
+          "effect" : {
+            "blurRadius" : 25,
+            "color" : {
+              "alpha" : 0.8,
+              "blue" : 0.4,
+              "green" : 0.2,
+              "red" : 0
+            },
+            "enabled" : true,
+            "erasures" : [
+              {
+                "from" : 3,
+                "points" : [
+                  [
+                    0.2,
+                    0.3
+                  ],
+                  [
+                    0.4,
+                    0.5
+                  ]
+                ],
+                "width" : 0.02
+              }
+            ],
+            "featherRadius" : 12,
+            "groupID" : "33333333-3333-4333-8333-333333333333",
+            "keyframes" : [
+              {
+                "rect" : [
+                  [
+                    0.1,
+                    0.2
+                  ],
+                  [
+                    0.3,
+                    0.4
+                  ]
+                ],
+                "time" : 2
+              }
+            ],
+            "locked" : true,
+            "name" : "가림",
+            "style" : "solid",
+            "timeRange" : [
+              2,
+              5
+            ]
+          },
+          "shape" : {
+            "polygon" : {
+              "id" : "11111111-1111-4111-8111-111111111113",
+              "points" : [
+                [
+                  0.1,
+                  0.1
+                ],
+                [
+                  0.4,
+                  0.1
+                ],
+                [
+                  0.2,
+                  0.4
+                ]
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "drawings" : [
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000001",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "rectangle",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000002",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "ellipse",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000003",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "line",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000004",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "freehand",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000005",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "arrow",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        },
+        {
+          "alpha" : 0.7,
+          "blue" : 0.3,
+          "bold" : false,
+          "erasures" : [
+            {
+              "points" : [
+                [
+                  0.3,
+                  0.5
+                ]
+              ],
+              "width" : 0.03
+            }
+          ],
+          "fillOpacity" : 0.35,
+          "fontName" : "Helvetica",
+          "green" : 0.4,
+          "groupID" : "33333333-3333-4333-8333-333333333333",
+          "hidden" : true,
+          "id" : "22222222-2222-4222-8222-000000000006",
+          "keyframes" : [
+            {
+              "rect" : [
+                [
+                  0.2,
+                  0.4
+                ],
+                [
+                  0.1,
+                  0.2
+                ]
+              ],
+              "time" : 0
+            }
+          ],
+          "kind" : "text",
+          "lineWidth" : 0.01,
+          "locked" : false,
+          "name" : "그림",
+          "points" : [
+            [
+              0.3,
+              0.4
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "red" : 1,
+          "text" : "교사 검토\n합성 자료",
+          "textBackground" : {
+            "alpha" : 0.8,
+            "blue" : 1,
+            "green" : 1,
+            "red" : 1
+          },
+          "timeRange" : [
+            1,
+            5
+          ]
+        }
+      ],
+      "mediaPath" : "synthetic.pdf",
+      "pdfGeometryVersion" : 1,
+      "pdfPageIndex" : 0,
+      "regions" : [
+        {
+          "effect" : {
+            "blurRadius" : 25,
+            "color" : {
+              "alpha" : 0.8,
+              "blue" : 0.4,
+              "green" : 0.2,
+              "red" : 0
+            },
+            "enabled" : true,
+            "erasures" : [
+              {
+                "from" : 3,
+                "points" : [
+                  [
+                    0.2,
+                    0.3
+                  ],
+                  [
+                    0.4,
+                    0.5
+                  ]
+                ],
+                "width" : 0.02
+              }
+            ],
+            "featherRadius" : 12,
+            "groupID" : "33333333-3333-4333-8333-333333333333",
+            "keyframes" : [
+              {
+                "rect" : [
+                  [
+                    0.1,
+                    0.2
+                  ],
+                  [
+                    0.3,
+                    0.4
+                  ]
+                ],
+                "time" : 2
+              }
+            ],
+            "locked" : true,
+            "name" : "가림",
+            "style" : "solid",
+            "timeRange" : [
+              2,
+              5
+            ]
+          },
+          "shape" : {
+            "rectangle" : {
+              "id" : "11111111-1111-4111-8111-111111111111",
+              "origin" : [
+                0.1,
+                0.2
+              ],
+              "size" : [
+                0.3,
+                0.4
+              ]
+            }
+          }
+        },
+        {
+          "effect" : {
+            "blurRadius" : 25,
+            "color" : {
+              "alpha" : 0.8,
+              "blue" : 0.4,
+              "green" : 0.2,
+              "red" : 0
+            },
+            "enabled" : true,
+            "erasures" : [
+              {
+                "from" : 3,
+                "points" : [
+                  [
+                    0.2,
+                    0.3
+                  ],
+                  [
+                    0.4,
+                    0.5
+                  ]
+                ],
+                "width" : 0.02
+              }
+            ],
+            "featherRadius" : 12,
+            "groupID" : "33333333-3333-4333-8333-333333333333",
+            "keyframes" : [
+              {
+                "rect" : [
+                  [
+                    0.1,
+                    0.2
+                  ],
+                  [
+                    0.3,
+                    0.4
+                  ]
+                ],
+                "time" : 2
+              }
+            ],
+            "locked" : true,
+            "name" : "가림",
+            "style" : "solid",
+            "timeRange" : [
+              2,
+              5
+            ]
+          },
+          "shape" : {
+            "ellipse" : {
+              "id" : "11111111-1111-4111-8111-111111111112",
+              "origin" : [
+                0.5,
+                0.2
+              ],
+              "size" : [
+                0.2,
+                0.4
+              ]
+            }
+          }
+        },
+        {
+          "effect" : {
+            "blurRadius" : 25,
+            "color" : {
+              "alpha" : 0.8,
+              "blue" : 0.4,
+              "green" : 0.2,
+              "red" : 0
+            },
+            "enabled" : true,
+            "erasures" : [
+              {
+                "from" : 3,
+                "points" : [
+                  [
+                    0.2,
+                    0.3
+                  ],
+                  [
+                    0.4,
+                    0.5
+                  ]
+                ],
+                "width" : 0.02
+              }
+            ],
+            "featherRadius" : 12,
+            "groupID" : "33333333-3333-4333-8333-333333333333",
+            "keyframes" : [
+              {
+                "rect" : [
+                  [
+                    0.1,
+                    0.2
+                  ],
+                  [
+                    0.3,
+                    0.4
+                  ]
+                ],
+                "time" : 2
+              }
+            ],
+            "locked" : true,
+            "name" : "가림",
+            "style" : "solid",
+            "timeRange" : [
+              2,
+              5
+            ]
+          },
+          "shape" : {
+            "polygon" : {
+              "id" : "11111111-1111-4111-8111-111111111113",
+              "points" : [
+                [
+                  0.1,
+                  0.1
+                ],
+                [
+                  0.4,
+                  0.1
+                ],
+                [
+                  0.2,
+                  0.4
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "sourceSHA256" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "title" : "합성 묶음",
+  "version" : 2
+}

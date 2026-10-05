@@ -1,0 +1,1419 @@
+{
+  "schemaVersion": 1,
+  "syntheticOnly": true,
+  "provenance": "Authored MPEG4 visual markers17..24 and mono PCM MOVs; these eight postmux file identities and known-marker PTS were independently observed with AVFoundation before provider implementation.",
+  "limits": [
+    "Pinned MOV eight only; identity SAR/rotation; no generic HDR/audio/OS install/P1 proof.",
+    "Native leading unknown black samples and postmux trimmed marker17 are retained as observation differences.",
+    "Expected RGB hashes are actual pinned PyAV observations on macOS; Windows equality requires its own run."
+  ],
+  "sourceOracleSHA256": {
+    "descriptor": "e7311674dc1996b2162d181c8df86a2594f458cfe66edb27687f208b00d490dc",
+    "rawNativeComparison": "0b63c0992daed9102ee1c81702238937dedf98a3bfdd2d9f18f15759b8d1d3ca"
+  },
+  "cases": [
+    {
+      "kind": "gap0-vfr",
+      "file": "gap0-vfr.mov",
+      "sourceSHA256": "90a43b98346402f2ee9b2f62527b7164fc4d6dcc64a122ed0fb5f62260b05fdf",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "6",
+          "denominator": "5"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "13",
+                  "denominator": "12"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "6",
+                  "denominator": "5"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "0",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 17,
+          "visibleRGB8SHA256": "64995f6f7878cc301f3b3d845a5a41cc7d5eadddc805d6b7c773ee7378ddca01"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "7",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "7",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "5",
+            "denominator": "6"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 7,
+          "pts": {
+            "numerator": "1",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 0,
+      "authoredNegativeFrameConservationVerified": null
+    },
+    {
+      "kind": "nonzero-origin",
+      "file": "nonzero-origin.mov",
+      "sourceSHA256": "797a1f51c464b0ef5bce39f2a14114c16327100eb3cc8446af5050c130dc8acd",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "16",
+          "denominator": "5"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "2",
+                  "denominator": "1"
+                },
+                "mediaStart": null,
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              },
+              {
+                "assetStart": {
+                  "numerator": "2",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "13",
+                  "denominator": "12"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "2",
+                  "denominator": "1"
+                },
+                "mediaStart": null,
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              },
+              {
+                "assetStart": {
+                  "numerator": "2",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "6",
+                  "denominator": "5"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "2",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 17,
+          "visibleRGB8SHA256": "64995f6f7878cc301f3b3d845a5a41cc7d5eadddc805d6b7c773ee7378ddca01"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "25",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "53",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "55",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "5",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "31",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "17",
+            "denominator": "6"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 7,
+          "pts": {
+            "numerator": "3",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 1,
+      "authoredNegativeFrameConservationVerified": null
+    },
+    {
+      "kind": "audio-earlier-gap",
+      "file": "audio-earlier-gap.mov",
+      "sourceSHA256": "741ed8a17d11e9186fba44aeb5ad8498950ee1dec07e1a7e24e2b51e084527e5",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "19",
+          "denominator": "12"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "1",
+                  "denominator": "2"
+                },
+                "mediaStart": null,
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              },
+              {
+                "assetStart": {
+                  "numerator": "1",
+                  "denominator": "2"
+                },
+                "assetDuration": {
+                  "numerator": "13",
+                  "denominator": "12"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "6",
+                  "denominator": "5"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 17,
+          "visibleRGB8SHA256": "64995f6f7878cc301f3b3d845a5a41cc7d5eadddc805d6b7c773ee7378ddca01"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "7",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "17",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "19",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "13",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "4",
+            "denominator": "3"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 7,
+          "pts": {
+            "numerator": "3",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 1,
+      "authoredNegativeFrameConservationVerified": null
+    },
+    {
+      "kind": "audio-later-gap",
+      "file": "audio-later-gap.mov",
+      "sourceSHA256": "9b325d011daa556cebf3390fcaa79a60adf8c30a5ce3fa60eeafbfbdfc784986",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "39",
+          "denominator": "20"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "1",
+                  "denominator": "2"
+                },
+                "mediaStart": null,
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              },
+              {
+                "assetStart": {
+                  "numerator": "1",
+                  "denominator": "2"
+                },
+                "assetDuration": {
+                  "numerator": "13",
+                  "denominator": "12"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "3",
+                  "denominator": "4"
+                },
+                "mediaStart": null,
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              },
+              {
+                "assetStart": {
+                  "numerator": "3",
+                  "denominator": "4"
+                },
+                "assetDuration": {
+                  "numerator": "6",
+                  "denominator": "5"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 17,
+          "visibleRGB8SHA256": "64995f6f7878cc301f3b3d845a5a41cc7d5eadddc805d6b7c773ee7378ddca01"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "7",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "17",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "19",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "13",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "4",
+            "denominator": "3"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 7,
+          "pts": {
+            "numerator": "3",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 1,
+      "authoredNegativeFrameConservationVerified": null
+    },
+    {
+      "kind": "video0-audio-negative-quarter",
+      "file": "video0-audio-negative-quarter.mov",
+      "sourceSHA256": "5f52c9ae82babf3b6ec5c407c31b0fe4f8590197be81b3f5f3c053b67eb6ead5",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "13",
+          "denominator": "12"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "13",
+                  "denominator": "12"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "19",
+                  "denominator": "20"
+                },
+                "mediaStart": {
+                  "numerator": "1",
+                  "denominator": "4"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "0",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 17,
+          "visibleRGB8SHA256": "64995f6f7878cc301f3b3d845a5a41cc7d5eadddc805d6b7c773ee7378ddca01"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "7",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "7",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "5",
+            "denominator": "6"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 7,
+          "pts": {
+            "numerator": "1",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 0,
+      "authoredNegativeFrameConservationVerified": null
+    },
+    {
+      "kind": "video-negative-twelfth-audio0",
+      "file": "video-negative-twelfth-audio0.mov",
+      "sourceSHA256": "fa350477d2a8a666d0ab451f8f6da7b0d19788568f665a85a0db230bc8fd8857",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "6",
+          "denominator": "5"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "1",
+                  "denominator": "1"
+                },
+                "mediaStart": {
+                  "numerator": "1",
+                  "denominator": "12"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "6",
+                  "denominator": "5"
+                },
+                "mediaStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "0",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "5",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "3",
+            "denominator": "4"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "11",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 0,
+      "authoredNegativeFrameConservationVerified": false
+    },
+    {
+      "kind": "video-negative-twelfth-audio-negative-quarter",
+      "file": "video-negative-twelfth-audio-negative-quarter.mov",
+      "sourceSHA256": "386afa793fc353bba01ded7954490cbc2c08e9582e114f519fd47f361fc2ad79",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "1",
+                  "denominator": "1"
+                },
+                "mediaStart": {
+                  "numerator": "1",
+                  "denominator": "12"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          },
+          {
+            "id": 2,
+            "kind": "audio",
+            "mediaTimescale": 8000,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "19",
+                  "denominator": "20"
+                },
+                "mediaStart": {
+                  "numerator": "1",
+                  "denominator": "4"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "0",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "5",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "3",
+            "denominator": "4"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "11",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 0,
+      "authoredNegativeFrameConservationVerified": false
+    },
+    {
+      "kind": "video-negative-twelfth-noaudio",
+      "file": "video-negative-twelfth-noaudio.mov",
+      "sourceSHA256": "3eb180913fd80b967a76ec62579de4a7b8acc123755fa8dd1fd6e0f87e9bfe27",
+      "timeline": {
+        "version": 1,
+        "basis": "asset-presentation",
+        "assetDuration": {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "video",
+            "mediaTimescale": 12288,
+            "segments": [
+              {
+                "assetStart": {
+                  "numerator": "0",
+                  "denominator": "1"
+                },
+                "assetDuration": {
+                  "numerator": "1",
+                  "denominator": "1"
+                },
+                "mediaStart": {
+                  "numerator": "1",
+                  "denominator": "12"
+                },
+                "rate": {
+                  "numerator": "1",
+                  "denominator": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "frames": [
+        {
+          "index": 0,
+          "pts": {
+            "numerator": "0",
+            "denominator": "1"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "markerCode": 18,
+          "visibleRGB8SHA256": "cc146f710276efe1a23c9eaa8cfe20cb88e2baae39366b38ea7fb92f94e795e3"
+        },
+        {
+          "index": 1,
+          "pts": {
+            "numerator": "1",
+            "denominator": "8"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 19,
+          "visibleRGB8SHA256": "5131395624812b05855c32d33953a9a8bc31e8d379c41d5f0552dfe364c26474"
+        },
+        {
+          "index": 2,
+          "pts": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "duration": {
+            "numerator": "5",
+            "denominator": "24"
+          },
+          "markerCode": 20,
+          "visibleRGB8SHA256": "5c0fff895e84e0bf99da6241e7a0cdedcb19a123bdcf4b5906a821e0fe5587cf"
+        },
+        {
+          "index": 3,
+          "pts": {
+            "numerator": "5",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 21,
+          "visibleRGB8SHA256": "e8982dbbee0a90c09fb34e0742d803270c8daf847206360bf4c4d67624e1a1ae"
+        },
+        {
+          "index": 4,
+          "pts": {
+            "numerator": "1",
+            "denominator": "2"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "4"
+          },
+          "markerCode": 22,
+          "visibleRGB8SHA256": "9151255b15591c08dc6b4b931a28ac67d0bffdcfb98aace13ee631c5f2d52fae"
+        },
+        {
+          "index": 5,
+          "pts": {
+            "numerator": "3",
+            "denominator": "4"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "6"
+          },
+          "markerCode": 23,
+          "visibleRGB8SHA256": "cf032b882918fa5cf2041ffa6bfc83c0edbf8c25baff1fbec13430da0cea9f37"
+        },
+        {
+          "index": 6,
+          "pts": {
+            "numerator": "11",
+            "denominator": "12"
+          },
+          "duration": {
+            "numerator": "1",
+            "denominator": "12"
+          },
+          "markerCode": 24,
+          "visibleRGB8SHA256": "969749cb9c769e8f55e5634ac983824002fbb9c7bfed74abad500f833f32dd9e"
+        }
+      ],
+      "nativeKnownMarkerPTSConfirmed": true,
+      "nativeUnidentifiedExtraCount": 0,
+      "authoredNegativeFrameConservationVerified": false
+    }
+  ]
+}

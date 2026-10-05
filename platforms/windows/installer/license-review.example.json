@@ -1,0 +1,18 @@
+{
+  "status": "pending",
+  "version": "0.8.0-dev1",
+  "bundle_manifest_sha256": "",
+  "input_receipt_sha256": "",
+  "reviewed_by": "",
+  "reviewed_at": "",
+  "dependencies": [
+    {
+      "id": "python",
+      "version": "REPLACE_WITH_EXACT_INVENTORIED_VERSION",
+      "status": "pending",
+      "findings": "Replace with findings for the exact selected binaries and source/license evidence. Add every other inventoried dependency exactly once.",
+      "evidence_files": ["REPLACE_WITH_INVENTORIED_EVIDENCE_PATH"]
+    }
+  ],
+  "notes": "Example only. Replace with evidence for the exact Windows bundle after inspecting Qt, PDFium, Pillow, NumPy, PyAV/FFmpeg, OpenCV and every codec/DLL. This file does not approve packaging, installation or publication."
+}

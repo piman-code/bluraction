@@ -1,0 +1,2121 @@
+{
+  "cases" : [
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          80
+        ],
+        "displayPoint" : [
+          50,
+          80
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            50,
+            1
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            159
+          ],
+          "displayPoint" : [
+            50,
+            159
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            80
+          ],
+          "displayPoint" : [
+            1,
+            80
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            80
+          ],
+          "displayPoint" : [
+            99,
+            80
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            92,
+            8
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            152
+          ],
+          "displayPoint" : [
+            8,
+            152
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            152
+          ],
+          "displayPoint" : [
+            92,
+            152
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "displayPointSize" : [
+        100,
+        160
+      ],
+      "expectedPixelSize144dpi" : [
+        200,
+        320
+      ],
+      "file" : "zero-r0.pdf",
+      "id" : "zero-r0",
+      "macLegacyEditedRequiresReview" : false,
+      "mediaBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 0,
+      "sourceSHA256" : "897aae990e11ed94bd322fd19bb277684b413b33da36e17ed20553ca161a30b9"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          80
+        ],
+        "displayPoint" : [
+          80,
+          50
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            1,
+            50
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            159
+          ],
+          "displayPoint" : [
+            159,
+            50
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            80
+          ],
+          "displayPoint" : [
+            80,
+            99
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            80
+          ],
+          "displayPoint" : [
+            80,
+            1
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            92
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            152
+          ],
+          "displayPoint" : [
+            152,
+            92
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            152
+          ],
+          "displayPoint" : [
+            152,
+            8
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "displayPointSize" : [
+        160,
+        100
+      ],
+      "expectedPixelSize144dpi" : [
+        320,
+        200
+      ],
+      "file" : "zero-r90.pdf",
+      "id" : "zero-r90",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 90,
+      "sourceSHA256" : "588ce1f4cbac8136366445934268e1e1a1eff8f077825365ec0abfc01777d580"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          80
+        ],
+        "displayPoint" : [
+          50,
+          80
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            50,
+            159
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            159
+          ],
+          "displayPoint" : [
+            50,
+            1
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            80
+          ],
+          "displayPoint" : [
+            99,
+            80
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            80
+          ],
+          "displayPoint" : [
+            1,
+            80
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            92,
+            152
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            152
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            152
+          ],
+          "displayPoint" : [
+            92,
+            8
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            152
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "displayPointSize" : [
+        100,
+        160
+      ],
+      "expectedPixelSize144dpi" : [
+        200,
+        320
+      ],
+      "file" : "zero-r180.pdf",
+      "id" : "zero-r180",
+      "macLegacyEditedRequiresReview" : false,
+      "mediaBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 180,
+      "sourceSHA256" : "1982deac0a9e508e13e919abf01a2f2f832e67ff667c8da91d15aeb85bc56432"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          80
+        ],
+        "displayPoint" : [
+          80,
+          50
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            159,
+            50
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            159
+          ],
+          "displayPoint" : [
+            1,
+            50
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            80
+          ],
+          "displayPoint" : [
+            80,
+            1
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            80
+          ],
+          "displayPoint" : [
+            80,
+            99
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            152,
+            8
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            152,
+            92
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            152
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            152
+          ],
+          "displayPoint" : [
+            8,
+            92
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "displayPointSize" : [
+        160,
+        100
+      ],
+      "expectedPixelSize144dpi" : [
+        320,
+        200
+      ],
+      "file" : "zero-r270.pdf",
+      "id" : "zero-r270",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        0,
+        0,
+        100,
+        160
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 270,
+      "sourceSHA256" : "2560ff95da92242bc906ddf84202f4fc23c139f1be68f778f266aeff61cd81a2"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          50,
+          70
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            50,
+            1
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            50,
+            139
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            1,
+            70
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            99,
+            70
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            92,
+            8
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            132
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            92,
+            132
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        10,
+        20,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        100,
+        140
+      ],
+      "expectedPixelSize144dpi" : [
+        200,
+        280
+      ],
+      "file" : "inset-r0.pdf",
+      "id" : "inset-r0",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        0,
+        0,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 0,
+      "sourceSHA256" : "6cc49343ae1070c41edf44c0af651fdcd20dff67e9b6ca7f361b9d8de83a67b1"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          70,
+          50
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            1,
+            50
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            139,
+            50
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            99
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            1
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            92
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            132,
+            92
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            132,
+            8
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        10,
+        20,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        140,
+        100
+      ],
+      "expectedPixelSize144dpi" : [
+        280,
+        200
+      ],
+      "file" : "inset-r90.pdf",
+      "id" : "inset-r90",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        0,
+        0,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 90,
+      "sourceSHA256" : "0f730466a6f4938b0f7937ca86b9d7d42be2970840e98bc2f1a6a7e2c7b7a1c9"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          50,
+          70
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            50,
+            139
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            50,
+            1
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            99,
+            70
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            1,
+            70
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            92,
+            132
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            132
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            92,
+            8
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        10,
+        20,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        100,
+        140
+      ],
+      "expectedPixelSize144dpi" : [
+        200,
+        280
+      ],
+      "file" : "inset-r180.pdf",
+      "id" : "inset-r180",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        0,
+        0,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 180,
+      "sourceSHA256" : "02d7e5d0df658db026f19fa9a0e78f83d30e97a98c314244fbc63ed0810b864d"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          70,
+          50
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            139,
+            50
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            1,
+            50
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            1
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            99
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            132,
+            8
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            132,
+            92
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            92
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        10,
+        20,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        140,
+        100
+      ],
+      "expectedPixelSize144dpi" : [
+        280,
+        200
+      ],
+      "file" : "inset-r270.pdf",
+      "id" : "inset-r270",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        0,
+        0,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 270,
+      "sourceSHA256" : "38843cabb1cb9a42bfb44850f606904287492e86251a40f04539d6fc05154449"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          50,
+          70
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            50,
+            1
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            50,
+            139
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            1,
+            70
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            99,
+            70
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            92,
+            8
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            132
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            92,
+            132
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        40,
+        60,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        100,
+        140
+      ],
+      "expectedPixelSize144dpi" : [
+        200,
+        280
+      ],
+      "file" : "nonzero-r0.pdf",
+      "id" : "nonzero-r0",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        30,
+        40,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 0,
+      "sourceSHA256" : "64fc5fb5e3af1b153a669a3859a79ed77fb61a05e1909bd878bd238c89915de4"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          70,
+          50
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            1,
+            50
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            139,
+            50
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            99
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            1
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            92
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            132,
+            92
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            132,
+            8
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        40,
+        60,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        140,
+        100
+      ],
+      "expectedPixelSize144dpi" : [
+        280,
+        200
+      ],
+      "file" : "nonzero-r90.pdf",
+      "id" : "nonzero-r90",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        30,
+        40,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 90,
+      "sourceSHA256" : "5475c40b66d5e01ddb7eefe06bbbff2e528fc672cb690f8b3a317e41cabe465b"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          50,
+          70
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            50,
+            139
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            50,
+            1
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            99,
+            70
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            1,
+            70
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            92,
+            132
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            8,
+            132
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            92,
+            8
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        40,
+        60,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        100,
+        140
+      ],
+      "expectedPixelSize144dpi" : [
+        200,
+        280
+      ],
+      "file" : "nonzero-r180.pdf",
+      "id" : "nonzero-r180",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        30,
+        40,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 180,
+      "sourceSHA256" : "a51894a8d8d387a16de23e70c8dd2b63172af2dec09465bbe09bc00c8ce07645"
+    },
+    {
+      "annotation" : {
+        "cropPoint" : [
+          50,
+          70
+        ],
+        "displayPoint" : [
+          70,
+          50
+        ],
+        "name" : "pdf-square-annotation",
+        "rgb" : [
+          255,
+          0,
+          255
+        ]
+      },
+      "borders" : [
+        {
+          "cropPoint" : [
+            50,
+            1
+          ],
+          "displayPoint" : [
+            139,
+            50
+          ],
+          "name" : "crop-border-0",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            50,
+            139
+          ],
+          "displayPoint" : [
+            1,
+            50
+          ],
+          "name" : "crop-border-1",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            1,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            1
+          ],
+          "name" : "crop-border-2",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "cropPoint" : [
+            99,
+            70
+          ],
+          "displayPoint" : [
+            70,
+            99
+          ],
+          "name" : "crop-border-3",
+          "rgb" : [
+            90,
+            90,
+            90
+          ]
+        }
+      ],
+      "corners" : [
+        {
+          "cropPoint" : [
+            8,
+            8
+          ],
+          "displayPoint" : [
+            132,
+            8
+          ],
+          "name" : "source-bottom-left",
+          "rgb" : [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            8
+          ],
+          "displayPoint" : [
+            132,
+            92
+          ],
+          "name" : "source-bottom-right",
+          "rgb" : [
+            0,
+            255,
+            0
+          ]
+        },
+        {
+          "cropPoint" : [
+            8,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            8
+          ],
+          "name" : "source-top-left",
+          "rgb" : [
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "cropPoint" : [
+            92,
+            132
+          ],
+          "displayPoint" : [
+            8,
+            92
+          ],
+          "name" : "source-top-right",
+          "rgb" : [
+            255,
+            255,
+            0
+          ]
+        }
+      ],
+      "cropBox" : [
+        40,
+        60,
+        100,
+        140
+      ],
+      "displayPointSize" : [
+        140,
+        100
+      ],
+      "expectedPixelSize144dpi" : [
+        280,
+        200
+      ],
+      "file" : "nonzero-r270.pdf",
+      "id" : "nonzero-r270",
+      "macLegacyEditedRequiresReview" : true,
+      "mediaBox" : [
+        30,
+        40,
+        120,
+        180
+      ],
+      "portableCurrentLegacyEditedRequiresReview" : true,
+      "rotation" : 270,
+      "sourceSHA256" : "e0cf1230cb023ae249c3142407db81cc8e9affe973c6a14786ac336985d09185"
+    }
+  ],
+  "coordinateSystem" : "crop-relative displayed points, bottom-left origin; image sampling must invert Y",
+  "generator" : "BlurAction public synthetic PDF geometry fixtures",
+  "legacyPolicyNote" : "Mac allows unchanged legacy geometry, including zero-origin rotation 0\/180. The current portable loader conservatively blocks every edited legacy PDF pending host geometry review. This fixture suite records that limitation, not full legacy parity.",
+  "renderDpi" : 144,
+  "schemaVersion" : 1
+}

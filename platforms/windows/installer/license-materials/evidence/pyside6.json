@@ -1,0 +1,106 @@
+{
+  "status": "official-source-and-wheel-notice-materials-pending",
+  "evidence": {
+    "wheels": [
+      {
+        "distribution": "PySide6",
+        "filename": "pyside6-6.11.1-cp310-abi3-win_amd64.whl",
+        "wheel_sha256": "0968877ab1fb4ef3587a284da6fe05e8647ada56a6a3750b6395188e01f4aba6",
+        "metadata_path": "evidence/pyside6-PySide6-METADATA.txt",
+        "metadata_sha256": "16e8ef06955bbd087aded43dd0001d3787c050da3dc88ee5b2cd02b275a53dc1",
+        "license_member": "pyside6-6.11.1.dist-info/licenses/LicenseRef-Qt-Commercial.txt",
+        "license_sha256": "4f54763ac0fe2abd8f7f8d8fe370a94a08ebf84786aa0b91045bd6628deb08a3",
+        "source_candidate_terms": "Qt6.11.1 LGPL3/GPL2/GPL3 texts provided; alternative commercial notice is not a commercial license grant.",
+        "official_archive_url": "https://files.pythonhosted.org/packages/57/f2/d9d8ce1373dabb37e5919f63cd18446556079631d3f2eea3ada03c29f6b8/pyside6-6.11.1-cp310-abi3-win_amd64.whl",
+        "official_archive_sha256": "0968877ab1fb4ef3587a284da6fe05e8647ada56a6a3750b6395188e01f4aba6",
+        "archive_catalog_digest_matched": true
+      },
+      {
+        "distribution": "PySide6-Essentials",
+        "filename": "pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl",
+        "wheel_sha256": "63311bd48e32c584599ab04b9ef7c324082374cd2c9fa533f978fb893bb47e40",
+        "metadata_path": "evidence/pyside6-PySide6-Essentials-METADATA.txt",
+        "metadata_sha256": "947febf34850532ea5c13d1c9f65303da0320ecdd71b6d6e9fd39ca2107a09bb",
+        "license_member": "pyside6_essentials-6.11.1.dist-info/licenses/LicenseRef-Qt-Commercial.txt",
+        "license_sha256": "4f54763ac0fe2abd8f7f8d8fe370a94a08ebf84786aa0b91045bd6628deb08a3",
+        "source_candidate_terms": "Qt6.11.1 LGPL3/GPL2/GPL3 texts provided; alternative commercial notice is not a commercial license grant.",
+        "official_archive_url": "https://files.pythonhosted.org/packages/64/0e/b663ecc96ca57b5c91b83b6615d6b174380b0faf30338125c26e053d6aa7/pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl",
+        "official_archive_sha256": "63311bd48e32c584599ab04b9ef7c324082374cd2c9fa533f978fb893bb47e40",
+        "archive_catalog_digest_matched": true
+      },
+      {
+        "distribution": "PySide6-Addons",
+        "filename": "pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl",
+        "wheel_sha256": "0d13c4dfd671b050a48e4f8d8ddc724b7248f9c0437e7fc47fdf316278572923",
+        "metadata_path": "evidence/pyside6-PySide6-Addons-METADATA.txt",
+        "metadata_sha256": "fa494a48aed3df1d057a0a4ba1c13c4f1c272923683b0410790aa4773c0a9613",
+        "license_member": "pyside6_addons-6.11.1.dist-info/licenses/LicenseRef-Qt-Commercial.txt",
+        "license_sha256": "4f54763ac0fe2abd8f7f8d8fe370a94a08ebf84786aa0b91045bd6628deb08a3",
+        "source_candidate_terms": "Qt6.11.1 LGPL3/GPL2/GPL3 texts provided; alternative commercial notice is not a commercial license grant.",
+        "official_archive_url": "https://files.pythonhosted.org/packages/9a/bd/8adc4d350b3b363f3dfc8fccdcf5bfed25f7e36c2fff30c64e106f4f1572/pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl",
+        "official_archive_sha256": "0d13c4dfd671b050a48e4f8d8ddc724b7248f9c0437e7fc47fdf316278572923",
+        "archive_catalog_digest_matched": true
+      },
+      {
+        "distribution": "shiboken6",
+        "filename": "shiboken6-6.11.1-cp310-abi3-win_amd64.whl",
+        "wheel_sha256": "c2c6863aa80ec18c0f82cea3417837b279cdc60024ac17123461dc9042577df7",
+        "metadata_path": "evidence/pyside6-shiboken6-METADATA.txt",
+        "metadata_sha256": "a3d7449aeab6f17bafe2f33fb26d6375eee1aac72194679c502859c070ad9f31",
+        "license_member": "shiboken6-6.11.1.dist-info/licenses/LicenseRef-Qt-Commercial.txt",
+        "license_sha256": "4f54763ac0fe2abd8f7f8d8fe370a94a08ebf84786aa0b91045bd6628deb08a3",
+        "source_candidate_terms": "Qt6.11.1 LGPL3/GPL2/GPL3 texts provided; alternative commercial notice is not a commercial license grant.",
+        "official_archive_url": "https://files.pythonhosted.org/packages/52/b5/3f6fb2ee65b534193fb4ef713dd619dc31dadff5d12c16979a7699ad58be/shiboken6-6.11.1-cp310-abi3-win_amd64.whl",
+        "official_archive_sha256": "c2c6863aa80ec18c0f82cea3417837b279cdc60024ac17123461dc9042577df7",
+        "archive_catalog_digest_matched": true
+      }
+    ],
+    "full_terms": [
+      {
+        "name": "qt-6.11.1-LGPL3",
+        "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LGPL-3.0-only.txt",
+        "exit": 0,
+        "http_and_effective_url": "200 https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/LGPL-3.0-only.txt",
+        "bytes": 7651,
+        "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+        "status": "acquired",
+        "path": "official-acquisitions/qt-6.11.1-LGPL3.txt"
+      },
+      {
+        "name": "qt-6.11.1-GPL2",
+        "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-2.0-only.txt",
+        "exit": 0,
+        "http_and_effective_url": "200 https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-2.0-only.txt",
+        "bytes": 18092,
+        "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+        "status": "acquired",
+        "path": "official-acquisitions/qt-6.11.1-GPL2.txt"
+      },
+      {
+        "name": "qt-6.11.1-GPL3",
+        "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-3.0-only.txt",
+        "exit": 0,
+        "http_and_effective_url": "200 https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/GPL-3.0-only.txt",
+        "bytes": 35147,
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+        "status": "acquired",
+        "path": "official-acquisitions/qt-6.11.1-GPL3.txt"
+      },
+      {
+        "name": "qt-6.11.1-GPL-exception",
+        "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Qt-GPL-exception-1.0.txt",
+        "exit": 0,
+        "http_and_effective_url": "200 https://raw.githubusercontent.com/qt/qtbase/v6.11.1/LICENSES/Qt-GPL-exception-1.0.txt",
+        "bytes": 965,
+        "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2",
+        "status": "acquired",
+        "path": "official-acquisitions/qt-6.11.1-GPL-exception.txt"
+      }
+    ]
+  },
+  "holds": [
+    "No license option selected. Full Qt source license texts match declared legal license identifiers; exact PySide/Shiboken source/build provenance and collected notices still pending. Commercial notice is preserved as actual wheel content only."
+  ],
+  "actual_bundle_bound": false,
+  "redistribution_approved": false
+}

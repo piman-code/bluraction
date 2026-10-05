@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "pythonVersion": "3.14.7",
+  "route": "new-owned-stock-FFmpeg-GPL3-build-not-old-wheel-reproduction",
+  "releaseApproved": false,
+  "archives": [
+    {"id":"msys-base","filename":"msys2-base-x86_64-20260927.tar.xz","url":"https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.tar.xz","sha256":"ea2f31a0b6ade63914ce441ffb022f0f6aa96982bfefa2326460a26d5fb01322","evidence":"https://api.github.com/repos/msys2/msys2-installer/releases/tags/2026-09-27"},
+    {"id":"ffmpeg-source","filename":"ffmpeg-9.0.2.tar.xz","url":"https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz","sha256":"8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e","evidence":"PyAV-Org/pyav-ffmpeg 9.0.2-1 scripts/pkg.py"},
+    {"id":"pyav-source","filename":"av-19.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/cd/df/0a05835bf588932b7c87ad13ac8ffc781215a3071c755edf084a67331923/av-19.0.0.tar.gz","sha256":"f04d31a42570cb8ec8216569b94491e91848cdac2ac8e7591c6141fda6cc86ee","evidence":"https://pypi.org/pypi/av/19.0.0/json"}
+  ],
+  "wheels": [
+    {"id":"pip","version":"26.2.1","filename":"pip-26.2.1-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/pip-26.2.1-py3-none-any.whl","sha256":"71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e"},
+    {"id":"setuptools","version":"82.0.0","filename":"setuptools-82.0.0-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/e1/c6/76dc613121b793286a3f91621d7b75a2b493e0390ddca50f11993eadf192/setuptools-82.0.0-py3-none-any.whl","sha256":"70b18734b607bd1da571d097d236cfcfacaf01de45717d59e6e04b96877532e0"},
+    {"id":"Cython","version":"3.3.0","filename":"cython-3.3.0-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/bf/77/67b0b24e45073a699610e50f00c18474ff9b09ea29ecc95083bdf5e60acd/cython-3.3.0-py3-none-any.whl","sha256":"9b24b5c8cd536946b62086fcafee6d5509d3f549f72d553d2336af87ffbe0da1"},
+    {"id":"wheel","version":"0.46.3","filename":"wheel-0.46.3-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/87/22/b76d483683216dde3d67cba61fb2444be8d5be289bf628c13fc0fd90e5f9/wheel-0.46.3-py3-none-any.whl","sha256":"4b399d56c9d9338230118d705d9737a2a468ccca63d5e813e2a4fc7815d8bc4d"},
+    {"id":"packaging","version":"26.3","filename":"packaging-26.3-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl","sha256":"d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"},
+    {"id":"delvewheel","version":"1.13.1","filename":"delvewheel-1.13.1-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/ea/d0/fc48bf4c00b80c1ced5ce3740ea0c5d040758dafce385275e5de559375a4/delvewheel-1.13.1-py3-none-any.whl","sha256":"1b3bc696193a57e322b8bfd644de240be6e003066aae44cc3d5aef8cbee22ca3"},
+    {"id":"pefile","version":"2024.8.26","filename":"pefile-2024.8.26-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/54/16/12b82f791c7f50ddec566873d5bdd245baa1491bac11d15ffb98aecc8f8b/pefile-2024.8.26-py3-none-any.whl","sha256":"76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f"}
+  ],
+  "compilerTargets": [
+    {"name":"mingw-w64-x86_64-gcc","version":"16.2.0-4","filename":"mingw-w64-x86_64-gcc-16.2.0-4-any.pkg.tar.zst","sha256":"7928a168fe0827e6ba41ea672a9957a5bfa47f732f6922e86cf0f24dd61e5d0c","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-gcc"},
+    {"name":"mingw-w64-x86_64-nasm","version":"3.02-1","filename":"mingw-w64-x86_64-nasm-3.02-1-any.pkg.tar.zst","sha256":"63493c3f1ee2ea71727acfc338c53a6f5a18d1c2c21cdb5d39dea227756e2fe4","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-nasm"},
+    {"name":"mingw-w64-x86_64-pkgconf","version":"1~3.0.7-1","filename":"mingw-w64-x86_64-pkgconf-1~3.0.7-1-any.pkg.tar.zst","sha256":"37b97f372409fa7cf54d709bab892f34e9c62d2658230a09f783a89a55ae590e","evidence":"https://packages.msys2.org/packages/mingw-w64-x86_64-pkgconf"},
+    {"name":"diffutils","version":"3.12-1","filename":"diffutils-3.12-1-x86_64.pkg.tar.zst","sha256":"7902c8ce3d4dd69a0f5e98dc9d5c83c17b23314ba486169db57ef6e2835ce3b6","evidence":"https://packages.msys2.org/packages/diffutils"}
+  ],
+  "transitiveCompilerPolicy":"resolve from official pacman db, capture exact all-package name/version/url/SHA plus signatures before installation; replays must use acquired lock and archived packages, never re-resolve",
+  "msvcPolicy":"record actual runner MSVC tool version and cl/link/lib executable SHA before use; reject change during build; compiler identity is acquired-run evidence, not an invented historical vendor pin",
+  "supportComplete": false,
+  "correspondingSourceComplete": false
+}
