@@ -484,6 +484,107 @@ final class AutoFindTrackingLayerListTests {
         #expect(shown.isEmpty, "\(shown.count) points of the text block show")
     }
 
+    // MARK: Cancel a find, pick or remove what it found
+
+    @Test
+    func testAFindCanBeCancelledAndAddsNothing() async throws {
+        let session = try await ImageSession.open()
+        defer { session.close() }
+        let controller = session.controller, canvas = session.canvas
+        // A detector that keeps working until asked to stop (like the tiled text passes).
+        controller.autoDetect = { _, _ in
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline {
+                try Task.checkCancellation()
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            return [CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3)]
+        }
+        var finished = false
+        controller.findAndCover(.text) { finished = true }
+        #expect(controller.isExporting, "Editing waits while finding")
+        #expect(session.descendants.contains { ($0 as? NSButton)?.title == "취소" && !$0.isHidden }, "취소 is offered while finding")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let asked = Date()
+        controller.cancelCurrentOperation()
+        try await waitUntil { finished }
+        #expect(Date().timeIntervalSince(asked) < 2, "Stops promptly, not after the 10 s the detector would take")
+        #expect(canvas.regionsBinding?().isEmpty == true, "A cancelled find adds nothing")
+        #expect(!controller.isExporting)
+        #expect(!session.descendants.contains { ($0 as? NSButton)?.title == "취소" && !$0.isHidden })
+        #expect(session.descendants.contains { ($0 as? NSTextField)?.stringValue.contains("찾기를 취소했습니다") == true })
+    }
+
+    @Test
+    func testTextFindingStopsWhenCancelled() async throws {
+        let (image, _) = try streetOfSigns()
+        let task = Task.detached { try AutoDetector.detect(.text, in: image) }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    @Test
+    func testFoundAreasCanBePickedAgainAndRemovedTogether() async throws {
+        let session = try await ImageSession.open()
+        defer { session.close() }
+        let controller = session.controller, canvas = session.canvas
+        controller.autoDetect = { _, _ in
+            [CGRect(x: 0.05, y: 0.1, width: 0.2, height: 0.3), CGRect(x: 0.4, y: 0.1, width: 0.2, height: 0.3), CGRect(x: 0.7, y: 0.5, width: 0.2, height: 0.3)]
+        }
+        await find(controller, .faces)
+        let found = try #require(canvas.regionsBinding?()).map(\.id)
+        #expect(found.count == 3)
+        controller.perform(NSSelectorFromString("addRegionTapped")) // something else gets picked
+        #expect(controller.multiSelection.isEmpty)
+        controller.selectFoundTapped()
+        #expect(Set(controller.multiSelection) == Set(found), "The find's areas are picked together again")
+        controller.setLayerLocked(found[1], true)
+        controller.deleteFoundTapped()
+        let left = try #require(canvas.regionsBinding?()).map(\.id)
+        #expect(left.count == 2 && left.contains(found[1]) && !left.contains(found[0]) && !left.contains(found[2]),
+                "Unlocked found areas go, the locked one and the hand-made area stay")
+        controller.perform(NSSelectorFromString("undoTapped"))
+        #expect(canvas.regionsBinding?().count == 4, "One undo brings them back")
+    }
+
+    @Test
+    func testFoundButtonsActOnlyOnThePageTheFindRanOn() async throws {
+        let directory = try VideoExportTests().directory()
+        var urls: [URL] = []
+        for name in ["first.png", "second.png"] {
+            let url = directory.appendingPathComponent(name)
+            let context = try #require(CGContext(data: nil, width: 320, height: 160, bitsPerComponent: 8, bytesPerRow: 0,
+                                                 space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(gray: 0.7, alpha: 1)
+            context.fill(CGRect(x: 0, y: 0, width: 320, height: 160))
+            let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+            #expect(CGImageDestinationFinalize(destination))
+            urls.append(url)
+        }
+        let controller = MainWindowController()
+        controller.showWindow(nil)
+        defer { controller.close() }
+        let container = try #require(controller.window?.contentViewController as? MainContainerViewController)
+        controller.load(urls: urls)
+        container.view.layoutSubtreeIfNeeded()
+        controller.autoDetect = { _, _ in [CGRect(x: 0.1, y: 0.2, width: 0.2, height: 0.3), CGRect(x: 0.6, y: 0.2, width: 0.2, height: 0.3)] }
+        await find(controller, .faces)
+        let found = try #require(container.canvas.regionsBinding?()).map(\.id)
+        #expect(found.count == 2)
+        click(container.nextPageButton)
+        #expect(container.pageLabel.stringValue == "2 / 2")
+        controller.perform(NSSelectorFromString("addRegionTapped"))
+        controller.selectFoundTapped()
+        #expect(controller.multiSelection.isEmpty, "Nothing from page 1 is picked on page 2")
+        controller.deleteFoundTapped()
+        #expect(container.canvas.regionsBinding?().count == 1, "Page 2's own area stays")
+        click(container.previousPageButton)
+        #expect(container.pageLabel.stringValue == "1 / 2")
+        controller.selectFoundTapped()
+        #expect(Set(controller.multiSelection) == Set(found), "Back on page 1 the find's areas are picked again")
+    }
+
     // MARK: Review follow-ups
 
     /// Every label text in the controller's window (the hint line is private).
