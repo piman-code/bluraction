@@ -1,0 +1,182 @@
+{
+  "recordedDate": "2026-10-09",
+  "observedHost": "Windows x64",
+  "appVersion": "0.9.1.windows.local4",
+  "sourceBaseForLocalRepack": "66b29e7df0779548d9c28e4bbb0f0963fa34a894",
+  "mainFastForwardBeforeHandoff": "529a5584c955c9a7b7f76ff5cb664438bc4dc2fe",
+  "frozenExecutableSHA256": "33ed9550da34223c932c54de44539481cb064e6689c0dd481142b757df2d2b9e",
+  "unitChecks": {
+    "run": 97,
+    "passed": true,
+    "failures": [],
+    "errors": [],
+    "filesRetained": true,
+    "excludedDeletionAssertions": [
+      "test_close_context_cleanup_and_invalid_exact_query_no_resource_leak",
+      "test_same_cancel_error_during_active_pixels_and_decoder_close_preserves_first_error"
+    ],
+    "scope": "selected Windows Qt engine regressions; not complete OS acceptance"
+  },
+  "nativeVideoChecks": {
+    "cases": 9,
+    "allPassed": true,
+    "maskedExports": 4,
+    "sourceUnchanged": true,
+    "QAExecutableSHA256": "905e4616a8ef64c639d01b57212038cf75a286eeec3c20e9fc17153e818a8ffa",
+    "relationshipToFinal": "Final UI timer guard change only; native video and tracking core module hashes unchanged."
+  },
+  "recheckedPackagedAutoFind": {
+    "text-detection": {
+      "areas": 2,
+      "twoLinesCovered": true,
+      "seconds": 1.785
+    },
+    "face-detection": {
+      "blankChecked": true,
+      "positiveFaces": 1
+    },
+    "single-undo-and-render": {
+      "oneUndo": true,
+      "redo": true,
+      "maskPixels": true,
+      "originalUnchanged": true
+    },
+    "native-multi-tracking": {
+      "targets": 2,
+      "framesPerTarget": 24,
+      "forwardAndBackward": true,
+      "realCSRT": true,
+      "timestampsAndDisplacement": true
+    },
+    "real-video-file": {
+      "targets": 2,
+      "decodedFrames": 24,
+      "variableTimestamps": true,
+      "sourceFileUnchanged": true,
+      "actualPTSUsed": true,
+      "sourceSHA256": "d2d3b8330722dea4e92a51eea704b0950f2b98993fc642c7884a7e2e5d51103c"
+    },
+    "qt-window": {
+      "constructed": true,
+      "faceAndTextControls": true,
+      "directionControls": true
+    }
+  },
+  "performance": {
+    "fixture": "10-second 1920x1080 video; four blur regions",
+    "openingSeconds": 4.273791700019501,
+    "steadyDecodeAndRender": [
+      {
+        "offset": 0,
+        "meanSeconds": 0.06718253102835975,
+        "throughputFPS": 14.884821763828311
+      },
+      {
+        "offset": 5,
+        "meanSeconds": 0.07303278275428275,
+        "throughputFPS": 13.69248113363664
+      }
+    ],
+    "offscreenQtPlayback": {
+      "seconds": 2.001395900035277,
+      "presented_frames": 11,
+      "presented_fps": 5.496163952272568,
+      "offscreen": true
+    },
+    "pauseRestoresFullResolution": true,
+    "limits": [
+      "Measurements vary with system load. Offscreen playback is not monitor display FPS or a 30fps guarantee."
+    ]
+  },
+  "portablePackage": {
+    "sha256": "b3bbb73778267805b83290fa967c155131816e7dda59ed766141b24aad118323",
+    "bytes": 166157357,
+    "filesVerified": 935,
+    "publicReleaseReady": false,
+    "uploadedBinary": false,
+    "unsigned": true,
+    "installerBuilt": false
+  },
+  "ordinaryGui": {
+    "ASCIIExecutableNameVerified": true,
+    "responding": true,
+    "closedNormally": true,
+    "localizedExecutableFilename": "Observed ucrtbase.dll 0xc0000409 during window.show; identical bytes work under ASCII name. Root Qt/CRT issue not fixed."
+  },
+  "nativeMacChecksRunOnThisHost": false,
+  "remoteCIAfterHandoffCommit": "not dispatched",
+  "appSourceHashes": [
+    {
+      "module": "platforms.windows.bluraction",
+      "sha256": "2a57adfc49be5aeb7c2d21e7d99081ffd9346b86199ed2682202ce0ac92094e8"
+    },
+    {
+      "module": "platforms.windows.bluraction.candidate_smoke",
+      "sha256": "25a1e89345894fb7deaf565c7eb136ae735288d6e5d83d1caa6579639a92fc9b"
+    },
+    {
+      "module": "platforms.windows.bluraction.canonical_transport",
+      "sha256": "7a682d95b6c327fbf498095ac4d7492ee6e21b4d784e557f9c47ee3c670abd02"
+    },
+    {
+      "module": "platforms.windows.bluraction.canonical_video",
+      "sha256": "1c65883f01a718b1ee476f9bc430b7c00e344d4b2f85abf0e29de92995444e91"
+    },
+    {
+      "module": "platforms.windows.bluraction.local_decoder",
+      "sha256": "3779189084e922311bc223a3486ff815651d3b1dd8689b08d72ca6d3a82f95f0"
+    },
+    {
+      "module": "platforms.windows.bluraction.media",
+      "sha256": "6b79d92083a9ee00c98c996b125900d9a46e6ceb920fefd60c0b8c6e61fc172e"
+    },
+    {
+      "module": "platforms.windows.bluraction.pdf_geometry",
+      "sha256": "049088616812e3faa4c926dba8c23c120fc3f78d7d30b39a2ebb9cfd6112a4b6"
+    },
+    {
+      "module": "platforms.windows.bluraction.preview_worker",
+      "sha256": "a0ea152c62fa29c51f82e5d30f48c10f1e64c18deeb92950561c8fd4b1dd22ea"
+    },
+    {
+      "module": "platforms.windows.bluraction.renderer",
+      "sha256": "09df0815bca8ce7fb105b70c879fa7bb2e30fcf26de0619c5753b9df96d2dc8b"
+    },
+    {
+      "module": "platforms.windows.bluraction.ui",
+      "sha256": "fb9ea98957bcae16f636da6ef052b429347e377c36bb71e45388cfc49641d9bd"
+    },
+    {
+      "module": "platforms.windows.bluraction.video",
+      "sha256": "29b77359bc3aef98127999f12506e97ff141e2377ff4a9c0d7a92aa2d03b0379"
+    },
+    {
+      "module": "platforms.windows.bluraction.auto_find",
+      "sha256": "ef4d6ecf116f59b1fa70b760bfb8cd9d60bdf0f0e87e5dd03a97ccca58ff4908"
+    },
+    {
+      "module": "platforms.windows.bluraction.auto_find_smoke",
+      "sha256": "045c0d24250b5d21da80307ee8f059010df1598419da6d71cfc4bb1404e47c8f"
+    },
+    {
+      "module": "platforms.windows.bluraction.auto_tracking",
+      "sha256": "5f357bcd288bca894b6ac15526623ec25b15b06034f78ae624cae94315f77987"
+    },
+    {
+      "module": "platforms.windows.bluraction.display_geometry",
+      "sha256": "2382265d4afcb2809f3bc2e369540064814739d508e339e4b083fd67bdd6c382"
+    },
+    {
+      "module": "platforms.windows.bluraction.find_actions",
+      "sha256": "7dba4936e2311d97d1e475cfa703c2899918120158c43a6202d570ef0f4fadfd"
+    },
+    {
+      "module": "platforms.windows.bluraction.performance_smoke",
+      "sha256": "3f78ab66083d579adee8442dbbd681a6ace8d2be6c56b4620b1f30f924b924c8"
+    },
+    {
+      "module": "platforms.windows.bluraction.video_compat_smoke",
+      "sha256": "64f74d45ae6fa98393214062bb8fb25d8f81e2be2897b54f70056c4ef813b14d"
+    }
+  ]
+}
