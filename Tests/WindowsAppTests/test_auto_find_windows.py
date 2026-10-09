@@ -63,6 +63,36 @@ class AreaTests(unittest.TestCase):
         word=Detection((.11,.51,.15,.08),'text',.999)
         self.assertEqual(deduplicate([word,line]),[line])
 
+    def test_a_confident_word_does_not_hide_the_rest_of_its_line(self):
+        line=Detection((.1,.5,.6,.1),'text',.6)
+        word=Detection((.11,.51,.15,.08),'text',.9)
+        for order in ([word,line],[line,word]):
+            self.assertEqual([d.rect for d in deduplicate(order)],[line.rect])
+            self.assertEqual(deduplicate(order)[0].confidence,.9)
+
+    def test_a_confident_caption_does_not_hide_the_title_over_it(self):
+        title=Detection((.2,.3,.3,.12),'text',.55)
+        caption=Detection((.22,.33,.1,.03),'text',.95)
+        self.assertEqual([d.rect for d in deduplicate([caption,title])],[title.rect])
+
+    def test_near_identical_tile_boxes_still_collapse_to_the_first(self):
+        a=Detection((.1,.2,.3,.1),'text',.95)
+        b=Detection((.12,.21,.28,.1),'text',.9)
+        self.assertEqual(deduplicate([a,b]),[a])
+
+    def test_dense_page_joins_words_before_the_512_limit(self):
+        # 35 lines of 20 words: 700 word boxes, but only 35 lines.
+        words=[Detection((.02+j*.045,.05+i*.025,.04,.02),'text',.9) for i in range(35) for j in range(20)]
+        with self.assertRaises(ValueError):
+            deduplicate(words)
+        lines=text_lines(words,900,400)
+        self.assertEqual(len(lines),35)
+
+    def test_fragment_flood_is_refused_before_joining(self):
+        flood=[Detection((.001*(j%900),.001*(j//900),.0005,.0005),'text',.9) for j in range(6001)]
+        with self.assertRaises(ValueError):
+            text_lines(flood,900,400)
+
     def test_same_baseline_word_anchors_cover_missing_middle_words(self):
         anchors=[Detection((.05,.7,.14,.19),'text',.9),Detection((.44,.68,.15,.23),'text',.9)]
         lines=text_lines(anchors,900,400)

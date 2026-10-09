@@ -14,6 +14,9 @@ from .renderer import to_pillow
 
 
 MAX_FINDS = 512
+# Word fragments before joining (several tile passes overlap). Joining compares every pair,
+# so this bounds the work; a page this dense is split by the user.
+MAX_TEXT_FRAGMENTS = 6000
 
 
 def configure_cv():
@@ -83,17 +86,24 @@ def normalized_box(left, top, right, bottom, width, height, kind, score):
     return Detection((x, 1-top-h, w, h), kind, min(1., max(0., float(score))))
 
 
-def deduplicate(detections, cancel=None):
+def deduplicate(detections, cancel=None, limit=True):
     result = []
     for found in sorted(detections, key=lambda d: (d.confidence, d.rect[2]*d.rect[3]), reverse=True):
         check_cancel(cancel)
         area = found.rect[2]*found.rect[3]
-        if any(intersection(found.rect, old.rect) >= .75*min(area, old.rect[2]*old.rect[3])
-               for old in result):
+        clash = next((index for index, old in enumerate(result)
+                      if intersection(found.rect, old.rect) >= .75*min(area, old.rect[2]*old.rect[3])), None)
+        if clash is None:
+            result.append(found)
+            if limit and len(result) > MAX_FINDS:
+                raise ValueError('찾은 영역이 512개를 넘습니다. 페이지나 화면을 나눠 확인하세요.')
             continue
-        result.append(found)
-        if len(result) > MAX_FINDS:
-            raise ValueError('찾은 영역이 512개를 넘습니다. 페이지나 화면을 나눠 확인하세요.')
+        old = result[clash]
+        old_area = old.rect[2]*old.rect[3]
+        # A clearly larger box that holds a more confident fragment (a whole line over one
+        # word) replaces it, so the fragment never hides the rest of the line or title.
+        if area >= 1.5*old_area and intersection(found.rect, old.rect) >= .75*old_area:
+            result[clash] = Detection(found.rect, found.kind, max(found.confidence, old.confidence))
     return sorted(result, key=lambda d: d.rect[2]*d.rect[3], reverse=True)
 
 
@@ -109,7 +119,10 @@ def _tiles(width, height, grid):
 
 def text_lines(detections, width, height, cancel=None):
     """Join nearby word anchors on one baseline, including missed middle words."""
-    boxes = deduplicate(detections, cancel)
+    if len(detections) > MAX_TEXT_FRAGMENTS:
+        raise ValueError('글자 조각이 6000개를 넘습니다. 페이지나 화면을 나눠 확인하세요.')
+    # Word fragments can outnumber the final lines; the 512 limit applies to the joined result.
+    boxes = deduplicate(detections, cancel, limit=False)
     parents = list(range(len(boxes)))
     def root(index):
         while parents[index] != index:
