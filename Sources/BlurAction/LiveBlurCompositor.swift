@@ -31,7 +31,9 @@ final class LiveBlurCompositor: CALayer {
         backgroundColor = CGColor(gray: 0, alpha: 1)
         outputDelegate.owner = self
         contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        contentsGravity = .resizeAspect
+        // The layer is laid out at the media's shown aspect, like the editing canvas above it.
+        // Fill it exactly: decoded frames of non-square-pixel video are narrower than shown.
+        contentsGravity = .resize
         needsDisplayOnBoundsChange = true
     }
     override init(layer: Any) { super.init(layer: layer) }

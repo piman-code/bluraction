@@ -76,10 +76,71 @@ final class AutoFindTrackingLayerListTests {
         }
         let smooth = ObjectTracker.smoothed(samples)
         #expect(smooth.map(\.time) == samples.map(\.time))
+        // The center calms down; the box widens just enough to still hold each jittered box.
         func deviation(_ list: [ObjectTracker.Sample]) -> Double {
-            list.enumerated().dropFirst(2).dropLast(2).map { abs(Double($0.element.box.minX) - (0.1 + Double($0.offset) * 0.01)) }.max() ?? 0
+            list.enumerated().dropFirst(2).dropLast(2).map { abs(Double($0.element.box.midX) - (0.15 + Double($0.offset) * 0.01)) }.max() ?? 0
         }
         #expect(deviation(smooth) < deviation(samples) / 3)
+        #expect(zip(smooth, samples).allSatisfy { $0.box.contains($1.box) })
+        #expect(smooth.map(\.box.width).max()! < 0.1 + 2 * 0.04 + 1e-9, "Widened by at most the jitter swing")
+    }
+
+    @Test
+    func testSmoothingNeverLeavesTheTrackedBoxPartlyUncovered() {
+        // Still, then a sudden fast move, then a stop: an average alone trails the target at each change.
+        var x = 0.1
+        let samples = (0..<40).map { i -> ObjectTracker.Sample in
+            if (10..<25).contains(i) { x += 0.03 }
+            return .init(time: Double(i) / 30, box: CGRect(x: x, y: 0.3, width: 0.12, height: 0.15))
+        }
+        let smooth = ObjectTracker.smoothed(samples)
+        for (calm, raw) in zip(smooth, samples) {
+            #expect(calm.box.contains(raw.box), "At \(raw.time) s the cover \(calm.box) must hold the tracked box \(raw.box)")
+            #expect((0...1).contains(calm.box.minX) && calm.box.maxX <= 1 + 1e-9)
+        }
+        // Steady stretches stay as tracked.
+        func same(_ a: CGRect, _ b: CGRect) -> Bool {
+            [a.minX - b.minX, a.minY - b.minY, a.width - b.width, a.height - b.height].allSatisfy { abs($0) < 1e-9 }
+        }
+        #expect(same(smooth[2].box, samples[2].box))
+        #expect(same(smooth[35].box, samples[35].box))
+        // Against the frame edge it stays on the frame and still holds the box.
+        let edge = (0..<10).map { i in ObjectTracker.Sample(time: Double(i) / 30, box: CGRect(x: 0.88 + Double(i % 2) * 0.02, y: 0, width: 0.1, height: 0.1)) }
+        for (calm, raw) in zip(ObjectTracker.smoothed(edge), edge) {
+            #expect(calm.box.contains(raw.box) && calm.box.maxX <= 1 + 1e-9 && calm.box.minY >= 0)
+        }
+        // A face found again elsewhere starts a new run: no cover stretches across both places.
+        let jump = (0..<12).map { i in
+            ObjectTracker.Sample(time: Double(i) / 30, box: CGRect(x: i < 6 ? 0.1 : 0.6, y: 0.3, width: 0.1, height: 0.1))
+        }
+        let split = ObjectTracker.smoothed(jump, runStarts: [6])
+        #expect(zip(split, jump).allSatisfy { same($0.box, $1.box) }, "Each side stays where it was tracked")
+        #expect(ObjectTracker.smoothed(jump)[6].box.width > 0.3, "Without the split the average spans the jump")
+    }
+
+    @Test
+    func testAFaceFoundAgainMustFitAndBeUnambiguous() {
+        let last = CGRect(x: 0.40, y: 0.40, width: 0.10, height: 0.10)
+        let expected = CGSize(width: 0.08, height: 0.08)
+        func face(_ x: CGFloat, _ y: CGFloat, _ side: CGFloat = 0.08) -> CGRect {
+            CGRect(x: x - side / 2, y: y - side / 2, width: side, height: side)
+        }
+        // The nearest fitting face is taken.
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.47, 0.45), face(0.62, 0.45)]) == 0)
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.70, 0.45), face(0.46, 0.46)]) == 1)
+        // Too far away, far too small (a face in the background) or far too big: none.
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.80, 0.45)]) == nil)
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.46, 0.45, 0.03)]) == nil)
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.46, 0.45, 0.2)]) == nil)
+        // Two faces about as near as each other: do not guess.
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.40, 0.45), face(0.51, 0.45)]) == nil)
+        // A face another lost target already took this frame, or one a followed box holds, is not taken.
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.47, 0.45)], taken: [0]) == nil)
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.47, 0.45)],
+                                          held: [CGRect(x: 0.42, y: 0.40, width: 0.10, height: 0.10)]) == nil)
+        // With the neighbor held by its own tracker, the free face is no longer ambiguous.
+        #expect(ObjectTracker.refoundFace(near: last, expected: expected, among: [face(0.40, 0.45), face(0.51, 0.45)],
+                                          held: [CGRect(x: 0.47, y: 0.40, width: 0.08, height: 0.10)]) == 0)
     }
 
     // MARK: Auto-find

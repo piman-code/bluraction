@@ -62,6 +62,20 @@ final class BlurredVideoExporter: ObservableObject {
         guard size.width <= maximumFramePixels / size.height else { throw ExportError.videoFrameTooLarge }
     }
 
+    /// Stored pixel size and pixel aspect (horizontal:vertical spacing) of a track whose pixels
+    /// are not square; nil for square pixels or no usable aspect.
+    nonisolated static func anamorphicGeometry(_ description: CMFormatDescription)
+        -> (pixels: CGSize, horizontal: Int, vertical: Int)? {
+        guard let aspect = CMFormatDescriptionGetExtension(
+                description, extensionKey: kCMFormatDescriptionExtension_PixelAspectRatio) as? [String: Any],
+              let horizontal = (aspect[kCMFormatDescriptionKey_PixelAspectRatioHorizontalSpacing as String] as? NSNumber)?.intValue,
+              let vertical = (aspect[kCMFormatDescriptionKey_PixelAspectRatioVerticalSpacing as String] as? NSNumber)?.intValue,
+              horizontal > 0, vertical > 0, horizontal != vertical else { return nil }
+        let dimensions = CMVideoFormatDescriptionGetDimensions(description)
+        guard dimensions.width > 0, dimensions.height > 0 else { return nil }
+        return (CGSize(width: Int(dimensions.width), height: Int(dimensions.height)), horizontal, vertical)
+    }
+
     nonisolated static func outputBitRate(quality: QualityPreset, estimatedRate: Double, frameRate: Double, size: CGSize) throws -> Int {
         guard estimatedRate.isFinite, estimatedRate >= 0, estimatedRate <= maximumVideoBitRate,
               frameRate.isFinite, frameRate >= 0, frameRate <= maximumFrameRate else { throw ExportError.invalidVideoMetadata }
@@ -163,7 +177,11 @@ final class BlurredVideoExporter: ObservableObject {
         let duration = assetDuration.seconds
         let fps = Double(try await track.load(.nominalFrameRate))
         let estimatedRate = Double(try await track.load(.estimatedDataRate))
-        let rect = CGRect(origin: .zero, size: natural).applying(transform)
+        // Non-square pixels (anamorphic SAR): AVFoundation reports a stretched natural size,
+        // but the reader hands out the stored pixels. Keep those pixels and record the
+        // aspect in the output instead of drawing them into a wider, partly empty frame.
+        let anamorphic = try await track.load(.formatDescriptions).first.flatMap(Self.anamorphicGeometry)
+        let rect = CGRect(origin: .zero, size: anamorphic?.pixels ?? natural).applying(transform)
         let size = CGSize(width: ceil(rect.width), height: ceil(rect.height))
         try validateOutputSize(size)
         guard assetDuration.isValid, assetDuration.isNumeric, assetDuration.timescale > 0,
@@ -186,9 +204,17 @@ final class BlurredVideoExporter: ObservableObject {
         guard reader.canAdd(videoOut) else { throw ExportError.readSampleFailed }
         reader.add(videoOut)
         let rate = try outputBitRate(quality: quality, estimatedRate: estimatedRate, frameRate: fps, size: size)
-        let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
+        var videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(size.width), AVVideoHeightKey: Int(size.height),
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: rate]])
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: rate]]
+        if let anamorphic {
+            // A quarter turn swaps the axes, and with them the pixel's width and height.
+            let turned = abs(transform.b) > abs(transform.a)
+            videoSettings[AVVideoPixelAspectRatioKey] = [
+                AVVideoPixelAspectRatioHorizontalSpacingKey: turned ? anamorphic.vertical : anamorphic.horizontal,
+                AVVideoPixelAspectRatioVerticalSpacingKey: turned ? anamorphic.horizontal : anamorphic.vertical]
+        }
+        let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         guard writer.canAdd(videoIn) else { throw ExportError.writerInitFailed }
         writer.add(videoIn)
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoIn, sourcePixelBufferAttributes: [
