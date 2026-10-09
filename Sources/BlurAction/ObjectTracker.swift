@@ -110,15 +110,17 @@ enum ObjectTracker {
         let span = abs(until - start)
         let epsilon = 1.0 / 240
 
-        var faceTargets: Set<Int> = []
-        /// Marks targets whose starting box holds a detected face; only those may be re-found.
+        /// Targets whose starting box holds a detected face (only those may be re-found), with that
+        /// face's size as a share of the box, so a face found again can be checked for a fitting size.
+        var faceShares: [Int: CGSize] = [:]
         func classify(_ reference: CIImage) throws {
             guard options.reacquireFaces else { return }
             let faces = try detectFaces(in: reference)
             for (index, target) in targets.enumerated() {
                 let box = target.observation.boundingBox
-                if faces.contains(where: { box.contains(CGPoint(x: $0.midX, y: $0.midY)) && $0.width * $0.height >= box.width * box.height * 0.15 }) {
-                    faceTargets.insert(index)
+                let inside = faces.filter { box.contains(CGPoint(x: $0.midX, y: $0.midY)) && $0.width * $0.height >= box.width * box.height * 0.15 }
+                if let face = inside.max(by: { $0.width * $0.height < $1.width * $1.height }) {
+                    faceShares[index] = CGSize(width: face.width / box.width, height: face.height / box.height)
                 }
             }
         }
@@ -142,7 +144,7 @@ enum ObjectTracker {
                         targets[index].samples.append(Sample(time: time, box: result.boundingBox))
                         continue
                     }
-                    targets[index].state = options.reacquireFaces && faceTargets.contains(index) ? .searching(since: time) : .lost
+                    targets[index].state = options.reacquireFaces && faceShares[index] != nil ? .searching(since: time) : .lost
                     // Free its tracker now; a face found again starts a new one, and the handler holds at most 32.
                     let release = VNTrackObjectRequest(detectedObjectObservation: targets[index].observation)
                     release.trackingLevel = .accurate
@@ -154,17 +156,24 @@ enum ObjectTracker {
             let searching = targets.indices.filter { if case .searching = targets[$0].state { return true }; return false }
             if !searching.isEmpty {
                 let faces = try detectFaces(in: frame)
+                // A face inside a box still being followed belongs to that target.
+                let held = targets.filter { $0.state == .tracking }.map(\.observation.boundingBox)
+                var claimed = Set<Int>()
                 for index in searching {
                     guard case .searching(let since) = targets[index].state else { continue }
                     let last = targets[index].observation.boundingBox
-                    let window = last.insetBy(dx: -last.width, dy: -last.height)
-                    if let face = faces.min(by: { distance($0, last) < distance($1, last) }), window.contains(CGPoint(x: face.midX, y: face.midY)) {
+                    let share = faceShares[index] ?? CGSize(width: 1, height: 1)
+                    let expected = CGSize(width: last.width * share.width, height: last.height * share.height)
+                    if let pick = refoundFace(near: last, expected: expected, among: faces, taken: claimed, held: held) {
+                        claimed.insert(pick)
+                        let face = faces[pick]
                         // Keep the tracked box's size, centered on the face found again.
                         let size = targets[index].size
                         let box = CGRect(x: face.midX - size.width / 2, y: face.midY - size.height / 2,
                                          width: size.width, height: size.height).clamped01
                         targets[index].observation = VNDetectedObjectObservation(boundingBox: box)
                         targets[index].samples.append(Sample(time: time, box: box))
+                        targets[index].refound.append(time)
                         targets[index].state = .tracking
                     } else if abs(time - since) > options.searchSeconds {
                         targets[index].state = .lost
@@ -228,21 +237,48 @@ enum ObjectTracker {
         let cancelled = cancellation.isCancelled
         return targets.map { target in
             let ordered = target.samples.sorted { $0.time < $1.time }
-            return Outcome(samples: options.smoothing ? smoothed(ordered) : ordered,
+            // A face found again continues from a new place; its first sample opens a new run
+            // (in tracking order, so after it when tracking backward).
+            let runStarts = Set(target.refound.compactMap { time in
+                ordered.firstIndex { $0.time == time }.map { options.direction == .forward ? $0 : $0 + 1 }
+            })
+            return Outcome(samples: options.smoothing ? smoothed(ordered, runStarts: runStarts) : ordered,
                            lostTarget: target.state != .tracking && !cancelled, cancelled: cancelled)
         }
     }
 
     /// Centered moving average (window 5) of box centers and sizes; times are unchanged.
-    static func smoothed(_ samples: [Sample], radius: Int = 2) -> [Sample] {
+    /// An average lags a target that speeds up, slows down or reaches the end of its path,
+    /// so each box is then widened about its calm center until it holds the tracked box of
+    /// its own frame. The widening is held across the window so the size does not flicker.
+    /// `runStarts` are indices where a new run begins (a face found again elsewhere): each run is
+    /// smoothed on its own, so no average blends places from both sides of the jump.
+    static func smoothed(_ samples: [Sample], radius: Int = 2, runStarts: Set<Int> = []) -> [Sample] {
+        let cuts = runStarts.filter { $0 > 0 && $0 < samples.count }.sorted()
+        if !cuts.isEmpty {
+            return zip([0] + cuts, cuts + [samples.count]).flatMap { smoothed(Array(samples[$0..<$1]), radius: radius) }
+        }
         guard samples.count > 2, radius > 0 else { return samples }
+        func near(_ index: Int) -> ClosedRange<Int> { max(0, index - radius)...min(samples.count - 1, index + radius) }
+        let averaged = samples.indices.map { index -> (center: CGPoint, size: CGSize) in
+            let window = samples[near(index)], n = CGFloat(window.count)
+            return (CGPoint(x: window.map(\.box.midX).reduce(0, +) / n, y: window.map(\.box.midY).reduce(0, +) / n),
+                    CGSize(width: window.map(\.box.width).reduce(0, +) / n, height: window.map(\.box.height).reduce(0, +) / n))
+        }
+        // How much each frame must grow, about its averaged center, to hold its own raw box.
+        let growth = samples.indices.map { index -> CGSize in
+            let raw = samples[index].box, (center, size) = averaged[index]
+            let width = 2 * max(center.x - raw.minX, raw.maxX - center.x)
+            let height = 2 * max(center.y - raw.minY, raw.maxY - center.y)
+            return CGSize(width: max(0, width - size.width), height: max(0, height - size.height))
+        }
         return samples.indices.map { index in
-            let window = samples[max(0, index - radius)...min(samples.count - 1, index + radius)]
-            let n = CGFloat(window.count)
-            let midX = window.map(\.box.midX).reduce(0, +) / n, midY = window.map(\.box.midY).reduce(0, +) / n
-            let width = window.map(\.box.width).reduce(0, +) / n, height = window.map(\.box.height).reduce(0, +) / n
-            return Sample(time: samples[index].time,
-                          box: CGRect(x: midX - width / 2, y: midY - height / 2, width: width, height: height))
+            let (center, size) = averaged[index]
+            let width = size.width + (near(index).map { growth[$0].width }.max() ?? 0)
+            let height = size.height + (near(index).map { growth[$0].height }.max() ?? 0)
+            let box = CGRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
+            // Stay on the frame; the raw box is on it too, so it stays held.
+            return Sample(time: samples[index].time, box: box.intersection(CGRect(x: 0, y: 0, width: 1, height: 1)).union(samples[index].box))
         }
     }
 
@@ -253,7 +289,31 @@ enum ObjectTracker {
         var observation: VNDetectedObjectObservation
         var size: CGSize
         var samples: [Sample] = []
+        /// Times of samples where a lost face was found again.
+        var refound: [Double] = []
         var state: State = .tracking
+    }
+
+    /// The face (index into `faces`) a lost face target continues on, or nil. A face qualifies when
+    /// its center lies within one box size of the last place, its size is within half to double the
+    /// face the target started with, no other lost target took it this frame and no followed box
+    /// holds it. When the two nearest qualifying faces are too close to tell apart (within 30% of a
+    /// face's size), none is taken: the target stays lost rather than jumping to a neighbor.
+    static func refoundFace(near last: CGRect, expected: CGSize, among faces: [CGRect],
+                            taken: Set<Int> = [], held: [CGRect] = []) -> Int? {
+        let window = last.insetBy(dx: -last.width, dy: -last.height)
+        let fits = faces.indices.filter { index in
+            let face = faces[index], center = CGPoint(x: face.midX, y: face.midY)
+            guard !taken.contains(index), window.contains(center), !held.contains(where: { $0.contains(center) }),
+                  expected.width > 0, expected.height > 0 else { return false }
+            let ratio = (face.width / expected.width, face.height / expected.height)
+            return (0.5...2).contains(ratio.0) && (0.5...2).contains(ratio.1)
+        }.sorted { distance(faces[$0], last) < distance(faces[$1], last) }
+        guard let first = fits.first else { return nil }
+        if fits.count > 1, distance(faces[fits[1]], last) - distance(faces[first], last) <= max(expected.width, expected.height) * 0.3 {
+            return nil
+        }
+        return first
     }
 
     private static func distance(_ a: CGRect, _ b: CGRect) -> CGFloat {

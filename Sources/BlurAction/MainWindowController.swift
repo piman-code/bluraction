@@ -745,9 +745,9 @@ final class MainWindowController: NSWindowController {
         trackDirectionPopup.addItems(withTitles: ["앞으로 추적", "뒤로 추적", "앞뒤로 추적"])
         trackDirectionPopup.toolTip = "지금부터 항목 끝까지(앞으로), 영상 처음 쪽으로(뒤로), 또는 양쪽으로 따라갑니다. 여러 항목을 고르면 함께 추적합니다."
         smoothTrackingCheckbox.state = .on
-        smoothTrackingCheckbox.toolTip = "추적 위치의 잔떨림을 앞뒤 몇 프레임 평균으로 줄입니다."
+        smoothTrackingCheckbox.toolTip = "추적 위치의 잔떨림을 앞뒤 몇 프레임 평균으로 줄입니다. 가림은 그 프레임의 추적 위치를 항상 다 덮습니다."
         reacquireFacesCheckbox.state = .on
-        reacquireFacesCheckbox.toolTip = "얼굴이 든 영역을 놓치면 1.5초 동안 그 근처에서 얼굴을 다시 찾아 이어서 따라갑니다. 번호판·글자 같은 다른 대상에는 쓰지 않습니다."
+        reacquireFacesCheckbox.toolTip = "얼굴이 든 영역을 놓치면 1.5초 동안 그 근처에서 얼굴을 다시 찾아 이어서 따라갑니다. 크기가 크게 다르거나 다른 영역이 덮고 있거나 비슷한 거리에 얼굴이 여럿이면 고르지 않습니다. 번호판·글자 같은 다른 대상에는 쓰지 않습니다."
         let trackRow = NSStackView(views: [trackDirectionPopup, autoTrackButton])
         trackRow.spacing = 6
         autoTrackButton.title = "자동 추적"

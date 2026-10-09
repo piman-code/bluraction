@@ -1,5 +1,6 @@
 import Testing
 import AVFoundation
+import AppKit
 import CoreImage
 @testable import BlurAction
 
@@ -398,5 +399,104 @@ final class VideoExportTests {
         XCTAssertFalse(exporter.wasCancelled)
         XCTAssertNil(exporter.lastOutputURL)
         XCTAssertTrue(exporter.statusText.hasPrefix("실패:"))
+    }
+
+    /// Camcorder, broadcast and DVD video can store non-square pixels (SAR). The output keeps the
+    /// stored pixels and their aspect, instead of squeezing them into a wider frame beside a black strip.
+    @MainActor
+    @Test
+    func testNonSquarePixelVideoKeepsItsPixelsAspectAndCover() async throws {
+        let dir = try directory()
+        let plain = dir.appendingPathComponent("anamorphic.mp4"), turned = dir.appendingPathComponent("anamorphic-turned.mov")
+        // Red left half, blue right half; stored 320×240 with 4:3 pixels, shown 427×240.
+        try ffmpeg(["-f", "lavfi", "-i", "color=c=red:size=160x240:rate=10:duration=1",
+                    "-f", "lavfi", "-i", "color=c=blue:size=160x240:rate=10:duration=1",
+                    "-filter_complex", "[0][1]hstack,setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", plain.path])
+        try ffmpeg(["-display_rotation", "90", "-i", plain.path, "-c", "copy", turned.path])
+        for (input, stored, aspect) in [(plain, CGSize(width: 320, height: 240), (4, 3)),
+                                        (turned, CGSize(width: 240, height: 320), (3, 4))] {
+            let original = try Data(contentsOf: input)
+            let source = try XCTUnwrap(try await AVURLAsset(url: input).loadTracks(withMediaType: .video).first)
+            let (natural, transform) = try await source.load(.naturalSize, .preferredTransform)
+            let canvas = CGRect(origin: .zero, size: natural).applying(transform).size
+            // Solid cover over the right half of what is shown.
+            let shape = RegionShape.rectangle(id: UUID(), origin: CGPoint(x: canvas.width / 2, y: 0),
+                                              size: CGSize(width: canvas.width / 2, height: canvas.height))
+            var effect = RegionEffect(blurRadius: 20, featherRadius: 0)
+            effect.style = .solid
+            let exporter = BlurredVideoExporter()
+            await exporter.export(input: input, pairs: [(shape, effect)], quality: .high, canvasBounds: canvas)
+            let output = try XCTUnwrap(exporter.lastOutputURL, exporter.statusText)
+            XCTAssertEqual(try Data(contentsOf: input), original)
+            let result = AVURLAsset(url: output)
+            let track = try XCTUnwrap(try await result.loadTracks(withMediaType: .video).first)
+            let description = try XCTUnwrap(try await track.load(.formatDescriptions).first)
+            let geometry = try XCTUnwrap(BlurredVideoExporter.anamorphicGeometry(description), "The output records its pixel aspect")
+            XCTAssertEqual(geometry.pixels, stored)
+            XCTAssertEqual(geometry.horizontal * aspect.1, geometry.vertical * aspect.0)
+            // Shown with the same shape as the source, so saved covers line up when it is opened again.
+            let shown = try await track.load(.naturalSize)
+            XCTAssertEqual(Double(shown.width / shown.height), Double(canvas.width / canvas.height), accuracy: 0.005)
+
+            let reader = try AVAssetReader(asset: result)
+            let out = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            reader.add(out)
+            XCTAssertTrue(reader.startReading())
+            let buffer = try XCTUnwrap(out.copyNextSampleBuffer().flatMap(CMSampleBufferGetImageBuffer))
+            reader.cancelReading()
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+            let width = CVPixelBufferGetWidth(buffer), row = CVPixelBufferGetHeight(buffer) / 2
+            XCTAssertEqual(CGSize(width: width, height: CVPixelBufferGetHeight(buffer)), stored)
+            let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(buffer)).assumingMemoryBound(to: UInt8.self)
+            func brightest(_ x: Int) -> UInt8 {
+                let pixel = base + row * CVPixelBufferGetBytesPerRow(buffer) + x * 4
+                return max(pixel[0], pixel[1], pixel[2])
+            }
+            // The shown left half keeps the picture all the way; the right half is covered to the edge.
+            XCTAssertTrue((0..<(width / 2 - 6)).allSatisfy { brightest($0) > 120 }, "Picture on the left half")
+            XCTAssertTrue(((width / 2 + 6)..<width).allSatisfy { brightest($0) < 40 }, "Cover on the right half, no strip")
+        }
+    }
+
+    /// While playing, the preview shows the stored (narrower) pixels; they must fill the shown
+    /// video area under the editing canvas, not sit squeezed between black bars.
+    @MainActor
+    @Test
+    func testNonSquarePixelVideoFillsThePreviewWhilePlaying() async throws {
+        _ = NSApplication.shared
+        let directory = try directory()
+        let input = directory.appendingPathComponent("anamorphic.mp4")
+        try ffmpeg(["-f", "lavfi", "-i", "color=c=red:size=160x240:rate=30:duration=4",
+                    "-f", "lavfi", "-i", "color=c=blue:size=160x240:rate=30:duration=4",
+                    "-filter_complex", "[0][1]hstack,setsar=4/3", "-c:v", "libx264", "-pix_fmt", "yuv420p", input.path])
+        let session = VideoSession(directory: directory)
+        session.controller.showWindow(nil)
+        session.controller.load(url: input)
+        defer { session.container.playerLayer.player?.pause(); session.controller.close() }
+        try await waitUntil {
+            session.container.slider.isEnabled && session.container.playerLayer.player?.currentItem?.status == .readyToPlay
+        }
+        session.container.view.layoutSubtreeIfNeeded()
+        let layer = session.container.liveBlur
+        let shown = layer.bounds.size
+        XCTAssertEqual(Double(shown.width / shown.height), 320.0 * 4 / 3 / 240, accuracy: 0.02)
+        // Playing hands the preview decoded pixel buffers (stored 320×240), not a still image.
+        session.container.playerLayer.player?.play()
+        try await waitUntil { (layer.contents as! CGImage?)?.width == 320 }
+        session.container.playerLayer.player?.pause()
+        let width = Int(shown.width), height = Int(shown.height)
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        layer.render(in: context)
+        let data = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        func pixel(_ x: Int) -> (red: UInt8, blue: UInt8) {
+            let offset = (height / 2) * width * 4 + x * 4
+            return (data[offset], data[offset + 2])
+        }
+        XCTAssertTrue(pixel(2).red > 150, "Red reaches the left edge: \(pixel(2))")
+        XCTAssertTrue(pixel(width - 3).blue > 150, "Blue reaches the right edge: \(pixel(width - 3))")
+        XCTAssertTrue(pixel(width / 2 - 4).red > 150 && pixel(width / 2 + 4).blue > 150, "The split sits in the middle")
     }
 }
