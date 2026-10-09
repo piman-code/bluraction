@@ -235,7 +235,7 @@ class EditorCanvas(QWidget):
         return self._desired is not None and (self._preview.isNull()
             or self._accepted_context != self._desired.context or self.state != self._desired.state)
 
-    def request_video_seek(self, source, seconds, state, selection_ids=()):
+    def request_video_seek(self, source, seconds, state, selection_ids=(), *, playback=False):
         self.cancel_color_pick('영상 탐색으로 색 고르기를 취소했습니다.')
         self.selection_ids = set(selection_ids)
         previous = self._desired
@@ -245,7 +245,9 @@ class EditorCanvas(QWidget):
             self.update()
             return
         request = PreviewRequest(self.preview_context, QImage(), deepcopy(state), seconds,
-            decode=lambda cancel: source.frame_at_timed(seconds, cancel=cancel))
+            decode=lambda cancel: (source.frame_at_timed(seconds, cancel=cancel, preview=True) if playback
+                                   else source.frame_at_timed(seconds, cancel=cancel)),
+            source_size=(source._first_image.width(),source._first_image.height()) if playback else None)
         self._desired = request
         self.preview_queue.discard_pending(cancel_active=True)
         self.preview_queue.submit(request)
@@ -652,7 +654,7 @@ class BlurActionWindow(QMainWindow):
         self._closing = False
         self._asset_clock = None
         self._asset_timer = QTimer(self)
-        self._asset_timer.setInterval(30)
+        self._asset_timer.setInterval(16)
         self._asset_timer.timeout.connect(self._asset_tick)
         self._asset_audio = _AssetAudio(self)
         self._asset_audio.started.connect(self._asset_audio_started)
@@ -660,11 +662,13 @@ class BlurActionWindow(QMainWindow):
         self._asset_audio.failed.connect(self._asset_audio_failed)
         self._asset_audio.queue.idle.connect(self.preview_idle)
         self._operation_label = '새 파일 저장'
+        self._last_find_page = None
+        self._last_find_ids = set()
         self.audio = QAudioOutput(self)
         self._create_video_player()
         self.cover_color = QColor('black')
         self.drawing_color = QColor('red')
-        self.setWindowTitle('BlurAction')
+        self.setWindowTitle('BlurAction 0.9.1 Windows 성능 개선 검수 (local4)')
         self.resize(1220, 820)
         self.setAcceptDrops(True)
         self.canvas = EditorCanvas()
@@ -805,6 +809,23 @@ class BlurActionWindow(QMainWindow):
         form.addRow('가리기 방식', self.style)
         form.addRow('강도 / 칸 크기', self.radius)
         form.addRow('경계 부드럽게', self.feather)
+        find_controls = QWidget()
+        find_form = QFormLayout(find_controls)
+        find_form.setContentsMargins(0, 0, 0, 0)
+        self.find_faces_button = QPushButton('얼굴 찾기')
+        self.find_text_button = QPushButton('글자 찾기')
+        self.find_faces_button.clicked.connect(lambda: self.auto_find('faces'))
+        self.find_text_button.clicked.connect(lambda: self.auto_find('text'))
+        find_form.addRow(self.find_faces_button, self.find_text_button)
+        self.find_then_track = QCheckBox('영상에서 찾은 뒤 앞뒤로 추적')
+        self.find_then_track.setChecked(False)
+        find_form.addRow(self.find_then_track)
+        self.pick_finds_button = QPushButton('찾은 것 고르기')
+        self.remove_finds_button = QPushButton('찾은 것 지우기')
+        self.pick_finds_button.clicked.connect(self.select_latest_finds)
+        self.remove_finds_button.clicked.connect(self.remove_latest_finds)
+        find_form.addRow(self.pick_finds_button, self.remove_finds_button)
+        form.addRow('자동 찾기', find_controls)
         cover_color = QPushButton('가리기 색…')
         cover_color.clicked.connect(lambda: self.choose_color(True))
         self.cover_pick = QPushButton('스포이드')
@@ -935,6 +956,17 @@ class BlurActionWindow(QMainWindow):
         remove_key.clicked.connect(self.remove_keyframe)
         time_form.addRow(remove_key)
         self.track_button = QPushButton('선택 항목 자동 추적')
+        self.track_direction = QComboBox()
+        for label, value in (('앞으로','forward'),('뒤로','backward'),('앞뒤로','both')):
+            self.track_direction.addItem(label, value)
+        self.track_direction.setCurrentIndex(2)
+        time_form.addRow('추적 방향', self.track_direction)
+        self.track_smoothing = QCheckBox('추적 흔들림 줄이기')
+        self.track_smoothing.setChecked(True)
+        self.track_reacquire = QCheckBox('놓친 얼굴 다시 찾기')
+        self.track_reacquire.setChecked(True)
+        time_form.addRow(self.track_smoothing)
+        time_form.addRow(self.track_reacquire)
         self.track_button.clicked.connect(self.auto_track)
         time_form.addRow(self.track_button)
         form.addRow(self.time_controls)
@@ -1341,7 +1373,8 @@ class BlurActionWindow(QMainWindow):
         clock=self._asset_clock
         if clock is None or not clock.playing or self.workspace.busy or self._closing: return
         try:
-            self.workspace.video._guard()  # Metadata only; source SHA stays in IO transactions.
+            # Frame IO and the GUI acceptance guard validate the source. Avoid
+            # repeating filesystem work on every clock tick while decoding.
             position=self._asset_audio.position()
             if position is None: position=clock.position()
             position=min(clock.duration,position)
@@ -1351,7 +1384,7 @@ class BlurActionWindow(QMainWindow):
             if not self.canvas.preview_queue.busy:
                 self.canvas.preview_context=(self._video_generation,id(self.workspace.page),self._seek_epoch)
                 self.canvas.request_video_seek(self.workspace.video,position,self.workspace.page.state,
-                                               self.workspace.selection_ids)
+                                                 self.workspace.selection_ids,playback=True)
             if position==clock.duration:
                 self._pause_asset(); self.play_button.setText('▶ 재생')
         except Exception as error:
@@ -1551,6 +1584,13 @@ class BlurActionWindow(QMainWindow):
         self.erase_from_now.setVisible(video is not None)
         self.erase_from_now.setEnabled(bool(video and not self.workspace.busy))
         self.track_button.setEnabled(bool(video and selected and not self.workspace.busy))
+        can_find = bool(page and not self.workspace.busy and not self.canvas.preview_pending)
+        self.find_faces_button.setEnabled(can_find)
+        self.find_text_button.setEnabled(can_find)
+        self.find_then_track.setVisible(video is not None)
+        recent = bool(self._last_find_page is page and self._last_find_ids and not self.workspace.busy)
+        self.pick_finds_button.setEnabled(recent)
+        self.remove_finds_button.setEnabled(recent)
         if video:
             self.scrubber.setRange(0, round(video.duration * 1000))
             self.time_label.setText(f'{self._transport_time:.2f} / {video.duration:.2f} 초')
@@ -1574,7 +1614,7 @@ class BlurActionWindow(QMainWindow):
         self.font_warning.setText('이 PC에 없는 글꼴: ' + ', '.join(sorted({name for _, name in missing}))
             + '\n미리보기의 대체 글꼴은 배치를 바꿀 수 있습니다. 설치된 글꼴을 선택하고 적용한 뒤 출력하세요.' if missing else '')
         self.font_warning.setVisible(bool(missing))
-        self.setWindowTitle((self.workspace.title + ' — ' if page else '') + 'BlurAction')
+        self.setWindowTitle((self.workspace.title + ' — ' if page else '') + 'BlurAction 0.9.1 Windows 성능 개선 검수 (local4)')
         self._refreshing = False
 
     def change_page(self, offset):
@@ -1936,6 +1976,7 @@ class BlurActionWindow(QMainWindow):
     def preview_idle(self):
         if self.canvas.preview_queue.busy or self._asset_audio.queue.busy: return
         self._update_color_pick_buttons()
+        self._update_find_buttons()
         if self._deferred_operation is not None:
             task, self._deferred_operation = self._deferred_operation, None
             if self._operation_cancelled is not None and self._operation_cancelled.is_set():
@@ -1968,7 +2009,14 @@ class BlurActionWindow(QMainWindow):
                     control.setValue(value)
                     control.blockSignals(blocked)
         self.canvas.busy = self.workspace.busy or self.canvas.preview_pending
+        self._update_find_buttons()
         self._try_start_playback()
+
+    def _update_find_buttons(self):
+        ready = bool(self.workspace.page and not self.workspace.busy
+                     and not self.canvas.preview_pending and not self.canvas.image.isNull())
+        self.find_faces_button.setEnabled(ready)
+        self.find_text_button.setEnabled(ready)
 
     def validate_preview_source(self, request):
         from .media import validate_source_identities
@@ -2059,6 +2107,7 @@ class BlurActionWindow(QMainWindow):
             if self._asset_clock.playing or self._play_after_seek:
                 self._play_after_seek=False; self._pause_asset()
                 self.play_button.setText('▶ 재생')
+                self.seek_video(float(self._asset_clock.anchor))
             elif not self.canvas.preview_pending:
                 if self._asset_clock.anchor>=self._asset_clock.duration:
                     self.seek_video(0,resume=True)
@@ -2200,18 +2249,106 @@ class BlurActionWindow(QMainWindow):
                 row.data(Qt.ItemDataRole.UserRole), self.keyframe_time.value()))
 
     def auto_track(self):
-        chosen = self.workspace.selected()
-        if not chosen or not self.workspace.video or self.workspace.busy or self.canvas.preview_pending:
+        selected = self.workspace._selected_ids_with_groups()
+        targets = [(deepcopy(item), region) for item, region in self.workspace.items()
+                   if self.workspace.item_id(item, region) in selected]
+        if not targets or not self.workspace.video or self.workspace.busy or self.canvas.preview_pending:
             return
-        from .video import track
-        item, region = chosen
-        properties = item['effect'] if region else item
+        from .auto_tracking import track_many
+        from .find_actions import commit_tracking
         source, start = self.workspace.video, self.workspace.time or 0
-        interval = properties.get('timeRange', [0, 0])
-        end = source.duration if interval == [0, 0] else min(source.duration, interval[1])
-        self._after_operation = lambda frames: self.workspace.update_selected(keyframes=frames)
+        page = self.workspace.page
+        direction = self.track_direction.currentData()
+        smoothing, reacquire = self.track_smoothing.isChecked(), self.track_reacquire.isChecked()
+        def commit(results):
+            if self.workspace.page is not page or self.workspace.video is not source:
+                raise ValueError('원본이 바뀌어 이전 추적 결과를 적용하지 않았습니다.')
+            source.validate()
+            commit_tracking(self.workspace, results)
+            self.tracking_summary(results)
+        self._after_operation = commit
+        self._discard_cancelled_result = True
         self._operation_label = '자동 추적'
-        self.start_export(lambda cancel, progress: track(source, deepcopy(item), region, start, end, cancel, progress))
+        self.start_export(lambda cancel, progress: track_many(source, targets, start,
+            direction=direction, smoothing=smoothing, reacquire_faces=reacquire, cancel=cancel, progress=progress))
+
+    def _current_find_ids(self):
+        if self._last_find_page is not self.workspace.page:
+            return set()
+        return self._last_find_ids & {self.workspace.item_id(item, region) for item,region in self.workspace.items()}
+
+    def select_latest_finds(self):
+        if not self.workspace.busy:
+            self.workspace.selection_ids = self._current_find_ids()
+            self.refresh()
+
+    def remove_latest_finds(self):
+        if not self.workspace.busy:
+            identifiers = self._current_find_ids()
+            if identifiers:
+                self.workspace.selection_ids = identifiers
+                self.perform(self.workspace.delete_selected)
+
+    def tracking_summary(self, results):
+        lost = sum(r.lost for r in results)
+        skipped = sum(r.skipped for r in results)
+        if lost or skipped:
+            QMessageBox.information(self, '추적 결과 확인',
+                f'{lost}개 대상의 추적이 중단됐고 {skipped}개 항목을 건너뛰었습니다.\n'
+                '중단된 대상은 확인된 구간만 적용했습니다. 영상 전체를 재생하며 가림을 확인하세요.')
+
+    def auto_find(self, kind):
+        if not self.workspace.page or self.workspace.busy or self.canvas.preview_pending:
+            return
+        from .auto_find import detect
+        from .find_actions import prepared_regions, apply_tracks_to_items, commit_find
+        page, source = self.workspace.page, self.workspace.video
+        start = self.workspace.time or 0.
+        image = QImage(self.canvas.image)
+        if image.isNull():
+            return
+        state = deepcopy(page.state)
+        style, radius, feather = self.style.currentData(), self.radius.value(), self.feather.value()
+        color = {'red':self.cover_color.redF(),'green':self.cover_color.greenF(),
+                 'blue':self.cover_color.blueF(),'alpha':self.cover_color.alphaF()}
+        tracking = bool(source and self.find_then_track.isChecked() and start < source.duration)
+        smoothing, reacquire = self.track_smoothing.isChecked(), self.track_reacquire.isChecked()
+        def task(cancel, progress):
+            from .media import validate_sources, check_cancel
+            validate_sources([page], cancel)
+            detection_image = source.frame_at_timed(start,cancel=cancel).image if source else image
+            found = detect(detection_image, kind, cancel, lambda v: progress(v*(.25 if tracking else 1.)))
+            regions = prepared_regions(found,state,start,source.duration if source else None,
+                style=style,radius=radius,feather=feather,color=color)
+            results = []
+            if tracking and regions:
+                from .auto_tracking import track_many
+                results = track_many(source,[(item,True) for item in regions],start,direction='both',
+                    smoothing=smoothing,reacquire_faces=reacquire,cancel=cancel,
+                    progress=lambda v: progress(.25+.75*v))
+                apply_tracks_to_items([(item,True) for item in regions],results)
+            validate_sources([page], cancel)
+            check_cancel(cancel)
+            return regions, results
+        def commit(result):
+            from .media import validate_source_identities
+            if self.workspace.page is not page or self.workspace.video is not source or page.state != state:
+                raise ValueError('편집 원본이 바뀌어 찾은 결과를 적용하지 않았습니다.')
+            validate_source_identities([page])
+            regions, results = result
+            identifiers = commit_find(self.workspace, regions)
+            # Selection is cleared in place by undo/redo. Keep a separate set
+            # so redone finds can still be selected/removed as one operation.
+            self._last_find_page, self._last_find_ids = page, set(identifiers)
+            self.statusBar().showMessage(f'{len(identifiers)}개 영역을 찾았습니다.')
+            if not identifiers:
+                QMessageBox.information(self,'자동 찾기','새로 가릴 영역을 찾지 못했습니다. 작은 얼굴·흐린 글자는 직접 확인하세요.')
+            if results:
+                self.tracking_summary(results)
+        self._after_operation = commit
+        self._discard_cancelled_result = True
+        self._operation_label = '얼굴 자동 찾기' if kind == 'faces' else '글자 자동 찾기'
+        self.start_export(task)
 
     def confirm_discard(self):
         if not self.workspace.dirty:

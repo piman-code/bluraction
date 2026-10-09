@@ -3,4 +3,4 @@
 The macOS AppKit implementation remains in Sources/BlurAction.
 """
 
-__version__ = "0.8.0.dev1"
+__version__ = "0.9.1.windows.local4"

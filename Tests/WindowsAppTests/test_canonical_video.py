@@ -249,7 +249,7 @@ class CanonicalVideoTests(unittest.TestCase):
         with self.assertRaises(video.CanonicalVideoReview): provider.descriptor_sha256
         self.assertEqual(self.source.read_bytes(),self.original)
 
-    def test_known_hdr_high_depth_unknown_sar_hold_instead_of_silent_conversion(self):
+    def test_known_hdr_and_high_depth_hold_instead_of_silent_conversion(self):
         for changes in (dict(color_trc=16),dict(color_trc=18),
                 dict(format=SimpleNamespace(components=[SimpleNamespace(bits=10)]))):
             # Inventory does not claim color proof. The pixel policy must refuse
@@ -257,12 +257,15 @@ class CanonicalVideoTests(unittest.TestCase):
             provider=self.build(decoder_access=self.access(pixel_rows=[frame(500,**changes)]))
             with self.assertRaises(video.CanonicalVideoReview): provider.frame_at(F(1,2))
             self.assertFalse(self.inventories[-1].complete)
+    def test_omitted_sar_uses_shared_square_pixel_display_policy(self):
         self.rows=[frame(500,sample_aspect_ratio=None),frame(750,sample_aspect_ratio=None)]
         provider=self.build(decoder_access=self.access(inventory_change=lambda inv:
-            setattr(inv,'_decoder',replace(inv.decoder,codec_sar=None))))
-        with self.assertRaisesRegex(video.CanonicalVideoReview,'SAR unavailable'):
-            provider.frame_at(F(1,2))
-        self.assertFalse(self.inventories[-1].complete)
+            setattr(inv,'_decoder',replace(inv.decoder,codec_sar=None,guessed_stream_sar=None))))
+        pixels=provider.frame_at(F(1,2))
+        self.assertEqual((pixels.image.width(),pixels.image.height()),(96,64))
+        self.assertIsNone(provider._inventory[0].frame_sar)
+        self.assertIsNone(provider._inventory.decoder.codec_sar)
+        self.assertTrue(self.inventories[-1].complete)
         self.assertEqual(self.source.read_bytes(),self.original)
 
     def test_primary_pixel_failure_survives_decoder_teardown_error_and_candidate_is_cleaned(self):
