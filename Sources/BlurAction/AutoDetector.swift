@@ -98,6 +98,52 @@ enum AutoDetector {
         return found
     }
 
+    /// A line of text as read: what it says and where (normalized, bottom-left origin).
+    struct RecognizedLine: Equatable {
+        var text: String
+        var box: CGRect
+    }
+
+    /// Lines of text the Vision recognizer reads, whole frame plus 2×2 tiles for large frames.
+    /// Used by phrase covering, which needs the words, not only the places. Internal for tests.
+    static func recognizedLines(in image: CIImage) throws -> [RecognizedLine] {
+        try Task.checkCancellation()
+        var found = try recognizedPass(image)
+        if max(image.extent.width, image.extent.height) >= 800 {
+            let whole = image.extent
+            let width = whole.width / 2, height = whole.height / 2
+            for column in 0..<2 {
+                for row in 0..<2 {
+                    try Task.checkCancellation()
+                    let tile = CGRect(x: whole.minX + CGFloat(column) * width - width * 0.1, y: whole.minY + CGFloat(row) * height - height * 0.1,
+                                      width: width * 1.2, height: height * 1.2).intersection(whole)
+                    let crop = image.cropped(to: tile).transformed(by: CGAffineTransform(translationX: -tile.minX, y: -tile.minY))
+                    found += try recognizedPass(crop).map { line in
+                        RecognizedLine(text: line.text, box: CGRect(
+                            x: (tile.minX - whole.minX + line.box.minX * tile.width) / whole.width,
+                            y: (tile.minY - whole.minY + line.box.minY * tile.height) / whole.height,
+                            width: line.box.width * tile.width / whole.width, height: line.box.height * tile.height / whole.height))
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    private static func recognizedPass(_ image: CIImage) throws -> [RecognizedLine] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["ko-KR", "en-US"]
+        request.usesLanguageCorrection = false
+        request.minimumTextHeight = 0
+        do { try VNImageRequestHandler(ciImage: image, options: [:]).perform([request]) }
+        catch { throw DetectError.visionFailed }
+        return (request.results ?? []).compactMap { observation in
+            guard let text = observation.topCandidates(1).first?.string else { return nil }
+            return RecognizedLine(text: text, box: observation.boundingBox)
+        }
+    }
+
     /// Joins padded text boxes that touch into one cover per sign or line group, but only while the
     /// joined cover stays compact: at most 30% more area than the text boxes it is made of actually
     /// cover. Each cover keeps its original boxes, so steps of slanted signs cannot add up their
@@ -169,6 +215,53 @@ enum AutoDetector {
             let image = try await generator.image(at: CMTime(seconds: max(0, time), preferredTimescale: 600)).image
             return CIImage(cgImage: image)
         } catch { throw DetectError.frameUnavailable }
+    }
+
+    /// The box of the person under `point` (normalized, bottom-left origin) on this frame, or nil when
+    /// no person is there. Uses Vision's person-instance mask; it finds people, not who they are.
+    static func personBox(in image: CIImage, at point: CGPoint) throws -> CGRect? {
+        let handler = VNImageRequestHandler(ciImage: image, options: [:])
+        let request = VNGeneratePersonInstanceMaskRequest()
+        do { try handler.perform([request]) } catch { throw DetectError.visionFailed }
+        guard let observation = request.results?.first else { return nil }
+        let instance = Int(instanceLabel(in: observation.instanceMask, at: point))
+        guard instance != 0 else { return nil }
+        let mask: CVPixelBuffer
+        do { mask = try observation.generateScaledMaskForImage(forInstances: IndexSet(integer: instance), from: handler) }
+        catch { throw DetectError.visionFailed }
+        return maskBox(mask)
+    }
+
+    /// Instance label (0 = background) under a normalized, bottom-left point of the label mask.
+    static func instanceLabel(in labels: CVPixelBuffer, at point: CGPoint) -> UInt8 {
+        CVPixelBufferLockBaseAddress(labels, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(labels, .readOnly) }
+        let width = CVPixelBufferGetWidth(labels), height = CVPixelBufferGetHeight(labels)
+        guard width > 0, height > 0, let base = CVPixelBufferGetBaseAddress(labels), point.x.isFinite, point.y.isFinite else { return 0 }
+        let column = min(width - 1, max(0, Int(point.x * CGFloat(width))))
+        let row = min(height - 1, max(0, Int((1 - point.y) * CGFloat(height))))
+        return base.advanced(by: row * CVPixelBufferGetBytesPerRow(labels)).assumingMemoryBound(to: UInt8.self)[column]
+    }
+
+    /// Tight box of the pixels that belong to the instance (rows from the top, as the mask is upright).
+    static func maskBox(_ mask: CVPixelBuffer) -> CGRect? {
+        CVPixelBufferLockBaseAddress(mask, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(mask, .readOnly) }
+        let width = CVPixelBufferGetWidth(mask), height = CVPixelBufferGetHeight(mask)
+        guard width > 0, height > 0, let base = CVPixelBufferGetBaseAddress(mask) else { return nil }
+        let stride = CVPixelBufferGetBytesPerRow(mask)
+        var left = width, right = -1, top = height, bottom = -1
+        for row in 0..<height {
+            let line = base.advanced(by: row * stride).assumingMemoryBound(to: UInt8.self)
+            for column in 0..<width where line[column] >= 128 {
+                left = min(left, column); right = max(right, column)
+                top = min(top, row); bottom = max(bottom, row)
+            }
+        }
+        guard right >= left, bottom >= top else { return nil }
+        let w = CGFloat(width), h = CGFloat(height)
+        return CGRect(x: CGFloat(left) / w, y: 1 - CGFloat(bottom + 1) / h,
+                      width: CGFloat(right - left + 1) / w, height: CGFloat(bottom - top + 1) / h)
     }
 
     /// Intersection over union of two boxes (0 when they do not overlap).

@@ -58,6 +58,17 @@ enum BlurRenderer {
             }
             guard let cg = ctx.makeImage() else { throw RenderError.maskAllocation }
             let hard = CIImage(cgImage: cg).transformed(by: .init(translationX: extent.minX, y: extent.minY)).cropped(to: extent)
+            // Reverse cover: the shape is kept and everything else is covered. Erasures would need
+            // their own meaning on a reverse region, so they are refused rather than guessed.
+            let reversed: CIImage
+            if effect.inverted {
+                guard effect.erasures.isEmpty,
+                      let flipped = CIFilter(name: "CIColorInvert", parameters: [kCIInputImageKey: hard])?.outputImage
+                else { throw RenderError.invalidEffect }
+                reversed = flipped.cropped(to: extent)
+            } else {
+                reversed = hard
+            }
             // Make feather the approximate 5–95% transition width in source pixels,
             // centered on the path edge. Clamp the mask before blurring so shapes
             // touching the image edge do not pick up black from outside the frame.
@@ -65,7 +76,7 @@ enum BlurRenderer {
             let mask: CIImage
             if effect.featherRadius > 0 {
                 let sigma = Double(effect.featherRadius) / 3.29
-                let softened = hard.clampedToExtent().applyingGaussianBlur(sigma: sigma)
+                let softened = reversed.clampedToExtent().applyingGaussianBlur(sigma: sigma)
                 let gain: CGFloat = 1 / 0.9
                 let bias: CGFloat = -0.05 / 0.9
                 mask = softened.applyingFilter("CIColorMatrix", parameters: [
@@ -78,7 +89,7 @@ enum BlurRenderer {
                     "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
                 ]).cropped(to: extent)
             } else {
-                mask = hard
+                mask = reversed
             }
             let cover: CIImage
             switch effect.style {

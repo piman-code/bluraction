@@ -40,7 +40,8 @@ struct VideoProjectFile {
     static func decode(_ data: Data) throws -> VideoProjectFile {
         guard data.count <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
         let inspection = try ProjectJSONTokens.inspect(data)
-        guard inspection.version == 3, let rawTimeline = inspection.rawTimeline else {
+        // Version 4 exists only for reverse covers; older apps and the Windows reader refuse it.
+        guard inspection.version == 3 || inspection.version == 4, let rawTimeline = inspection.rawTimeline else {
             throw ProjectFile.ProjectError.unsupportedVersion
         }
         let tree = try Node.parse(data)
@@ -60,12 +61,12 @@ struct VideoProjectFile {
         // refuse known model values outside the exact integer Double domain.
         try tree.rejectInexactModelIntegers(excluding: ["timeline"], original: data)
         let payload = try JSONDecoder().decode(Payload.self, from: data)
-        guard payload.version == 3, payload.mediaKind == "video",
+        guard payload.version == formatVersion(for: payload.regions), payload.mediaKind == "video",
               payload.producer.name == "BlurAction", ["macos", "windows"].contains(payload.producer.platform),
               validProducerVersion(payload.producer.version),
               payload.timeline == (try VideoTimeline.decode(rawTimeline)) else { throw ProjectFile.ProjectError.invalidContent }
         _ = try ProjectFile.decode(ProjectFile(mediaPath: payload.mediaPath, regions: payload.regions,
-            drawings: payload.drawings, sourceSHA256: payload.sourceSHA256).encoded())
+            drawings: payload.drawings, sourceSHA256: payload.sourceSHA256).encoded(), allowsReverse: true)
         guard payload.sourceSHA256.count == 64 else { throw ProjectFile.ProjectError.invalidContent }
         return VideoProjectFile(tree: tree, payload: payload)
     }
@@ -125,7 +126,14 @@ struct VideoProjectFile {
             try fields(try shape.value(kind), required, required, "shape." + kind)
             let effect = try region.value("effect")
             let requiredEffect: Set<String> = ["blurRadius", "featherRadius", "timeRange", "enabled", "keyframes"]
-            try fields(effect, requiredEffect, requiredEffect.union(["style", "color", "groupID", "erasures", "name", "locked"]), "effect")
+            try fields(effect, requiredEffect, requiredEffect.union(["style", "color", "groupID", "erasures", "name", "locked", "inverted"]), "effect")
+            if let flag = effect.optional("inverted") {
+                guard case .bool(let reverse) = flag else { throw ProjectFile.ProjectError.invalidContent }
+                // A reverse cover with rubbed-out parts has no defined meaning (see BlurRenderer).
+                if reverse, let strokes = effect.optional("erasures"), !strokes.isNull, try !strokes.arrayValues().isEmpty {
+                    throw ProjectFile.ProjectError.invalidContent
+                }
+            }
             if let c = effect.optional("color"), !c.isNull { try color(c, "effect.color") }
             try temporal(effect, "effect")
         }
@@ -137,6 +145,11 @@ struct VideoProjectFile {
         }
     }
 
+    /// 3 for ordinary video projects; 4 once any region is a reverse cover.
+    static func formatVersion(for regions: [ProjectFile.Region]) -> Int {
+        regions.contains { $0.effect.inverted } ? 4 : 3
+    }
+
     static func validProducerVersion(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 64 && value.utf8.allSatisfy {
             (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [43, 46, 95, 45].contains($0)
@@ -146,7 +159,7 @@ struct VideoProjectFile {
     static func make(mediaPath: String, binding: VideoProjectSourceBinding, producerVersion: String,
                      regions: [ProjectFile.Region], drawings: [DrawingAnnotation]) throws -> VideoProjectFile {
         guard validProducerVersion(producerVersion) else { throw ProjectFile.ProjectError.invalidContent }
-        let payload = Payload(mediaPath: mediaPath, sourceSHA256: binding.source.sha256,
+        let payload = Payload(version: formatVersion(for: regions), mediaPath: mediaPath, sourceSHA256: binding.source.sha256,
             producer: Producer(version: producerVersion), timeline: binding.timeline, regions: regions, drawings: drawings)
         return try decode(JSONEncoder().encode(payload))
     }
@@ -181,6 +194,7 @@ struct VideoProjectFile {
             })
         }
         result.set("regions", try patchItems(tree.value("regions"), baseline.regions, current.regions, normalized.regions, ids: { $0.shape.id }))
+        result.set("version", .number(Data(String(Self.formatVersion(for: normalized.regions)).utf8)))
         result.set("drawings", try patchItems(tree.value("drawings"), baseline.drawings, current.drawings, normalized.drawings, ids: { $0.id }))
         return try Self.decode(result.data())
     }

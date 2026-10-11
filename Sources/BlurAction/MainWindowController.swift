@@ -109,6 +109,14 @@ final class MainWindowController: NSWindowController {
     private let pickHiddenCheckbox = NSButton(checkboxWithTitle: "숨긴 블러 영역도 캔버스에서 고르기", target: nil, action: nil)
     /// Detector used by 자동 찾기; tests replace it (real face images are not used in tests).
     var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] = AutoDetector.detect
+    /// Reader used by 문구 가리기; tests replace it with fixed text.
+    var recognizeLines: (CIImage) throws -> [AutoDetector.RecognizedLine] = AutoDetector.recognizedLines
+    private let phraseField = NSTextField()
+    private let phraseButton = NSButton(title: "문구 찾아 가리기", target: nil, action: nil)
+    private var phraseTask: Task<Result<[PhraseCover.Span], Error>, Never>?
+    /// Person under a point on a frame (Vision); tests replace it because synthetic frames have no people.
+    var findPersonBox: (CIImage, CGPoint) throws -> CGRect? = AutoDetector.personBox
+    private let personButton = NSButton(title: "사람 고르기 (역가림)", target: nil, action: nil)
     private var windowCloseObserver: NSObjectProtocol?
     private var trackingCancellation: ObjectTracker.Cancellation?
     private var annotationColorRow: NSStackView?
@@ -222,6 +230,7 @@ final class MainWindowController: NSWindowController {
             MainActor.assumeIsolated {
                 self?.trackingCancellation?.cancel()
                 self?.findTask?.cancel()
+                self?.phraseTask?.cancel()
             }
         }
         window.setContentSize(NSSize(width: 1180, height: 700))
@@ -784,7 +793,27 @@ final class MainWindowController: NSWindowController {
         findTools.orientation = .vertical
         findTools.alignment = .leading
         findTools.spacing = 6
-        for view in [findTitle, findRow, foundRow, trackAfterFindCheckbox, findHint] as [NSView] { findTools.addArrangedSubview(view) }
+        phraseField.placeholderString = "가릴 문구 (쉼표로 여러 개)"
+        phraseField.controlSize = .small
+        phraseField.toolTip = "화면에 나오는 이 글자를 읽어 그 자리를 가립니다. 두 글자 이상, 공백과 기호는 무시합니다."
+        phraseField.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        phraseButton.bezelStyle = .rounded
+        phraseButton.controlSize = .small
+        phraseButton.target = self
+        phraseButton.action = #selector(findPhrasesTapped)
+        phraseButton.toolTip = "영상이면 1초 간격으로 화면 글자를 읽어, 입력한 문구가 보이는 동안 그 자리를 가립니다."
+        let phraseRow = NSStackView(views: [phraseField, phraseButton])
+        phraseRow.spacing = 6
+        let phraseHint = NSTextField(wrappingLabelWithString: "입력한 문구가 화면에 보이는 동안만 가립니다. 영상은 1초 간격으로 읽으므로 아주 짧게 나오는 글자는 놓칠 수 있습니다.")
+        phraseHint.font = .systemFont(ofSize: 11)
+        phraseHint.textColor = .secondaryLabelColor
+        phraseHint.preferredMaxLayoutWidth = 260
+        personButton.bezelStyle = .rounded
+        personButton.controlSize = .small
+        personButton.target = self
+        personButton.action = #selector(pickPersonTapped)
+        personButton.toolTip = "영상에서 남길 사람을 캔버스에서 클릭하면, 그 사람만 남기고 나머지 화면을 가립니다. 같은 사람을 자동 추적으로 따라갑니다."
+        for view in [findTitle, findRow, foundRow, trackAfterFindCheckbox, findHint, phraseRow, phraseHint, personButton] as [NSView] { findTools.addArrangedSubview(view) }
         pickHiddenCheckbox.state = .off
         pickHiddenCheckbox.target = self
         pickHiddenCheckbox.action = #selector(pickHiddenChanged(_:))
@@ -1475,6 +1504,7 @@ final class MainWindowController: NSWindowController {
         else if let pageExportCancellation { pageExportCancellation.cancel() }
         else if let trackingCancellation { trackingCancellation.cancel() }
         else if let findTask { findTask.cancel() }
+        else if let phraseTask { phraseTask.cancel() }
         else { exporter.cancel() }
     }
     func cancelCurrentOperation() { cancelTapped() }
@@ -1798,6 +1828,198 @@ final class MainWindowController: NSWindowController {
         }
     }
 
+    @objc private func findPhrasesTapped() { findPhrases() }
+
+    /// Covers each place the typed phrases are read, for as long as they stay on screen. Video is sampled
+    /// once a second; a still image is read once. Internal for tests.
+    func findPhrases(_ text: String? = nil, completion: (() -> Void)? = nil) {
+        guard !isExporting, doc.mediaKind != .none, canvas.bounds.width > 0, canvas.bounds.height > 0 else { NSSound.beep(); completion?(); return }
+        let parsed = PhraseCover.parse(text ?? phraseField.stringValue)
+        guard !parsed.phrases.isEmpty else {
+            workflowHint.stringValue = "가릴 문구를 두 글자 이상 입력하세요. 여러 개는 쉼표로 나눕니다."
+            completion?()
+            return
+        }
+        let phrases = parsed.phrases, tooShort = parsed.tooShort
+        let recognize = recognizeLines
+        let url = doc.url
+        let still = doc.hasVideo ? nil : doc.currentCGImage
+        let isVideo = doc.hasVideo
+        let duration = isVideo ? doc.duration : 0
+        let sampling = PhraseCover.sampleTimes(duration: duration, step: 1)
+        stopPlayback()
+        endGesture()
+        let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: nil)
+        setExporting(true)
+        workflowHint.stringValue = "문구 찾는 중…"
+        progressIndicator.isIndeterminate = false
+        progressIndicator.doubleValue = 0
+        progressIndicator.isHidden = false
+        cancelButton.isHidden = false
+        progressLabel.stringValue = "문구 찾는 중… (취소할 수 있음)"
+        let report: @MainActor (Int, Int) -> Void = { [weak self] done, total in
+            guard let self else { return }
+            self.progressIndicator.doubleValue = Double(done) / Double(max(1, total)) * 100
+            self.progressLabel.stringValue = "문구 찾는 중 \(done)/\(total) (취소할 수 있음)"
+        }
+        let task = Task.detached(priority: .userInitiated) { () -> Result<[PhraseCover.Span], Error> in
+            do {
+                var samples: [(time: Double, hits: [CGRect])] = []
+                for (index, time) in sampling.times.enumerated() {
+                    try Task.checkCancellation()
+                    let image: CIImage
+                    if let still { image = CIImage(cgImage: still) }
+                    else if let url { image = try await AutoDetector.frame(of: url, at: time) }
+                    else { throw AutoDetector.DetectError.frameUnavailable }
+                    let lines = try recognize(image)
+                    let hits = lines.filter { PhraseCover.matches($0.text, phrases: phrases) }.map { PhraseCover.coverBox($0.box) }
+                    samples.append((time, hits))
+                    await report(index + 1, sampling.times.count)
+                }
+                try Task.checkCancellation()
+                // A still image has one sample: each hit is simply a place to cover.
+                if still != nil { return .success(samples.flatMap(\.hits).map { PhraseCover.Span(box: $0, start: 0, end: 0) }) }
+                return .success(PhraseCover.spans(samples: samples, step: sampling.step, duration: duration))
+            } catch { return .failure(error) }
+        }
+        phraseTask = task
+        Task { [weak self] in
+            let result = await task.value
+            guard let self else { completion?(); return }
+            self.phraseTask = nil
+            self.progressIndicator.stopAnimation(nil)
+            self.progressIndicator.isIndeterminate = false
+            self.progressIndicator.isHidden = true
+            self.cancelButton.isHidden = true
+            self.progressLabel.stringValue = ""
+            self.setExporting(false)
+            if task.isCancelled {
+                self.workflowHint.stringValue = "문구 찾기를 취소했습니다."
+                completion?()
+                return
+            }
+            guard context == FindContext(url: self.doc.url, page: self.pageWorkspace?.currentIndex, time: nil) else {
+                self.workflowHint.stringValue = "찾는 동안 화면이 바뀌어 결과를 넣지 않았습니다. 다시 찾아 주세요."
+                completion?()
+                return
+            }
+            self.placePhraseCovers(result, isVideo: isVideo, tooShort: tooShort)
+            completion?()
+        }
+    }
+
+    private func placePhraseCovers(_ result: Result<[PhraseCover.Span], Error>, isVideo: Bool, tooShort: Int) {
+        let spans: [PhraseCover.Span]
+        switch result {
+        case .failure(let error): workflowHint.stringValue = error.localizedDescription; return
+        case .success(let found): spans = found
+        }
+        let size = canvas.bounds.size
+        guard !isExporting, size.width > 0, size.height > 0 else { return }
+        // A span must have a real time range on video; anything empty is dropped rather than made whole-video.
+        let usable = spans.filter { !isVideo || $0.end > $0.start }
+        guard !usable.isEmpty else {
+            workflowHint.stringValue = "문구를 찾지 못했습니다. 글자가 작거나 흐리면 화면을 확대해 다시 시도하세요."
+            return
+        }
+        let existing = pairs.filter { $0.effect.name?.hasPrefix("문구 ") == true }.count
+        var created: [UUID] = []
+        checkpoint()
+        for (offset, span) in usable.enumerated() {
+            let rect = CGRect(x: span.box.minX * size.width, y: span.box.minY * size.height,
+                              width: span.box.width * size.width, height: span.box.height * size.height)
+            let id = UUID()
+            var effect = RegionEffect.alwaysOn()
+            if isVideo { effect.timeRange = span.start...span.end }
+            applyDefaultCover(to: &effect)
+            effect.name = "문구 \(existing + offset + 1)"
+            pairs.append((.rectangle(id: id, origin: rect.origin, size: rect.size), effect))
+            created.append(id)
+        }
+        canvas.setRegionsFromExternal(pairs.map(\.shape))
+        lastFound = (created, doc.url, pageWorkspace?.currentIndex)
+        if let first = created.first { canvas.selectRegion(id: first) }
+        multiSelection = created.count > 1 ? created : []
+        var message = "문구 \(created.count)곳을 찾아 가렸습니다. 필요 없는 것은 지우세요. ⌘Z로 한 번에 되돌립니다."
+        if tooShort > 0 { message += " 두 글자보다 짧은 \(tooShort)개는 건너뛰었습니다." }
+        workflowHint.stringValue = message
+        refreshAfterEdit()
+    }
+
+    @objc private func pickPersonTapped() { startPersonPick() }
+
+    /// Reverse covers are video-only, so the person pick is too. The next canvas click picks the person.
+    private func startPersonPick() {
+        guard doc.hasVideo, !isExporting else { NSSound.beep(); return }
+        workflowHint.stringValue = "남길 사람을 캔버스에서 클릭하세요. Esc로 취소합니다."
+        window?.makeFirstResponder(canvas)
+        canvas.colorPickHandler = { [weak self] point in self?.keepPerson(atCanvasPoint: point) }
+    }
+
+    /// Keeps the person under a canvas point on the current frame and covers everything else. Internal for tests.
+    func keepPerson(atCanvasPoint point: CGPoint) {
+        guard !isExporting, doc.hasVideo, let url = doc.url else { return }
+        let size = canvas.displayRect.size
+        guard size.width > 0, size.height > 0 else { return }
+        let normal = CGPoint(x: point.x / size.width, y: point.y / size.height)
+        guard (0...1).contains(normal.x), (0...1).contains(normal.y) else {
+            workflowHint.stringValue = "사람 위를 클릭하세요."
+            return
+        }
+        guard let time = playheadTime else { return }
+        let find = findPersonBox
+        stopPlayback()
+        endGesture()
+        let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: time)
+        setExporting(true)
+        workflowHint.stringValue = "사람 찾는 중…"
+        let task = Task.detached(priority: .userInitiated) { () -> Result<CGRect?, Error> in
+            do {
+                let image = try await AutoDetector.frame(of: url, at: time)
+                try Task.checkCancellation()
+                return .success(try find(image, normal))
+            } catch { return .failure(error) }
+        }
+        Task { [weak self] in
+            let result = await task.value
+            guard let self else { return }
+            self.setExporting(false)
+            guard context == FindContext(url: self.doc.url, page: self.pageWorkspace?.currentIndex, time: self.playheadTime) else {
+                self.workflowHint.stringValue = "찾는 동안 화면이 바뀌어 결과를 넣지 않았습니다. 다시 시도해 주세요."
+                return
+            }
+            switch result {
+            case .failure(let error): self.workflowHint.stringValue = error.localizedDescription
+            case .success(nil): self.workflowHint.stringValue = "그 자리에서 사람을 찾지 못했습니다. 사람의 몸 위를 클릭해 보세요."
+            case .success(let box?): self.placeKeptPerson(box, time: time)
+            }
+        }
+    }
+
+    private func placeKeptPerson(_ box: CGRect, time: Double) {
+        let size = canvas.bounds.size
+        guard !isExporting, size.width > 0, size.height > 0 else { return }
+        // A little room around the body so hair and hands stay inside the kept area.
+        let padded = box.insetBy(dx: -box.width * 0.04, dy: -box.height * 0.04).clampedToUnit
+        let rect = CGRect(x: padded.minX * size.width, y: padded.minY * size.height,
+                          width: padded.width * size.width, height: padded.height * size.height)
+        let id = UUID()
+        var effect = RegionEffect.created(at: time, videoDuration: doc.duration)
+        applyDefaultCover(to: &effect)
+        effect.inverted = true
+        effect.name = "사람 \(pairs.filter { $0.effect.name?.hasPrefix("사람 ") == true }.count + 1)"
+        checkpoint()
+        pairs.append((.rectangle(id: id, origin: rect.origin, size: rect.size), effect))
+        canvas.setRegionsFromExternal(pairs.map(\.shape))
+        lastFound = ([id], doc.url, pageWorkspace?.currentIndex)
+        canvas.selectRegion(id: id)
+        workflowHint.stringValue = "이 사람만 남기고 나머지를 가렸습니다. 사람이 움직이면 자동 추적으로 따라가게 하세요. ⌘Z로 되돌립니다."
+        refreshAfterEdit()
+        if trackAfterFindCheckbox.state == .on {
+            startTracking(ids: [id], choice: .both, undoWithPrevious: true)
+        }
+    }
+
     /// Areas from the latest find that still exist on the page it ran on, in creation order.
     private var foundIDsStillHere: [UUID] {
         guard lastFound.url == doc.url, lastFound.page == pageWorkspace?.currentIndex else { return [] }
@@ -1893,7 +2115,7 @@ final class MainWindowController: NSWindowController {
                         trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox, eraserTargetPopup,
                         textFontPopup, textBoldCheckbox, textBackgroundPopup, trackDirectionPopup, smoothTrackingCheckbox,
                         reacquireFacesCheckbox, findFacesButton, findTextButton, trackAfterFindCheckbox, pickHiddenCheckbox,
-                        selectFoundButton, deleteFoundButton] as [NSControl] {
+                        selectFoundButton, deleteFoundButton, phraseButton, phraseField, personButton] as [NSControl] {
             control.isEnabled = !value
         }
         mainContainer.playPauseButton.isEnabled = !value && doc.hasVideo
@@ -2402,7 +2624,8 @@ final class MainWindowController: NSWindowController {
             }
         }
         if target != 1 {
-            for index in regions.indices where regions[index].effect.isActive(at: time) && !regions[index].effect.locked {
+            // A reverse cover takes no rubbed-out parts (see BlurRenderer), so the eraser passes over it.
+            for index in regions.indices where regions[index].effect.isActive(at: time) && !regions[index].effect.locked && !regions[index].effect.inverted {
                 let shown = RegionEditing.displayed(regions[index], at: time).boundingRect
                 guard shown.intersects(area) else { continue }
                 regions[index].effect.erasures.append(EraseStroke(points: Self.clamped(points, near: shown, width: width),
@@ -2772,6 +2995,26 @@ final class MainWindowController: NSWindowController {
 
     @objc private func toggleVisibilityFromMenu(_ sender: NSMenuItem) { toggleLayerVisibility(sender) }
     @objc private func toggleLockFromMenu(_ sender: NSMenuItem) { toggleLayerLock(sender) }
+
+    @objc private func reverseFromMenu(_ sender: NSMenuItem) {
+        guard let id = layerID(from: sender) else { return }
+        setLayerReversed(id, !(pairs.first { $0.shape.id == id }?.effect.inverted ?? false))
+    }
+
+    /// Keeps the selected shape and covers the rest of the frame (video only). Internal for tests.
+    func setLayerReversed(_ id: UUID, _ reversed: Bool) {
+        guard !isExporting, doc.hasVideo,
+              let index = pairs.firstIndex(where: { $0.shape.id == id }),
+              pairs[index].effect.inverted != reversed else { return }
+        if reversed, !pairs[index].effect.erasures.isEmpty {
+            showError("지우개로 지운 부분이 있는 영역은 역가림으로 바꿀 수 없습니다. 지운 부분을 되돌린 뒤 다시 시도하세요.")
+            return
+        }
+        endGesture()
+        checkpoint()
+        pairs[index].effect.inverted = reversed
+        refreshAfterEdit()
+    }
 
     @objc private func renameFromMenu(_ sender: NSMenuItem) {
         guard let id = layerID(from: sender) else { return }
@@ -4030,6 +4273,16 @@ final class MainWindowController: NSWindowController {
         let lockItem = NSMenuItem(title: state.locked ? "잠금 풀기" : "잠그기", action: #selector(toggleLockFromMenu(_:)), keyEquivalent: "")
         lockItem.target = self; lockItem.representedObject = id
         menu.addItem(lockItem)
+        // Reverse covers are video-only: their project format (4) is refused by older apps.
+        if doc.hasVideo, let pair = pairs.first(where: { $0.shape.id == id }) {
+            let reverse = NSMenuItem(title: pair.effect.inverted ? "역가림 끄기" : "역가림 (이 영역만 남기고 나머지 가리기)",
+                                     action: #selector(reverseFromMenu(_:)), keyEquivalent: "")
+            reverse.target = self; reverse.representedObject = id
+            // Rubbed-out parts have no meaning on a reverse cover; clear them first.
+            reverse.isEnabled = pair.effect.inverted || pair.effect.erasures.isEmpty
+            reverse.toolTip = reverse.isEnabled ? nil : "지우개로 지운 부분을 먼저 되돌려야 바꿀 수 있습니다."
+            menu.addItem(reverse)
+        }
         let duplicate = NSMenuItem(title: "복제", action: #selector(duplicateFromMenu(_:)), keyEquivalent: "")
         duplicate.target = self; duplicate.representedObject = id
         menu.addItem(duplicate)

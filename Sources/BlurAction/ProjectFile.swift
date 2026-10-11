@@ -73,11 +73,14 @@ struct ProjectFile: Codable, Equatable {
     }
 
     /// Decodes and checks an untrusted project: bounded counts, finite in-range numbers.
-    static func decode(_ data: Data) throws -> ProjectFile {
+    /// Reverse covers exist only in video projects (format 4). An image project carrying one
+    /// would look normal to older apps, which would cover the very person it should keep.
+    static func decode(_ data: Data, allowsReverse: Bool = false) throws -> ProjectFile {
         guard data.count <= maximumBytes else { throw ProjectError.tooLarge }
         let project: ProjectFile
         do { project = try JSONDecoder().decode(ProjectFile.self, from: data) } catch { throw ProjectError.invalidContent }
         guard project.version == currentVersion else { throw ProjectError.unsupportedVersion }
+        guard allowsReverse || !project.regions.contains(where: { $0.effect.inverted }) else { throw ProjectError.unsupportedVersion }
         guard project.isValid else { throw ProjectError.invalidContent }
         return project
     }
