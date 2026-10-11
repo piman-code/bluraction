@@ -2402,7 +2402,8 @@ final class MainWindowController: NSWindowController {
             }
         }
         if target != 1 {
-            for index in regions.indices where regions[index].effect.isActive(at: time) && !regions[index].effect.locked {
+            // A reverse cover takes no rubbed-out parts (see BlurRenderer), so the eraser passes over it.
+            for index in regions.indices where regions[index].effect.isActive(at: time) && !regions[index].effect.locked && !regions[index].effect.inverted {
                 let shown = RegionEditing.displayed(regions[index], at: time).boundingRect
                 guard shown.intersects(area) else { continue }
                 regions[index].effect.erasures.append(EraseStroke(points: Self.clamped(points, near: shown, width: width),
@@ -2772,6 +2773,26 @@ final class MainWindowController: NSWindowController {
 
     @objc private func toggleVisibilityFromMenu(_ sender: NSMenuItem) { toggleLayerVisibility(sender) }
     @objc private func toggleLockFromMenu(_ sender: NSMenuItem) { toggleLayerLock(sender) }
+
+    @objc private func reverseFromMenu(_ sender: NSMenuItem) {
+        guard let id = layerID(from: sender) else { return }
+        setLayerReversed(id, !(pairs.first { $0.shape.id == id }?.effect.inverted ?? false))
+    }
+
+    /// Keeps the selected shape and covers the rest of the frame (video only). Internal for tests.
+    func setLayerReversed(_ id: UUID, _ reversed: Bool) {
+        guard !isExporting, doc.hasVideo,
+              let index = pairs.firstIndex(where: { $0.shape.id == id }),
+              pairs[index].effect.inverted != reversed else { return }
+        if reversed, !pairs[index].effect.erasures.isEmpty {
+            showError("지우개로 지운 부분이 있는 영역은 역가림으로 바꿀 수 없습니다. 지운 부분을 되돌린 뒤 다시 시도하세요.")
+            return
+        }
+        endGesture()
+        checkpoint()
+        pairs[index].effect.inverted = reversed
+        refreshAfterEdit()
+    }
 
     @objc private func renameFromMenu(_ sender: NSMenuItem) {
         guard let id = layerID(from: sender) else { return }
@@ -4030,6 +4051,16 @@ final class MainWindowController: NSWindowController {
         let lockItem = NSMenuItem(title: state.locked ? "잠금 풀기" : "잠그기", action: #selector(toggleLockFromMenu(_:)), keyEquivalent: "")
         lockItem.target = self; lockItem.representedObject = id
         menu.addItem(lockItem)
+        // Reverse covers are video-only: their project format (4) is refused by older apps.
+        if doc.hasVideo, let pair = pairs.first(where: { $0.shape.id == id }) {
+            let reverse = NSMenuItem(title: pair.effect.inverted ? "역가림 끄기" : "역가림 (이 영역만 남기고 나머지 가리기)",
+                                     action: #selector(reverseFromMenu(_:)), keyEquivalent: "")
+            reverse.target = self; reverse.representedObject = id
+            // Rubbed-out parts have no meaning on a reverse cover; clear them first.
+            reverse.isEnabled = pair.effect.inverted || pair.effect.erasures.isEmpty
+            reverse.toolTip = reverse.isEnabled ? nil : "지우개로 지운 부분을 먼저 되돌려야 바꿀 수 있습니다."
+            menu.addItem(reverse)
+        }
         let duplicate = NSMenuItem(title: "복제", action: #selector(duplicateFromMenu(_:)), keyEquivalent: "")
         duplicate.target = self; duplicate.representedObject = id
         menu.addItem(duplicate)

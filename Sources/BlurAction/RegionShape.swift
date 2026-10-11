@@ -138,6 +138,10 @@ struct RegionEffect: Equatable, Codable {
     var name: String?
     /// Locked layers cannot be selected, moved or erased on the canvas.
     var locked = false
+    /// Reverse cover: the shape stays visible and everything else in the frame is covered.
+    /// Written only when true, so projects without it keep their exact previous bytes.
+    /// Video projects with a reverse region use format version 4.
+    var inverted = false
 
     enum CoverStyle: String, Equatable, CaseIterable, Codable { case blur, mosaic, solid }
 
@@ -284,6 +288,11 @@ struct EraseStroke: Equatable, Codable {
 }
 
 extension RegionEffect {
+    /// Written out because the encoder below is hand-written; the names are the stored keys.
+    enum CodingKeys: String, CodingKey {
+        case blurRadius, featherRadius, timeRange, enabled, keyframes, style, color, groupID, erasures, name, locked, inverted
+    }
+
     /// Fields added after 0.4 are optional in files so older projects still open.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -299,5 +308,23 @@ extension RegionEffect {
         erasures = try c.decodeIfPresent([EraseStroke].self, forKey: .erasures) ?? []
         name = try c.decodeIfPresent(String.self, forKey: .name)
         locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        inverted = try c.decodeIfPresent(Bool.self, forKey: .inverted) ?? false
+    }
+
+    /// Same keys and order as the synthesized encoder, plus `inverted` only when it is true.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(blurRadius, forKey: .blurRadius)
+        try c.encode(featherRadius, forKey: .featherRadius)
+        try c.encode(timeRange, forKey: .timeRange)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(keyframes, forKey: .keyframes)
+        try c.encode(style, forKey: .style)
+        try c.encode(color, forKey: .color)
+        try c.encodeIfPresent(groupID, forKey: .groupID)
+        try c.encode(erasures, forKey: .erasures)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encode(locked, forKey: .locked)
+        if inverted { try c.encode(true, forKey: .inverted) }
     }
 }

@@ -65,6 +65,10 @@ struct MultiPageProjectFile: Codable {
               pages.indices.contains(currentIndex) else {
             throw ProjectFile.ProjectError.invalidContent
         }
+        // Reverse covers are video-only (format 4); see ProjectFile.decode.
+        guard !pages.contains(where: { $0.regions.contains { $0.effect.inverted } }) else {
+            throw ProjectFile.ProjectError.unsupportedVersion
+        }
         for page in pages {
             guard !page.mediaPath.isEmpty, page.mediaPath.count <= 4096,
                   !page.mediaPath.contains("\0"),

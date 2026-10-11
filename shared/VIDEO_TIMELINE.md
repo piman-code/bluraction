@@ -8,6 +8,14 @@ Existing v1 images and v2 page workspaces retain their versions. These loader
 paths do not establish complete output fidelity, clean-OS installation or
 cross-host interoperability; each requires its own executed verification.
 
+Version 4 is the same video layout with one addition: a region effect may carry `inverted:true`
+(a reverse cover: the shape stays visible and the rest of the frame is covered). It is written only
+when a reverse cover exists; ordinary video projects stay version 3 with no `inverted` key. A reverse
+cover cannot carry `erasures`. Version 4 is refused by the shared reader and older apps, so they fail
+closed instead of drawing the cover the wrong way round. Image and page projects never carry it.
+The JSON schema still describes version 3 only: its v3 regions deliberately share the v1 definitions
+(a test guards that), so version 4 needs a separate schema decision before it is documented there.
+
 Video v3 requires the existing single-media `mediaPath`, `regions`, `drawings`,
 plus `version:3`, `mediaKind:"video"`, mandatory original `sourceSHA256`,
 `producer:{name:"BlurAction",platform:"macos"|"windows",version:<app version>}`,
