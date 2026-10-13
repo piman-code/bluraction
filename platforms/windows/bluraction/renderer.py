@@ -363,24 +363,28 @@ def _linear_bytes(linear, original=None, touched=None):
     result = (np.empty((height, width, 4), dtype=np.uint8) if original is None else original.copy())
     step = _rows(width)
     for start in range(0, height, step):
+        if touched is not None and not np.any(touched[start:start + step]):
+            continue
         part = linear[start:start + step]
-        alpha = np.clip(part[:, :, 3], 0, 1)
+        selected = None if touched is None else touched[start:start + step]
+        if selected is not None:
+            part = part[selected]
+        alpha = np.clip(part[..., 3], 0, 1)
         encoded = np.empty(part.shape, dtype=np.uint8)
-        encoded[:, :, 3] = np.rint(alpha * 255).astype(np.uint8)
+        encoded[..., 3] = np.rint(alpha * 255).astype(np.uint8)
         for channel in range(3):
             straight = np.zeros(alpha.shape, dtype=np.float32)
-            np.divide(part[:, :, channel], alpha, out=straight, where=alpha > 0)
+            np.divide(part[..., channel], alpha, out=straight, where=alpha > 0)
             np.clip(straight, 0, 1, out=straight)
             srgb = np.where(straight <= .0031308, straight * 12.92,
                             1.055 * straight ** (1 / 2.4) - .055)
-            encoded[:, :, channel] = np.rint(np.clip(srgb, 0, 1) * 255).astype(np.uint8)
+            encoded[..., channel] = np.rint(np.clip(srgb, 0, 1) * 255).astype(np.uint8)
         # Derived pixels with quantized alpha0 must not retain hidden color.
-        encoded[encoded[:, :, 3] == 0, :3] = 0
+        encoded[encoded[..., 3] == 0, :3] = 0
         if touched is None:
             result[start:start + step] = encoded
         else:
-            selected = touched[start:start + step]
-            result[start:start + step][selected] = encoded[selected]
+            result[start:start + step][selected] = encoded
     return result
 
 
@@ -444,7 +448,44 @@ def mosaic(image, cell):
     return Image.fromarray(_linear_bytes(output))
 
 
-def render(image, state, time=None):
+def _cropped_blur(source, channel, radius, box, *, fast=False):
+    """Finite three-box support preserves the full-frame edge-clamped filter."""
+    left, top, right, bottom = box
+    sigma = radius / 2
+    tap = max(0, math.floor((math.sqrt(1 + 4 * sigma * sigma) - 1) / 2))
+    halo = 3 * (tap + 1) if sigma else 0
+    x0, y0 = max(0, left-halo), max(0, top-halo)
+    x1, y1 = min(source.shape[1], right+halo), min(source.shape[0], bottom+halo)
+    cover = _source_channel(source[y0:y1,x0:x1], channel)
+    if fast and sigma:
+        from .auto_find import configure_cv
+        cv2 = configure_cv()
+        variance = sigma*sigma/3
+        numerator = variance*(2*tap+1)-tap*(tap+1)*(2*tap+1)/3
+        outer = max(0,min(1,numerator/(2*((tap+1)**2-variance))))
+        kernel = np.ones(2*tap+3,dtype=np.float64)
+        kernel[0] = kernel[-1] = outer
+        kernel /= 2*tap+1+2*outer
+        for _ in range(3):
+            cover = cv2.sepFilter2D(cover,-1,kernel,kernel,borderType=cv2.BORDER_REPLICATE)
+    else:
+        _gaussian_inplace(cover, sigma)
+    return cover[top-y0:bottom-y0,left-x0:right-x0]
+
+
+def render_preview(image, state, time, source_size):
+    """Playback-only reduced pixels; portable coordinates stay normalized."""
+    from copy import deepcopy
+    scale = math.sqrt(image.width()*image.height()/(source_size[0]*source_size[1]))
+    state = deepcopy(state)
+    for item in state.get('regions', []):
+        effect = item['effect']
+        effect['blurRadius'] = effect.get('blurRadius',25)*scale
+        effect['featherRadius'] = effect.get('featherRadius',12)*scale
+    return render(image,state,time,_fast_preview=True)
+
+
+def render(image, state, time=None, *, _fast_preview=False):
     """No selection overlays and no second annotation composition."""
     if image.isNull():
         raise ValueError('원본 프레임을 읽을 수 없습니다.')
@@ -472,7 +513,9 @@ def render(image, state, time=None):
         painter.fillPath(path_for(kind, points, width, height), Qt.GlobalColor.white)
         painter.end()
         erase_layer(mask, effect.get('erasures', []), time)
-        alpha = to_pillow(mask).getchannel('A')
+        alpha_image = mask.convertToFormat(QImage.Format.Format_Alpha8)
+        alpha = Image.frombytes('L',(width,height),bytes(alpha_image.constBits()),
+                                'raw','L',alpha_image.bytesPerLine(),1)
         del mask
         if feather:
             sigma = feather / 3.29
@@ -491,6 +534,9 @@ def render(image, state, time=None):
             touched = np.zeros((height, width), dtype=bool)
             constant_alpha = _constant_alpha(source_bytes)
         np.logical_or(touched, coverage > 0, out=touched)
+        box = alpha.getbbox()
+        left, top, right, bottom = box
+        cropped_coverage = coverage[top:bottom,left:right]
         for channel in range(4):
             if style == 'solid':
                 c = effect.get('color', {})
@@ -502,12 +548,11 @@ def render(image, state, time=None):
                 # Filtering/interpolating a constant alpha cannot change it.
                 cover = constant_alpha
             else:
-                cover = _source_channel(source_bytes, channel)
                 if style == 'blur':
-                    _gaussian_inplace(cover, radius / 2)
+                    cover = _cropped_blur(source_bytes, channel, radius, box,fast=_fast_preview)
                 else:
-                    cover = _mosaic_channel(cover, radius)
-            _blend_channel(linear, cover, coverage, channel)
+                    cover = _mosaic_channel(_source_channel(source_bytes, channel), radius)[top:bottom,left:right]
+            _blend_channel(linear[top:bottom,left:right], cover, cropped_coverage, channel)
             del cover
     output = source if linear is None else Image.fromarray(_linear_bytes(linear, source_bytes, touched))
     # Release effect float buffers before allocating annotation layers.

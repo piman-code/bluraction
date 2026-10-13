@@ -211,7 +211,7 @@ def _decoded_pixel_image(frame):
     return Image.frombytes('RGB', (width, height), tight)
 
 
-def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
+def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None, *, preview_edge=None):
     """Decode raw pixels; normalize SAR and display rotation exactly once.
 
     PyAV's frame.rotation is counterclockwise. Pillow uses the same convention.
@@ -247,7 +247,18 @@ def _display_image(frame, sample_aspect_ratio=Fraction(1), metadata=None):
             raise VideoError('영상 회전 정보를 해석할 수 없습니다.') from error
     if not math.isfinite(angle) or abs(angle / 90 - round(angle / 90)) > .00001:
         raise VideoError('직각 이외 회전은 표시 위치 검토가 필요합니다.')
-    image = _decoded_pixel_image(frame)
+    if preview_edge is None:
+        image = _decoded_pixel_image(frame)
+    else:
+        # Playback proxy only. Preserve the observed source frame/clock and
+        # validate its display transform above; full-resolution callers retain
+        # the accurate RGB pixel contract used by detection and export.
+        if type(preview_edge) is not int or not 32 <= preview_edge <= 1920:
+            raise VideoError('미리보기 해상도가 올바르지 않습니다.')
+        scale = min(1.,preview_edge/max(round(frame.width*sample_aspect_ratio),frame.height))
+        small = frame.reformat(width=max(1,round(frame.width*scale)),
+                               height=max(1,round(frame.height*scale)),format='rgb24')
+        image = small.to_image()
     if sample_aspect_ratio <= 0:
         raise VideoError('영상 화소의 종횡비가 올바르지 않습니다.')
     width = round(image.width * sample_aspect_ratio)
@@ -299,7 +310,6 @@ class VideoSource:
                 raise VideoError('영상 시간 기준을 읽을 수 없습니다.')
             if video.width <= 0 or video.height <= 0 or video.width > 16384 or video.height > 16384 or video.width * video.height > 33_177_600:
                 raise VideoError('영상 원본 해상도가 지원 범위를 넘습니다.')
-            self.sample_aspect_ratio = video.sample_aspect_ratio or Fraction(1)
             self.metadata = dict(video.metadata)
             self.average_rate = video.average_rate  # encoder hint only; never frame timestamps
             self.audio_codecs = tuple(s.codec_context.name for s in container.streams.audio)
@@ -309,6 +319,13 @@ class VideoSource:
             check_cancel(cancel)
             if first is None:
                 raise VideoError('영상 첫 프레임을 읽을 수 없습니다.')
+            from .display_geometry import resolve_display_sar, DisplayGeometryError
+            try:
+                self.sample_aspect_ratio = resolve_display_sar(
+                    getattr(first, 'sample_aspect_ratio', None),
+                    video.codec_context.sample_aspect_ratio, video.sample_aspect_ratio)
+            except DisplayGeometryError as error:
+                raise VideoError(str(error)) from error
             first_time = _timestamp(first)
             self.origin = min(starts) if starts else first_time
             self.first_frame_time = first_time - self.origin
@@ -468,7 +485,7 @@ class VideoSource:
         """Backwards-compatible image-only wrapper; new previews use actual PTS."""
         return self.frame_at_timed(time, cancel=cancel).image
 
-    def frame_at_timed(self, time, cancel=None):
+    def frame_at_timed(self, time, cancel=None, *, preview=False):
         """Frame displayed at time: hold preceding actual PTS, not nearest frame/FPS."""
         session=getattr(self,'asset_session',None)
         if session is not None:
@@ -476,7 +493,7 @@ class VideoSource:
             stamp=exact_time(time)
             if stamp>session.duration: raise VideoError('asset 영상 구간 밖입니다.')
             self._guard()
-            metadata,buffers=session.frame(stamp,cancel)
+            metadata,buffers=(session.preview(stamp,cancel) if preview else session.frame(stamp,cancel))
             image=self._asset_image(metadata,buffers)
             if metadata['presence']!='content':
                 # Explicit absence, NOT a decoded frame or a guessed held image.

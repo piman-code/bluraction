@@ -202,6 +202,26 @@ def _read_qt_image(path, *, metadata_only=False):
         _cleanup_preserving_primary(device.close, 'image input device close')
 
 
+def _pdf_point_sizes(document, path, identity, digest, cancel):
+    from .pdf_geometry import inspect_pdf_geometry
+    sizes = []
+    for index in range(document.pageCount()):
+        check_cancel(cancel)
+        size = document.pagePointSize(index)
+        sizes.append((size.width(), size.height()))
+    geometry = inspect_pdf_geometry(path, sizes, expected_identity=identity,
+                                    expected_sha256=digest, cancel=cancel, allow_user_unit=True)
+    return tuple(page.displayed_point_size for page in geometry)
+
+
+def _pdf_pixel_size(point_size):
+    width, height = (round(value * 2) for value in point_size)
+    # Bound Python integers before converting them to Qt's signed-int QSize.
+    if width <= 0 or height <= 0 or width * height > 24_000_000:
+        raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
+    return QSize(width, height)
+
+
 def page_image(page, cancel=None):
     check_cancel(cancel)
     _check_identity(page.source, page.source_identity)
@@ -218,10 +238,11 @@ def page_image(page, cancel=None):
         raise ValueError('원본 파일이 변경되었습니다. 다시 열고 가림 위치를 확인하세요.')
     if page.pdf_index is not None:
         with _read_qt_pdf(page.source) as document:
-            size = document.pagePointSize(page.pdf_index)
-            dimensions = QSize(round(size.width() * 2), round(size.height() * 2))
-            if dimensions.width() <= 0 or dimensions.height() <= 0 or dimensions.width() * dimensions.height() > 24_000_000:
-                raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
+            size = page.point_size
+            if size is None:
+                size = _pdf_point_sizes(document, page.source, page.source_identity,
+                                        page.source_sha256, cancel)[page.pdf_index]
+            dimensions = _pdf_pixel_size(size)
             options = QPdfDocumentRenderOptions()
             options.setRenderFlags(QPdfDocumentRenderOptions.RenderFlag.Annotations)
             check_cancel(cancel)
@@ -235,6 +256,19 @@ def page_image(page, cancel=None):
         raise ValueError('원본 페이지를 렌더링할 수 없습니다.')
     if image.width() * image.height() > 24_000_000:
         raise ValueError('페이지 렌더링 한도는 24MP입니다.')
+    if page.pdf_index is not None:
+        # Qt returns unpainted PDF paper as transparent. Composite before
+        # preview/effects/export so black ink remains visible on white paper.
+        paper = QImage(image.size(), QImage.Format.Format_RGB32)
+        paper.fill(0xffffffff)
+        if image.colorSpace().isValid():
+            paper.setColorSpace(image.colorSpace())
+        painter = QPainter(paper)
+        try:
+            painter.drawImage(0, 0, image)
+        finally:
+            painter.end()
+        image = paper
     check_cancel(cancel)
     _check_identity(page.source, page.source_identity)
     if fingerprint(page.source, cancel=cancel) != page.source_sha256:
@@ -282,14 +316,12 @@ def load_pages(paths, cancel=None):
             with _read_qt_pdf(source) as document:
                 if document.pageCount() < 1 or len(pages) + document.pageCount() > 200:
                     raise ValueError('PDF와 이미지 전체는 최대 200페이지입니다.')
-                for index in range(document.pageCount()):
+                sizes = _pdf_point_sizes(document, source, captured, digest, cancel)
+                for index, size in enumerate(sizes):
                     check_cancel(cancel)
-                    size = document.pagePointSize(index)
-                    # PDFium applies the effective crop/rotation. Work at 144dpi.
-                    pixels = QSize(round(size.width() * 2), round(size.height() * 2))
-                    if pixels.width() * pixels.height() > 24_000_000:
-                        raise ValueError('PDF 페이지 해상도가 너무 큽니다.')
-                    pages.append(Page(source, digest, None, index, (size.width(), size.height()), source_identity=captured))
+                    # Physical points include the page-local UserUnit. Work at 144dpi.
+                    _pdf_pixel_size(size)
+                    pages.append(Page(source, digest, None, index, size, source_identity=captured))
         else:
             if len(pages) >= 200:
                 raise ValueError('PDF와 이미지 전체는 최대 200페이지입니다.')

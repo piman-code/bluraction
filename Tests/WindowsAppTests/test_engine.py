@@ -617,15 +617,15 @@ class EngineTests(unittest.TestCase):
     def test_null_and_integral_float_indices_and_media_kind_mismatch(self):
         project = self.folder / 'numeric.bluraction'
         self.workspace.save_project(project)
-        tree = json.loads(project.read_text())
+        tree = json.loads(project.read_text(encoding='utf-8'))
         tree['currentIndex'] = 0.0
         tree['pages'][0]['pdfPageIndex'] = None
-        project.write_text(json.dumps(tree))
+        project.write_text(json.dumps(tree), encoding='utf-8')
         self.workspace.load_project(project)
         self.assertEqual(self.workspace.index, 0)
         tree['pages'][0]['pdfPageIndex'] = 0.0
         tree['pages'][0]['pdfGeometryVersion'] = 1
-        project.write_text(json.dumps(tree))
+        project.write_text(json.dumps(tree), encoding='utf-8')
         previous = self.workspace.page
         with self.assertRaisesRegex(ValueError, '종류'):
             self.workspace.load_project(project)

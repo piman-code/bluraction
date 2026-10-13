@@ -6,6 +6,7 @@ macOS에서 영상·이미지의 원하는 부분을 **블러·모자이크·단
 
 개발 소스는 `codex/multipage-document-blur` 브랜치에 공개하고 있습니다. 2026-10-02 확인한 [실제 CI20](https://github.com/piman-code/bluraction/actions/runs/37003663337)은 `55dee887` 소스에서 Windows의 Mac 전용 패키징 검사와 Mac14의 영상 추적 검사가 실패했습니다. 검사 플랫폼 분리와 오류 진단, 영상 출력·추적 연결을 로컬에서 수정했으며 새 원격 실행은 보류 중입니다. 현재 Mac 후보는 오디오를 재인코딩하지 않고 원래 샘플과 트랙 정보를 전달합니다. AAC·PCM 합성 출력 검수를 거쳤지만 모든 코덱·장치의 보존을 보장한 상태는 아닙니다. 두 OS의 설치·사용자 검수와 최종 릴리스는 미완료입니다.
 
+- [Windows local4 작업 종료·Mac handoff (2026-10-09)](docs/HANDOFF-Windows-local4-20261009.md)
 - [플랫폼별 빌드·패키징](docs/플랫폼-빌드-상태.md)
 - [현재 검증 상태](docs/검증-상태.md)
 - [Windows 한국어 사용 안내 초안](docs/Windows-사용-안내.md)

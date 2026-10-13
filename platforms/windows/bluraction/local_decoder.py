@@ -310,6 +310,14 @@ def open_local_decoder(file, *, mode='r', options=None, check=None):
         names = local._native.format.name.split(',')
         if 'hls' in names or 'applehttp' in names:
             raise LocalDecoderError('HLS 보조 참조는 로컬 단일 원본 계약에서 명시적으로 보류합니다.')
+        # FFmpeg's automatic frame threading allocates a large decoded-frame
+        # pool on many-core laptops. Slice threading keeps low preview latency
+        # and a bounded worker count without changing decoded observations.
+        for stream in local._native.streams.video:
+            codec = getattr(stream, 'codec_context', None)
+            if codec is not None and not getattr(codec, 'is_open', False):
+                codec.thread_count = 2
+                codec.thread_type = 'SLICE'
         local._checkpoint()
         yield local
         local._checkpoint()

@@ -13,7 +13,8 @@ the pixel decoder. Exact Fractions are never converted to an inferred origin.
 
 The shared display converter uses pixel-contract-v2 accurate RGB24 only for
 opaque8-bit yuv420p. Other formats retain legacy/unverified conversion. Existing
-HDR/high-depth/SAR/matrix holds stay in force; this is not all-format parity.
+HDR/high-depth/matrix holds stay in force; this is not all-format parity.
+Omitted SAR uses the shared playback policy without changing raw observations.
 """
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ from .frame_inventory import (FrameInventory, InventoryLimits, _BoundedInput,
                               _observe, _exact_fraction, _generation, _cancel)
 from .media import _capture_identity, _check_identity, fingerprint
 from .video import _display_image
+from .display_geometry import resolve_display_sar, DisplayGeometryError
 from .local_decoder import LocalDecoderError, SecondaryIODenied
 
 
@@ -121,6 +123,10 @@ class OwnedCanonicalVideoProvider:
         result._closed = False
         result._inventory = result._index = None
         result._cached_index = result._cached_image = None
+        result._cached_edge = None
+        result._preview_cursor = None
+        result._preview_position = None
+        result._preview_pts = None
         result._path = Path(path).absolute()
         result._generation = generation
         result._current_generation = current_generation
@@ -283,7 +289,81 @@ class OwnedCanonicalVideoProvider:
                             raise failure from error
                         raise
 
-    def _normalized_image(self, frame, observed, stream):
+    def _close_preview_cursor(self):
+        cursor = self._preview_cursor
+        self._preview_cursor = None
+        self._preview_position = self._preview_pts = None
+        if cursor is not None:
+            cursor.close()
+
+    def _preview_decode(self, sample, seek=True):
+        """Keep one guarded decoder; every advanced row must match inventory."""
+        with self._decoder() as container:
+            videos = list(container.streams.video)
+            if len(videos) != 1 or videos[0].id != self._inventory.decoder.stream_id:
+                raise CanonicalVideoReview('preview track differs from inventory')
+            stream = videos[0]
+            base = _exact_fraction(stream.time_base, 'preview time base')
+            if base != self._inventory.decoder.stream_time_base:
+                raise CanonicalVideoReview('preview time base differs from inventory')
+            if seek:
+                try:
+                    container.seek(sample.asset_pts // base, stream=stream, backward=True, any_frame=False)
+                except (LocalDecoderError, SecondaryIODenied):
+                    raise
+                except Exception as error:
+                    boundary = getattr(container, 'check_boundary', None)
+                    if callable(boundary): boundary()
+                    self._guard()
+                    raise _SeekUnavailable() from error
+            frames = iter(container.decode(stream))
+            previous, index = None, None
+            try:
+                for frame in frames:
+                    self._guard()
+                    observed = _observe(frame, self._limits)
+                    if previous is not None and observed.pts <= previous:
+                        raise CanonicalVideoReview('preview PTS reordered or duplicate')
+                    previous = observed.pts
+                    if index is None:
+                        if observed.pts < sample.asset_pts: continue
+                        index = sample.source_index
+                    else:
+                        index += 1
+                    if index >= len(self._inventory) or observed != self._inventory[index]:
+                        raise CanonicalVideoReview('preview row differs from complete inventory')
+                    yield index, frame, observed, stream
+            finally:
+                close = getattr(frames, 'close', None)
+                if close is not None: close()
+
+    def preview_pixels(self, sample, maximum_edge=None):
+        """Reuse forward reads; a backward/large jump starts a fresh seek."""
+        cursor = self._preview_cursor
+        if (cursor is None or self._preview_position is None
+                or sample.source_index <= self._preview_position
+                or sample.asset_pts - self._preview_pts > 2):
+            self._close_preview_cursor()
+            self._preview_cursor = self._preview_decode(sample)
+        try:
+            while True:
+                try:
+                    index, frame, observed, stream = next(self._preview_cursor)
+                except _SeekUnavailable:
+                    self._close_preview_cursor()
+                    self._preview_cursor = self._preview_decode(sample, seek=False)
+                    index, frame, observed, stream = next(self._preview_cursor)
+                self._preview_position, self._preview_pts = index, observed.pts
+                if index == sample.source_index:
+                    image = self._normalized_image(frame, observed, stream, maximum_edge=maximum_edge)
+                    self._guard()
+                    return image
+                if index > sample.source_index:
+                    raise CanonicalVideoReview('preview skipped requested observed sample')
+        except StopIteration as error:
+            raise CanonicalVideoReview('requested preview sample missing at EOF') from error
+
+    def _normalized_image(self, frame, observed, stream, maximum_edge=None):
         # Reject known HDR/high-depth until validated SDR tone mapping
         # exists. Do not silently collapse PQ/HLG to untagged RGB8.
         if getattr(frame, 'color_trc', None) in (16, 18):
@@ -291,12 +371,11 @@ class OwnedCanonicalVideoProvider:
         components = getattr(getattr(frame, 'format', None), 'components', None)
         if not components or any(type(c.bits) is not int or not 0 < c.bits <= 8 for c in components):
             raise CanonicalVideoReview('unknown/high-depth pixel policy needs review')
-        sar = observed.frame_sar
-        if sar is None or sar == 0:
-            sar = self._inventory.decoder.codec_sar
-        if sar is None or sar == 0:
-            # No guessed stream SAR or implicit 1:1 normalization.
-            raise CanonicalVideoReview('exact display SAR unavailable; no guessed geometry')
+        try:
+            sar = resolve_display_sar(observed.frame_sar,
+                self._inventory.decoder.codec_sar, self._inventory.decoder.guessed_stream_sar)
+        except DisplayGeometryError as error:
+            raise CanonicalVideoReview(str(error)) from error
         width = round(observed.width * sar)
         if (width <= 0 or width > self._limits.max_dimension or
                 width * observed.height > self._limits.max_pixels):
@@ -306,7 +385,8 @@ class OwnedCanonicalVideoProvider:
             rotate = next((v for k, v in metadata.items() if k.lower() == 'rotate'), 0)
             if str(rotate) not in ('0', '0.0'):
                 raise CanonicalVideoReview('unobserved stream rotation requires geometry review')
-        image = _display_image(frame, sar, metadata)
+        image = (_display_image(frame, sar, metadata) if maximum_edge is None else
+                 _display_image(frame, sar, metadata, preview_edge=maximum_edge))
         if image.isNull():
             raise CanonicalVideoReview('pixel decoder produced no normalized image')
         return image.copy()
@@ -386,12 +466,13 @@ class OwnedCanonicalVideoProvider:
                 sample = presence.sample
                 image = None
                 if sample is not None:
-                    if self._cached_index != sample.source_index:
+                    if self._cached_index != sample.source_index or self._cached_edge is not None:
                         try:
                             image = self._pixels(sample, seek=True)
                         except _SeekUnavailable:
                             image = self._pixels(sample, seek=False)
                         self._cached_index, self._cached_image = sample.source_index, image
+                        self._cached_edge = None
                     image = self._cached_image.copy()
                 self._guard(hash_source=True)
                 return CanonicalPixels(presence.kind, time,
@@ -447,7 +528,10 @@ class OwnedCanonicalVideoProvider:
 
     def close(self):
         with self._lock:
-            self._closed = True
+            try:
+                self._close_preview_cursor()
+            finally:
+                self._closed = True
             self._cached_index = self._cached_image = None
             if self._index is not None:
                 self._index.close()

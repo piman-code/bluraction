@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "0.8.0-dev1",
+    [string]$Version = "0.9.1.windows.local4",
     [string]$Destination = "",
     [string]$LicenseMaterials = "",
     [string]$LicenseReview = "",
@@ -266,10 +266,29 @@ datas, binaries, hiddenimports = collect_all('pillow_heif')
 hiddenimports += ['_pillow_heif']
 datas, binaries = collect_delvewheel_libs_directory('pillow_heif', datas=datas, binaries=binaries)
 '@ | Set-Content (Join-Path $Hooks "hook-pillow_heif.py") -Encoding utf8
-        & $Python -m PyInstaller --noconfirm --clean --noupx --windowed --onedir --name BlurAction `
+        $AutoModels = Join-Path $RepoRoot "Resources/windows-auto-find"
+        foreach ($ModelPin in (@{
+            "face_detection_yunet_2023mar.onnx" = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+            "text_detection_cn_ppocrv3_2023may.onnx" = "03f550c6b406fda8bf54bd8327815f6c7e2edd98cea02348c93d879254366587"
+        }).GetEnumerator()) {
+            $ModelFile = Join-Path $AutoModels $ModelPin.Key
+            Require-RegularFile $ModelFile
+            if ((Get-FileHash -LiteralPath $ModelFile -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ModelPin.Value) {
+                throw "Automatic finding model differs from its pinned bytes: $($ModelPin.Key)"
+            }
+        }
+        $AutoModelArguments = @()
+        foreach ($ModelName in @("face_detection_yunet_2023mar.onnx", "text_detection_cn_ppocrv3_2023may.onnx", "YuNet-LICENSE.txt", "PPOCR-LICENSE.txt", "README.md")) {
+            $ModelFile = Join-Path $AutoModels $ModelName
+            Require-RegularFile $ModelFile
+            $AutoModelArguments += @("--add-data", "$ModelFile;auto-find-models")
+        }
+        # Destination and work paths are fresh; retain caches and prior outputs.
+        & $Python -m PyInstaller --noconfirm --noupx --windowed --onedir --name BlurAction `
             --paths $RepoRoot --distpath $Dist --workpath $BuildWork --specpath $BuildWork `
             --additional-hooks-dir $Hooks --collect-all PySide6.QtPdf --collect-all av --collect-all cv2 `
             --collect-all pypdf --hidden-import pillow_heif --hidden-import _pillow_heif `
+            @AutoModelArguments `
             (Join-Path $PSScriptRoot "launcher.py")
         if ($LASTEXITCODE -ne 0) { throw "Packaging failed." }
         if ($InputHash) {
@@ -325,7 +344,7 @@ try {
         throw "Reviewed manifest/review bytes changed during archiving."
     }
 } catch {
-    Remove-Item -LiteralPath $Zip
+    Write-Warning "Archive attempt retained at $Zip; existing files are preserved."
     throw
 }
 Get-FileHash -LiteralPath $Zip -Algorithm SHA256 | Format-List

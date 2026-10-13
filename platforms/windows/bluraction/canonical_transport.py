@@ -70,6 +70,10 @@ class _TransportChannel:
     """
     def __init__(self, sock):
         self.socket = sock
+        # Windows socketpair uses loopback TCP. Tiny RPC/header messages must
+        # not wait for Nagle + delayed ACK before every video frame.
+        if getattr(sock,'family',None) in (socket.AF_INET,socket.AF_INET6):
+            sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
         # A plain process-local bool is spawn-pickleable. Only the parent
         # channel's own shutdown interrupts its worker; no Event/global state
         # is shared with a decoder or an unrelated session.
@@ -202,7 +206,7 @@ def packed_pcm(chunk):
     return bytes(data)
 
 
-def snapshot_frame(provider, stamp):
+def snapshot_frame(provider, stamp, maximum_edge=None):
     """Provider-bound pixels; completed index plus metadata guards at each decode.
 
     Full source revalidation is an explicit worker transaction, not a per-frame
@@ -216,10 +220,10 @@ def snapshot_frame(provider, stamp):
             sample=presence.sample
             image=None
             if sample is not None:
-                if provider._cached_index!=sample.source_index:
-                    try: image=provider._pixels(sample,seek=True)
-                    except _SeekUnavailable: image=provider._pixels(sample,seek=False)
+                if provider._cached_index!=sample.source_index or provider._cached_edge!=maximum_edge:
+                    image=provider.preview_pixels(sample,maximum_edge=maximum_edge)
                     provider._cached_index,provider._cached_image=sample.source_index,image
+                    provider._cached_edge=maximum_edge
                 image=provider._cached_image.copy()
             provider._guard()
             return CanonicalPixels(presence.kind,stamp,None if sample is None else sample.asset_pts,
@@ -236,7 +240,7 @@ def _send(connection, metadata, buffers=()):
         for start in range(0,len(buffer),65536): connection.send_bytes(buffer[start:start+65536])
 
 
-def _pixel_reply(sequence, result, kind='frame'):
+def _pixel_reply(sequence, result, kind='frame', maximum_edge=None):
     from PySide6.QtGui import QImage
     meta = dict(sequence=sequence, kind=kind, presence=result.presence,
         time=result.asset_pts, requested=result.requested_time,
@@ -246,10 +250,15 @@ def _pixel_reply(sequence, result, kind='frame'):
     buffers = ()
     if result.image is not None:
         image = result.image.convertToFormat(QImage.Format.Format_RGBA8888)
+        if maximum_edge is not None and max(image.width(),image.height()) > maximum_edge:
+            from PySide6.QtCore import Qt
+            image=image.scaled(maximum_edge,maximum_edge,Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
         meta.update(width=image.width(), height=image.height())
         view = image.constBits()
-        buffers = (b''.join(bytes(view[y*image.bytesPerLine():y*image.bytesPerLine()+image.width()*4])
-            for y in range(image.height())),)
+        buffers = ((bytes(view) if image.bytesPerLine()==image.width()*4 else
+            b''.join(bytes(view[y*image.bytesPerLine():y*image.bytesPerLine()+image.width()*4])
+                for y in range(image.height()))),)
     return meta, buffers
 
 
@@ -305,17 +314,13 @@ def _decoder_process(connection, path, sha, work):
             raw_first=video._inventory[0]
             raw_last=video._inventory[-1]
             time_base=_exact_fraction(stream.time_base,'video time base')
-            # Match canonical_video._pixels: the selected observed frame wins,
-            # then the captured codec SAR. Stream SAR is a decoder guess, not
-            # an alternative display geometry or an implicit square-pixel 1.
-            sar=first.observation.frame_sar
-            if sar is None or sar == 0:
-                sar=video._inventory.decoder.codec_sar
-            if sar is None or sar == 0:
-                raise TransportReview('exact display SAR unavailable; no guessed geometry')
-            sar=_exact_fraction(sar,'video SAR')
-            if sar <= 0:
-                raise TransportReview('video SAR must be an observed positive rational')
+            # Handshake, preview, tracking and export share one display policy.
+            from .display_geometry import resolve_display_sar, DisplayGeometryError
+            try:
+                sar=resolve_display_sar(first.observation.frame_sar,
+                    video._inventory.decoder.codec_sar, video._inventory.decoder.guessed_stream_sar)
+            except DisplayGeometryError as error:
+                raise TransportReview(str(error)) from error
             average_rate=None if stream.average_rate is None else _exact_fraction(stream.average_rate,'average rate')
             decoder_meta=dict(streamIndex=stream.index,timeBase=time_base,
                 sar=sar,
@@ -335,11 +340,11 @@ def _decoder_process(connection, path, sha, work):
             if operation=='validate':
                 video._guard(hash_source=True); audio._guard(hash_source=True)
                 _send(connection,{'sequence':sequence,'kind':'validated','sha256':sha})
-            elif operation=='frame':
-                result=snapshot_frame(video,args[0])
+            elif operation in ('frame','preview'):
+                result=snapshot_frame(video,args[0],maximum_edge=640 if operation=='preview' else None)
                 if result.presence=='content-no-sample':
                     raise TransportReview('content video sample missing; no future/last substitute')
-                meta,buffers=_pixel_reply(sequence,result)
+                meta,buffers=_pixel_reply(sequence,result,maximum_edge=640 if operation=='preview' else None)
                 _send(connection,meta,buffers)
             elif operation=='cursor_open':
                 if cursor is not None: raise TransportReview('only one sequential cursor per owned decoder')
@@ -497,6 +502,9 @@ class CanonicalSession:
 
     def frame(self,stamp,cancel=None):
         return self._rpc('frame',(exact_time(stamp),),cancel)
+
+    def preview(self,stamp,cancel=None):
+        return self._rpc('preview',(exact_time(stamp),),cancel)
 
     def iter_frames(self,start=Fraction(0),end=None,cancel=None):
         """Bounded content cursor; IPC EOF checks the entire raw inventory."""

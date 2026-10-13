@@ -125,6 +125,112 @@ def _documents(directory):
     return {'pages': 3, 'projectStateRoundtrip': True, 'outputPixelsChecked': True, 'originalsUnchanged': True}
 
 
+def _pdf_user_units(directory):
+    from PySide6.QtGui import QImage
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import DecodedStreamObject, FloatObject, NameObject, RectangleObject
+    from .editor import Workspace
+    from .media import export_image, export_pdf
+    checked = 0
+    for cropped in (False, True):
+        for rotation in (0, 90, 180, 270):
+            for unit in (.5, 1, 2):
+                stem = f'unit-{unit}-crop-{int(cropped)}-rotate-{rotation}'
+                source = directory / (stem + '.pdf')
+                writer = PdfWriter()
+                page = writer.add_blank_page(300, 200)
+                if cropped:
+                    page.cropbox = RectangleObject([50, 30, 250, 150])
+                page.rotate(rotation)
+                page[NameObject('/UserUnit')] = FloatObject(unit)
+                content = DecodedStreamObject()
+                content.set_data(b'1 1 1 rg 0 0 300 200 re f')
+                page[NameObject('/Contents')] = writer._add_object(content)
+                with source.open('xb') as stream:
+                    writer.write(stream)
+                digest = _sha(source)
+                expected = [200 if cropped else 300, 120 if cropped else 200]
+                if rotation in (90, 270):
+                    expected.reverse()
+                expected = tuple(value * unit for value in expected)
+                workspace = Workspace()
+                workspace.load([source])
+                _require(workspace.page.point_size == expected, 'pdf_unit_physical_size')
+                workspace.add_cover('rectangle', [[.1, .1], [.3, .3]], 'solid', 0, 0)
+                project = directory / (stem + '.bluraction')
+                workspace.save_project(project)
+                reopened = Workspace()
+                reopened.load_project(project)
+                _require(reopened.page.point_size == expected and reopened.page.state == workspace.page.state,
+                         'pdf_unit_project_roundtrip')
+                target = directory / (stem + '-output.pdf')
+                export_pdf(reopened.pages, target)
+                result = PdfReader(target).pages[0]
+                actual = (float(result.mediabox.width), float(result.mediabox.height))
+                _require(all(abs(a - b) < .01 for a, b in zip(actual, expected)), 'pdf_unit_output_size')
+                png = directory / (stem + '.png')
+                export_image(reopened.page, png)
+                image = QImage(str(png))
+                _require((image.width(), image.height()) == tuple(round(value * 2) for value in expected),
+                         'pdf_unit_png_size')
+                black = image.pixelColor(round(image.width() * .2), round(image.height() * .8))
+                _require(max(black.red(), black.green(), black.blue()) < 5 and black.alpha() == 255,
+                         'pdf_unit_cover_pixel')
+                _require(_sha(source) == digest, 'pdf_unit_source_changed')
+                checked += 1
+    return {'cases': checked, 'physicalSizesPreserved': True, 'coverPixelsChecked': True,
+            'projectStateRoundtrip': True, 'originalsUnchanged': True}
+
+
+def _pdf_paper(directory):
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QImage
+    from PySide6.QtPdf import QPdfDocument
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, NameObject
+    from .editor import Workspace
+    from .media import export_image, export_pdf
+    from .renderer import render
+    source = directory / 'unpainted-paper.pdf'
+    writer = PdfWriter()
+    page = writer.add_blank_page(100, 100)
+    content = DecodedStreamObject()
+    content.set_data(b'0 0 0 rg 10 10 20 20 re f 0 0 1 rg 60 60 20 20 re f')
+    page[NameObject('/Contents')] = writer._add_object(content)
+    with source.open('xb') as stream:
+        writer.write(stream)
+    digest = _sha(source)
+    def pixels(image, color_tolerance=0):
+        _require(image.pixelColor(5, 5).getRgb() == (255, 255, 255, 255), 'pdf_paper_white')
+        _require(image.pixelColor(40, 160).getRgb() == (0, 0, 0, 255), 'pdf_paper_black_ink')
+        blue = image.pixelColor(140, 60).getRgb()
+        _require(blue[3] == 255 and all(abs(a - b) <= color_tolerance
+                                      for a, b in zip(blue[:3], (0, 0, 255))), 'pdf_paper_color')
+    workspace = Workspace()
+    workspace.load([source])
+    pixels(workspace.page.image)
+    pixels(render(workspace.page.image, workspace.page.state))
+    project = directory / 'paper.bluraction'
+    workspace.save_project(project)
+    reopened = Workspace()
+    reopened.load_project(project)
+    pixels(reopened.page.image)
+    png = directory / 'paper.png'
+    export_image(reopened.page, png)
+    pixels(QImage(str(png)))
+    pdf = directory / 'paper-output.pdf'
+    export_pdf(reopened.pages, pdf)
+    document = QPdfDocument()
+    try:
+        _require(document.load(str(pdf)) == QPdfDocument.Error.None_, 'pdf_paper_export_reopen')
+        pixels(document.render(0, QSize(200, 200)), color_tolerance=2)
+    finally:
+        document.close()
+    _require(_sha(source) == digest, 'pdf_paper_source_changed')
+    return {'whitePaper': True, 'blackInk': True, 'colorPreserved': True,
+            'previewExportAndProjectChecked': True, 'originalUnchanged': True}
+
+
 def _video(directory):
     from fractions import Fraction
     import av
@@ -190,6 +296,10 @@ def run(output, *, _allow_source=False):
         app = QApplication(['BlurAction-candidate-smoke'])
         stage = 'documents'
         report['checks'][stage] = _documents(directory)
+        stage = 'pdf-user-units'
+        report['checks'][stage] = _pdf_user_units(directory)
+        stage = 'pdf-paper'
+        report['checks'][stage] = _pdf_paper(directory)
         stage = 'production-decoder'
         report['checks'][stage] = _video(directory)
         report['files'] = [{'path': p.name, 'bytes': p.stat().st_size, 'sha256': _sha(p)}
@@ -217,8 +327,24 @@ def run(output, *, _allow_source=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--auto-find-only', action='store_true')
+    parser.add_argument('--face-fixture', type=Path)
+    parser.add_argument('--video-fixtures', type=Path)
+    parser.add_argument('--performance-fixture', type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.performance_fixture:
+            os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+            from .performance_smoke import run as run_performance
+            return run_performance(args.output,args.performance_fixture)
+        if args.video_fixtures:
+            os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+            from .video_compat_smoke import run as run_video_compat
+            return run_video_compat(args.output,args.video_fixtures)
+        if args.auto_find_only:
+            os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+            from .auto_find_smoke import run as run_auto_find
+            return run_auto_find(args.output, face_fixture=args.face_fixture)
         return run(args.output)
     except Exception:
         # Invalid output arguments must not overwrite an existing report and a

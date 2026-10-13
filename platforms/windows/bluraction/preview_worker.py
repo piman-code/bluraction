@@ -20,6 +20,7 @@ class PreviewRequest:
     time: object
     decode: object = None
     cancel: threading.Event = field(default_factory=threading.Event)
+    source_size: object = None
 
 
 @dataclass
@@ -51,9 +52,17 @@ class _ValueWorker(QObject):
 class _Worker(QObject):
     finished = Signal(object)
 
-    def __init__(self, request):
+    def __init__(self, request=None):
         super().__init__()
         self.request = request
+
+    @Slot(object)
+    def execute(self, request):
+        self.request=request
+        try:
+            self.run()
+        finally:
+            self.request=None
 
     @Slot()
     def run(self):
@@ -65,7 +74,8 @@ class _Worker(QObject):
                 decoded = request.decode(request.cancel.is_set)
                 image, time = decoded.image, float(decoded.time)
             check_cancel(request.cancel.is_set)
-            pixels = renderer.render(image, request.state, time)
+            pixels = (renderer.render(image, request.state, time) if request.source_size is None
+                      else renderer.render_preview(image,request.state,time,request.source_size))
             check_cancel(request.cancel.is_set)
             self.finished.emit((request, image, time, pixels, None))
         except Exception as error:
@@ -75,6 +85,7 @@ class _Worker(QObject):
 class PreviewQueue(QObject):
     completed = Signal(object)
     idle = Signal()
+    execute = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,6 +95,7 @@ class PreviewQueue(QObject):
         self._worker = None
         self._result = None
         self.closed = False
+        self._persistent = type(self) is PreviewQueue
 
     @property
     def busy(self):
@@ -105,10 +117,24 @@ class PreviewQueue(QObject):
     def shutdown(self):
         self.closed = True
         self.discard_pending(cancel_active=True)
+        if self._persistent and self.active is None and self._thread is not None:
+            self._thread.quit()
+            self._thread.wait(1000)  # Idle worker only; no native decode wait on GUI.
 
     def _start(self, request):
         self.active = request
         self._result = None
+        if self._persistent:
+            if self._thread is None:
+                self._thread=QThread(self)
+                self._worker=_Worker()
+                self._worker.moveToThread(self._thread)
+                self.execute.connect(self._worker.execute,Qt.ConnectionType.QueuedConnection)
+                self._worker.finished.connect(self._received,Qt.ConnectionType.QueuedConnection)
+                self._thread.finished.connect(self._worker.deleteLater)
+                self._thread.start()
+            self.execute.emit(request)
+            return
         thread = QThread(self)
         worker = _Worker(request)
         self._thread, self._worker = thread, worker
@@ -124,12 +150,16 @@ class PreviewQueue(QObject):
     @Slot(object)
     def _received(self, result):
         self._result = result
+        if self._persistent:
+            self._stopped()
 
     @Slot()
     def _stopped(self):
         result = self._result
         self.active = None
-        self._thread = self._worker = self._result = None
+        self._result = None
+        if not self._persistent:
+            self._thread = self._worker = None
         if result is not None and not self.closed:
             self.completed.emit(result)
         # A completion handler may replace pending or start a preparation worker.
@@ -140,6 +170,9 @@ class PreviewQueue(QObject):
         if pending is not None and not self.closed:
             self._start(pending)
         elif self.active is None:
+            if self.closed and self._persistent and self._thread is not None:
+                self._thread.quit()
+                self._thread.wait(1000)
             self.idle.emit()
 
 

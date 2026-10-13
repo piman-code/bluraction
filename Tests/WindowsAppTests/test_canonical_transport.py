@@ -87,7 +87,7 @@ class ScheduleSession:
 
 
 class CanonicalTransportTests(unittest.TestCase):
-    def test_child_handshake_sar_matches_observed_pixel_contract_without_stream_guess(self):
+    def test_child_handshake_sar_matches_shared_display_policy(self):
         """Controlled metadata witness, not an authored native-media SAR proof.
 
         Exercise the actual child metadata/send path: pixels can use a frame
@@ -109,8 +109,10 @@ class CanonicalTransportTests(unittest.TestCase):
             def close(self): self.closed=True
         cases=((F(4,3),None,None,F(4,3)), (F(4,3),F(0),F(0),F(4,3)),
                (F(4,3),F(1),F(2),F(4,3)), (None,F(1),F(3,2),F(3,2)),
-               (F(0),F(1),F(3,2),F(3,2)), (None,F(1),None,None),
-               (F(0),F(1),F(0),None), (F(-1),F(1),F(1),None))
+               (F(0),F(1),F(3,2),F(3,2)), (None,F(1),None,F(1)),
+               (F(0),F(1),F(0),F(1)), (None,F(4,3),None,F(4,3)),
+               (None,None,None,F(1)), (F(0),F(0),F(0),F(1)),
+               (F(-1),F(1),F(1),None))
         for frame_sar,stream_sar,codec_sar,expected in cases:
             with self.subTest(frame=frame_sar,stream=stream_sar,codec=codec_sar):
                 stream=SimpleNamespace(index=0,type='video',start_time=0,duration=2,
@@ -119,7 +121,7 @@ class CanonicalTransportTests(unittest.TestCase):
                 first=SimpleNamespace(asset_pts=F(0),observation=SimpleNamespace(frame_sar=frame_sar))
                 inventory=Inventory([SimpleNamespace(pts=F(0),duration=F(1)),
                                      SimpleNamespace(pts=F(1),duration=F(1))])
-                inventory.decoder=SimpleNamespace(stream_index=0,codec_sar=codec_sar)
+                inventory.decoder=SimpleNamespace(stream_index=0,codec_sar=codec_sar,guessed_stream_sar=stream_sar)
                 retired=[]
                 video=SimpleNamespace(_inventory=inventory,_index=SimpleNamespace(iter_samples=lambda:iter([first])),
                     _decoder=lambda:Container(stream),timeline={},asset_duration=F(2),

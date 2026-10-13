@@ -1,7 +1,8 @@
 """Fail-closed legacy PDF coordinates, using optional pypdf 6.19.0 metadata.
 
 No content stream parsing, rendering, or geometry migration is performed here.
-Qt's actual displayed point sizes are supplied by the caller, never inferred.
+Qt's cropped, rotated coordinate sizes are supplied by the caller. Current
+Windows loads may opt into physical point sizes including page-local UserUnit.
 The legacy predicate matches PageWorkspace.legacyPDFEditGeometryChanged (Mac).
 
 Backend references:
@@ -63,7 +64,7 @@ class PDFPageGeometry:
     legacy_edits_need_review: bool
 
 
-def analyze_geometry(media_box, crop_box, rotation, user_unit, qt_point_size):
+def analyze_geometry(media_box, crop_box, rotation, user_unit, qt_point_size, *, allow_user_unit=False):
     """Pure numeric policy, not a PDF parser or substitute for backend readback."""
     media = _box(media_box, 'MediaBox')
     crop = _box(crop_box, 'CropBox')
@@ -78,7 +79,9 @@ def analyze_geometry(media_box, crop_box, rotation, user_unit, qt_point_size):
     unit = _number(user_unit, 'UserUnit')
     # PDFKit/UserUnit behavior has not been cross-verified. Do not claim ordinary
     # legacy coordinates are safe by assuming both engines scale them identically.
-    if unit != 1:
+    if unit <= 0:
+        raise PDFGeometryError('PDF UserUnit은 양수여야 합니다.')
+    if unit != 1 and not allow_user_unit:
         raise PDFGeometryError('UserUnit이 1이 아닌 PDF의 이전 편집 좌표는 직접 검토해야 합니다.')
     if not isinstance(qt_point_size, (tuple, list)) or len(qt_point_size) != 2:
         raise PDFGeometryError('Qt의 실제 PDF 표시 크기가 필요합니다.')
@@ -94,7 +97,11 @@ def analyze_geometry(media_box, crop_box, rotation, user_unit, qt_point_size):
         raise PDFGeometryError('Qt 표시 크기와 PDF 원시 crop·회전 기하가 일치하지 않습니다.')
     review = (abs(crop[0]) > EPSILON or abs(crop[1]) > EPSILON
               or abs(width - display[0]) > EPSILON or abs(height - display[1]) > EPSILON)
-    return PDFPageGeometry(media, crop, rotation, unit, display, review)
+    # Qt 6.11.1/PDFium reports cropped, rotated coordinate sizes without
+    # UserUnit. New Windows loads use physical points; legacy review keeps its
+    # separate fail-closed policy until the older editor is cross-verified.
+    physical_display = tuple(value * unit for value in display)
+    return PDFPageGeometry(media, crop, rotation, unit, physical_display, review or unit != 1)
 
 
 def _backend():
@@ -202,13 +209,16 @@ class _BoundedReader:
         return data
 
 
-def inspect_pdf_geometry(path, qt_point_sizes, *, expected_identity=None, expected_sha256=None, cancel=None):
+def inspect_pdf_geometry(path, qt_point_sizes, *, expected_identity=None, expected_sha256=None, cancel=None,
+                         allow_user_unit=False):
     """Inspect all raw pages and cross-check caller-supplied actual Qt sizes.
 
     Parent should pass the load baseline identity AND SHA and reject an affected
     legacy edited page before replacing its operating Workspace. New projects
     marked pdfGeometryVersion=1 never need a legacy policy decision. Return
     metadata only; this function never changes a PDF, project, or editor.
+    allow_user_unit is reserved for current Windows loads; legacy callers keep
+    the default rejection of scaled documents and their existing review policy.
     """
     from .media import _capture_identity, _check_identity, check_cancel, fingerprint
     from shared.source_identity import stat_snapshot, same_domain, path_matches_descriptor
@@ -247,7 +257,9 @@ def inspect_pdf_geometry(path, qt_point_sizes, *, expected_identity=None, expect
                 check()
                 media = inherited.get('/MediaBox')
                 crop = inherited.get('/CropBox', media)
-                result.append(analyze_geometry(media, crop, inherited.get('/Rotate', 0), page.get('/UserUnit', 1), qt_size))
+                arguments = (media, crop, inherited.get('/Rotate', 0), page.get('/UserUnit', 1), qt_size)
+                result.append(analyze_geometry(*arguments, allow_user_unit=True) if allow_user_unit
+                              else analyze_geometry(*arguments))
             descriptor_current = stat_snapshot(os.fstat(stream.fileno()), domain='descriptor')
             if (not same_domain(descriptor_baseline, descriptor_current)
                     or not path_matches_descriptor(before.stat_snapshot, descriptor_current)):
