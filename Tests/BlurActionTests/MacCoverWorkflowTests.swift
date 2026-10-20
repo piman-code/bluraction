@@ -68,7 +68,7 @@ struct MacCoverWorkflowTests {
         let holdButton = try #require(session.descendants.compactMap { $0 as? NSButton }
             .first { $0.title == "현재 위치로 구간 보정" })
         #expect(!holdButton.isHiddenOrHasHiddenAncestor && holdButton.isEnabled)
-        holdButton.performClick(nil)
+        click(holdButton)
         let after = try #require(session.canvas.effectForID?(shape.id))
         #expect(controller.pendingTrackingReviews.isEmpty)
         #expect(after.trackingReviews.first?.status == .corrected)
@@ -197,7 +197,7 @@ struct MacCoverWorkflowTests {
         let hold = try #require(session.descendants.compactMap { $0 as? NSButton }.first { $0.title == "현재 위치로 구간 보정" })
         #expect(field.isEnabled && apply.isEnabled)
         field.stringValue = "학생 A 🙂"
-        apply.performClick(nil)
+        click(apply)
         #expect(session.canvas.effectForID?(shape.id)?.decoration?.text == "학생 A 🙂")
         #expect(!retry.isEnabled && !hold.isEnabled, "Image mode has no video repair operation")
         controller.setLayerHidden(shape.id, true)
@@ -231,5 +231,14 @@ struct MacCoverWorkflowTests {
         if FileManager.default.fileExists(atPath: destination.path) { destination = folder.appendingPathComponent("native-ui-\(UUID()).png") }
         try png.write(to: destination, options: .withoutOverwriting)
         print("Synthetic native UI screenshot: \(destination.path)")
+    }
+
+    /// Sends the button's action directly. `performClick` spins a nested
+    /// event loop that can end an async test run early. Toggle-style
+    /// buttons (checkbox, disclosure, on/off) change state first, as a click would.
+    private func click(_ button: NSButton) {
+        guard button.isEnabled, let action = button.action else { return }
+        if let cell = button.cell as? NSButtonCell, !cell.showsStateBy.isEmpty { button.setNextState() }
+        NSApp.sendAction(action, to: button.target, from: button)
     }
 }

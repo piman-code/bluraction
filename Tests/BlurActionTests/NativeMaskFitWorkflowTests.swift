@@ -28,7 +28,7 @@ struct NativeMaskFitWorkflowTests {
         #expect(base.effect.automaticCover != nil)
         let restore = try #require(s.descendants.compactMap { $0 as? NSButton }.first { $0.title == "넉넉하게 가리기" })
         #expect(!restore.isHiddenOrHasHiddenAncestor && restore.isEnabled)
-        restore.performClick(nil)
+        click(restore)
         let generous = try #require(s.canvas.regionsBinding?().first)
         #expect(abs(generous.boundingRect.width / s.canvas.bounds.width - d.generousBox.width) < 0.0001)
         guard case .rectangle = generous else { Issue.record("Restoration must be the original rectangle"); return }
@@ -187,7 +187,7 @@ struct NativeMaskFitWorkflowTests {
         s.canvas.selectRegion(id: region.shape.id)
         let button = try #require(s.descendants.compactMap { $0 as? NSButton }.first { $0.title == "넉넉하게 가리기" })
         #expect(button.isEnabled && !button.isHiddenOrHasHiddenAncestor)
-        button.performClick(nil)
+        click(button)
         #expect(s.canvas.effectForID?(region.shape.id)?.automaticCover?.mode == .generous)
         let shown = try #require(s.canvas.regionsBinding?().first { $0.id == region.shape.id })
         let scale = s.canvas.bounds.size
@@ -208,4 +208,12 @@ struct NativeMaskFitWorkflowTests {
         #expect(try PageWorkspace.digest(of: original) == before)
     }
 
+    /// Sends the button's action directly. `performClick` spins a nested
+    /// event loop that can end an async test run early. Toggle-style
+    /// buttons (checkbox, disclosure, on/off) change state first, as a click would.
+    private func click(_ button: NSButton) {
+        guard button.isEnabled, let action = button.action else { return }
+        if let cell = button.cell as? NSButtonCell, !cell.showsStateBy.isEmpty { button.setNextState() }
+        NSApp.sendAction(action, to: button.target, from: button)
+    }
 }

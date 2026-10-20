@@ -83,24 +83,24 @@ struct TaskSidebarTests {
             .first { $0.accessibilityLabel() == "가림에 붙일 내용" })
         #expect(!field.isHiddenOrHasHiddenAncestor && field.isEnabled)
         field.stringValue = "학생 A 🙂"
-        try button("붙이기", in: session).performClick(nil)
+        try click(button("붙이기", in: session))
         #expect(session.canvas.effectForID?(shape.id)?.decoration?.text == "학생 A 🙂")
         let advanced: NSView = try view("advancedSettingsContent", in: session)
         let toggle: NSButton = try view("advancedSettingsToggle", in: session)
         #expect(advanced.isHiddenOrHasHiddenAncestor)
-        toggle.performClick(nil)
+        click(toggle)
         #expect(!advanced.isHiddenOrHasHiddenAncestor)
         let precise = try button("좌표·크기 적용", in: session)
         #expect(!precise.isHiddenOrHasHiddenAncestor && precise.isEnabled)
         let x = try #require(session.descendants.compactMap { $0 as? NSTextField }
             .first { $0.accessibilityLabel() == "왼쪽 X (원본 픽셀)" })
         x.stringValue = "16"
-        precise.performClick(nil)
+        click(precise)
         let saved = try ProjectFile.decode(session.controller.projectData())
         #expect(abs(try #require(saved.regions.first).shape.boundingRect.minX - 16 / 320.0) < 0.001)
         #expect(saved.regions.first?.effect.decoration?.text == "학생 A 🙂")
         try capture("image-selection-advanced", in: session)
-        toggle.performClick(nil)
+        click(toggle)
         #expect(advanced.isHiddenOrHasHiddenAncestor)
         try choose(2, in: session)
         #expect(!review.isHiddenOrHasHiddenAncestor && selected.isHiddenOrHasHiddenAncestor)
@@ -137,7 +137,7 @@ struct TaskSidebarTests {
         let content: NSView = try view("outputSettingsContent", in: session)
         #expect(content.isHiddenOrHasHiddenAncestor)
         let shortcut: NSButton = try view("outputSettingsShortcut", in: session)
-        shortcut.performClick(nil)
+        click(shortcut)
         let tabs: NSSegmentedControl = try view("taskPanelSelector", in: session)
         #expect(tabs.selectedSegment == 1)
         let format = try #require(session.descendants.compactMap { $0 as? NSPopUpButton }
@@ -149,7 +149,7 @@ struct TaskSidebarTests {
         try choose(0, in: session)
         #expect(format.titleOfSelectedItem == "TIFF", "Task changes keep the selected image output format")
         try choose(1, in: session)
-        toggle.performClick(nil)
+        click(toggle)
         assertVisible(layers, in: session)
         assertVisible(try button("내보내기", in: session), in: session)
     }
@@ -163,7 +163,7 @@ struct TaskSidebarTests {
         let bold = try button("굵게", in: session)
         #expect(!bold.isHiddenOrHasHiddenAncestor && bold.isEnabled)
         let previousBold = bold.state
-        bold.performClick(nil)
+        click(bold)
         #expect(bold.state == (previousBold == .on ? .off : .on))
         session.tool(2)
         let eraser = try #require(session.descendants.compactMap { $0 as? NSSegmentedControl }
@@ -203,19 +203,19 @@ struct TaskSidebarTests {
         let cover = try addCover(in: session)
         #expect(session.controller.setCoverDecoration(cover.id, text: "문서 🙂"))
         session.controller.applyCurrentPageToAll()
-        session.container.nextPageButton.performClick(nil)
+        click(session.container.nextPageButton)
         #expect(session.container.pageLabel.stringValue == "2 / 3")
         #expect(session.canvas.regionsBinding?().count == 1)
         _ = try addCover(in: session)
-        session.container.nextPageButton.performClick(nil)
+        click(session.container.nextPageButton)
         #expect(session.container.pageLabel.stringValue == "3 / 3")
         #expect(session.canvas.regionsBinding?().count == 1)
-        session.container.previousPageButton.performClick(nil)
+        click(session.container.previousPageButton)
         #expect(session.canvas.regionsBinding?().count == 2)
         try capture("multipage-page-two", in: session)
         try choose(2, in: session)
         let outputShortcut: NSButton = try view("outputSettingsShortcut", in: session)
-        outputShortcut.performClick(nil)
+        click(outputShortcut)
         let format = try #require(session.descendants.compactMap { $0 as? NSPopUpButton }
             .first { $0.itemTitles == ["PNG", "JPEG", "HEIC", "TIFF"] })
         #expect(format.isHiddenOrHasHiddenAncestor, "Multi-page output keeps its PDF and per-image PNG contract")
@@ -257,7 +257,7 @@ struct TaskSidebarTests {
             .first { $0.placeholderString == "가릴 문구 (쉼표로 여러 개)" })
         phrase.stringValue = "늦은 결과"
         let start = try #require(session.descendants.compactMap { $0 as? NSButton }.first { $0.title.hasPrefix("문구 찾아") })
-        start.performClick(nil)
+        click(start)
         #expect(session.controller.isExporting && !session.canvas.isEditable)
         let field = try #require(session.descendants.compactMap { $0 as? NSTextField }
             .first { $0.accessibilityLabel() == "가림에 붙일 내용" })
@@ -266,11 +266,20 @@ struct TaskSidebarTests {
         let cancel = try button("취소", in: session)
         #expect(!cancel.isHiddenOrHasHiddenAncestor && cancel.isEnabled)
         try capture("video-busy-cancel", in: session)
-        cancel.performClick(nil)
+        click(cancel)
         try await waitUntil { !session.controller.isExporting }
         #expect(session.canvas.isEditable && field.isEnabled && start.isEnabled && session.tools.isEnabled)
         #expect(session.container.slider.isEnabled)
         #expect(try session.controller.projectData(producerVersion: "task-sidebar-test") == before)
         #expect(try VideoProjectSourceBinding.Source.capture(source) == identity)
+    }
+
+    /// Sends the button's action directly. `performClick` spins a nested
+    /// event loop that can end an async test run early. Toggle-style
+    /// buttons (checkbox, disclosure, on/off) change state first, as a click would.
+    private func click(_ button: NSButton) {
+        guard button.isEnabled, let action = button.action else { return }
+        if let cell = button.cell as? NSButtonCell, !cell.showsStateBy.isEmpty { button.setNextState() }
+        NSApp.sendAction(action, to: button.target, from: button)
     }
 }
