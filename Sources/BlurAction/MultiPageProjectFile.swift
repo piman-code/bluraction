@@ -1,7 +1,8 @@
 import Foundation
 import PDFKit
 
-/// Version 2 of a .bluraction session. Version 1 remains the single-media format.
+/// Version 2 of a .bluraction session; version 6 when cover labels/review records are present.
+/// Version 1/5 remains the single-media format.
 struct MultiPageProjectFile: Codable {
     struct Page: Codable {
         var mediaPath: String
@@ -14,6 +15,7 @@ struct MultiPageProjectFile: Codable {
     }
 
     var version = 2
+    static let macEditingVersion = 6
     var title: String
     var currentIndex: Int
     var pages: [Page]
@@ -40,10 +42,12 @@ struct MultiPageProjectFile: Codable {
     }
 
     func encoded() throws -> Data {
-        try validate()
+        var saved = self
+        saved.version = formatVersion
+        try saved.validate()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
+        let data = try encoder.encode(saved)
         guard data.count <= Self.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
         return data
     }
@@ -53,13 +57,14 @@ struct MultiPageProjectFile: Codable {
         guard let project = try? JSONDecoder().decode(Self.self, from: data) else {
             throw ProjectFile.ProjectError.invalidContent
         }
+        if project.version == macEditingVersion { try VideoProjectFile.validateMacWorkspace(data) }
         try project.validate()
         return project
     }
 
     /// Encoding and decoding use the same contract so successful saves can reopen.
     private func validate() throws {
-        guard version == 2,
+        guard version == formatVersion,
               !title.isEmpty, title.count <= Self.maximumTitleLength,
               (1...PageWorkspace.maximumPages).contains(pages.count),
               pages.indices.contains(currentIndex) else {
@@ -81,6 +86,10 @@ struct MultiPageProjectFile: Codable {
                                      regions: page.regions, drawings: page.drawings)
             _ = try ProjectFile.decode(single.encoded())
         }
+    }
+
+    private var formatVersion: Int {
+        pages.contains { $0.regions.contains { $0.effect.hasMacExtensions } } ? Self.macEditingVersion : 2
     }
 
     func workspace(relativeTo projectURL: URL, relinkedSources: [String: URL] = [:]) throws -> PageWorkspace {

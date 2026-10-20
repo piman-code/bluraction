@@ -9,6 +9,8 @@ enum PhraseCover {
         var box: CGRect
         var start: Double
         var end: Double
+        /// Verified matching-character vertices; nil retains the legacy whole-line cover.
+        var evidencePoints: [CGPoint]? = nil
     }
 
     /// Minimum normalized length: one character would match almost everything.

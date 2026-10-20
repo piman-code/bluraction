@@ -58,12 +58,19 @@ struct PersonKeepTests {
             #expect(point.x > 0 && point.x < 1)
             return CGRect(x: 0.2, y: 0.1, width: 0.3, height: 0.8)
         }
+        // This fixture contains no person. Keep tracking deterministic too: a real loss now
+        // correctly records a review and promotes the file to v7, independent of reverse cover.
+        controller.trackObjects = { _, start, end, boxes, _, _, _ in
+            boxes.map { .init(samples: [.init(time: start, box: $0), .init(time: end, box: $0)],
+                              lostTarget: false, cancelled: false) }
+        }
         let size = session.canvas.displayRect.size
         controller.keepPerson(atCanvasPoint: CGPoint(x: size.width / 2, y: size.height / 2))
         try await waitUntil { !controller.isExporting }
         let saved = try VideoProjectFile.decode(controller.projectData(producerVersion: "test.person"))
         #expect(saved.payload.version == 4, "A reverse cover makes the file format 4")
         let region = try #require(saved.payload.regions.first)
+        #expect(region.effect.trackingReviews.isEmpty)
         #expect(region.effect.inverted)
         #expect(region.effect.name == "사람 1")
         guard case .rectangle(_, let origin, let size) = region.shape else {

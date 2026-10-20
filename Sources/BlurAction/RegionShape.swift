@@ -142,6 +142,12 @@ struct RegionEffect: Equatable, Codable {
     /// Written only when true, so projects without it keep their exact previous bytes.
     /// Video projects with a reverse region use format version 4.
     var inverted = false
+    /// Text/emoji moves and scales with this cover, without a separate editable drawing.
+    var decoration: CoverDecoration?
+    /// Explicit uncertainty; never interpreted as proof that the region was safely covered.
+    var trackingReviews: [TrackingReview] = []
+    var automaticCover: AutomaticCover?
+    var hasMacExtensions: Bool { decoration != nil || !trackingReviews.isEmpty || automaticCover != nil }
 
     enum CoverStyle: String, Equatable, CaseIterable, Codable { case blur, mosaic, solid }
 
@@ -230,8 +236,8 @@ enum QualityPreset: String, CaseIterable, Identifiable {
 extension RegionEffect {
     /// nil time is a still image: ignore time range and motion keyframes.
     func shape(_ base: RegionShape, at time: Double?) -> RegionShape {
-        guard let time else { return base }
-        return base.replacing(rect: base.interpolatedRect(at: time, baseRect: base.boundingRect, keyframes: keyframes))
+        let rect = time.map { base.interpolatedRect(at: $0, baseRect: base.boundingRect, keyframes: keyframes) } ?? base.boundingRect
+        return automaticCover?.shape(base: base, rect: rect, time: time, reviews: trackingReviews) ?? base.replacing(rect: rect)
     }
 
     func isActive(at time: Double?) -> Bool {
@@ -290,7 +296,7 @@ struct EraseStroke: Equatable, Codable {
 extension RegionEffect {
     /// Written out because the encoder below is hand-written; the names are the stored keys.
     enum CodingKeys: String, CodingKey {
-        case blurRadius, featherRadius, timeRange, enabled, keyframes, style, color, groupID, erasures, name, locked, inverted
+        case blurRadius, featherRadius, timeRange, enabled, keyframes, style, color, groupID, erasures, name, locked, inverted, decoration, trackingReviews, automaticCover
     }
 
     /// Fields added after 0.4 are optional in files so older projects still open.
@@ -309,6 +315,9 @@ extension RegionEffect {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
         inverted = try c.decodeIfPresent(Bool.self, forKey: .inverted) ?? false
+        decoration = try c.decodeIfPresent(CoverDecoration.self, forKey: .decoration)
+        trackingReviews = try c.decodeIfPresent([TrackingReview].self, forKey: .trackingReviews) ?? []
+        automaticCover = try c.decodeIfPresent(AutomaticCover.self, forKey: .automaticCover)
     }
 
     /// Same keys and order as the synthesized encoder, plus `inverted` only when it is true.
@@ -326,5 +335,8 @@ extension RegionEffect {
         try c.encodeIfPresent(name, forKey: .name)
         try c.encode(locked, forKey: .locked)
         if inverted { try c.encode(true, forKey: .inverted) }
+        try c.encodeIfPresent(decoration, forKey: .decoration)
+        try c.encodeIfPresent(automaticCover, forKey: .automaticCover)
+        if !trackingReviews.isEmpty { try c.encode(trackingReviews, forKey: .trackingReviews) }
     }
 }

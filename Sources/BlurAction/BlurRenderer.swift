@@ -113,7 +113,8 @@ enum BlurRenderer {
             else { throw RenderError.filterFailed }
             result = output.cropped(to: extent)
         }
-        guard annotations.contains(where: { $0.isVisible(at: time) }) else { return result }
+        let decorated = pairs.filter { $0.effect.decoration != nil && $0.effect.isActive(at: time) }
+        guard !decorated.isEmpty || annotations.contains(where: { $0.isVisible(at: time) }) else { return result }
         guard extent.width <= 32768, extent.height <= 32768,
               extent.width * extent.height <= 134_217_728,
               let context = CGContext(data: nil, width: Int(ceil(extent.width)), height: Int(ceil(extent.height)),
@@ -121,6 +122,17 @@ enum BlurRenderer {
                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw RenderError.maskAllocation }
         context.clear(CGRect(origin: .zero, size: extent.size))
         context.scaleBy(x: extent.width / canvasSize.width, y: extent.height / canvasSize.height)
+        // All covers are complete first; another cover cannot erase an attached label.
+        for pair in decorated {
+            guard let decoration = pair.effect.decoration, decoration.isValid, !pair.effect.inverted else {
+                throw RenderError.invalidEffect
+            }
+            let shape = pair.effect.shape(pair.shape, at: time)
+            context.saveGState()
+            context.addPath(shape.path()); context.clip()
+            decoration.render(in: context, rect: shape.boundingRect)
+            context.restoreGState()
+        }
         for base in annotations where base.isVisible(at: time) {
             let annotation = base.displayed(at: time)
             guard annotation.lineWidth.isFinite, annotation.lineWidth > 0,

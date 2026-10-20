@@ -21,6 +21,26 @@ enum ObjectTracker {
 
     enum Direction: Equatable { case forward, backward }
 
+    /// Raw decoder images retained only for one short phrase interval. The same
+    /// orientation and scale are applied by both shared and independent readers.
+    struct ForwardFrame {
+        let time: Double
+        let image: CIImage
+    }
+    struct ForwardFrames {
+        let frames: [ForwardFrame]
+        let transform: CGAffineTransform
+        let frameRate: Float
+    }
+
+    /// Keep the original reader's 600-timescale rounding, including its terminal
+    /// epsilon, so sharing never drops a frame at a fractional interval boundary.
+    static func forwardReadRange(from start: Double, until end: Double) -> CMTimeRange {
+        let lower = max(0, start - 0.5)
+        return CMTimeRange(start: CMTime(seconds: lower, preferredTimescale: 600),
+            duration: CMTime(seconds: max(0.001, end + 1.0 / 240 - lower), preferredTimescale: 600))
+    }
+
     struct Options {
         var direction: Direction = .forward
         /// Centered moving average over a few frames to calm jitter.
@@ -83,7 +103,7 @@ enum ObjectTracker {
     /// Tracks every box (normalized, as seen at `start`) in one pass toward `until`
     /// (later for `.forward`, earlier for `.backward`). Call it off the main thread.
     static func trackMany(url: URL, from start: Double, until: Double, boxes: [CGRect], options: Options = Options(),
-                          cancellation: Cancellation, progress: @escaping (Double) -> Void) async throws -> [Outcome] {
+                          cancellation: Cancellation, forwardFrames: ForwardFrames? = nil, progress: @escaping (Double) -> Void) async throws -> [Outcome] {
         guard !boxes.isEmpty, boxes.allSatisfy({ $0.width >= minimumSide && $0.height >= minimumSide }) else { throw TrackError.boxTooSmall }
         if boxes.count > maxTrackersPerPass {
             // Vision refuses a 33rd live tracker on one handler, so larger sets go in turns.
@@ -94,17 +114,26 @@ enum ObjectTracker {
             for (number, group) in groups.enumerated() {
                 let base = Double(number) / Double(groups.count), share = 1 / Double(groups.count)
                 outcomes += try await trackMany(url: url, from: start, until: until, boxes: group, options: options,
-                                                cancellation: cancellation) { progress(base + $0 * share) }
+                                                cancellation: cancellation, forwardFrames: forwardFrames) { progress(base + $0 * share) }
             }
             return outcomes
         }
-        let asset = VideoAssetPolicy.asset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw TrackError.noVideoTrack }
-        let (transform, frameRate) = try await track.load(.preferredTransform, .nominalFrameRate)
+        let shared = options.direction == .forward && !options.reacquireFaces ? forwardFrames : nil
+        let source: FrameSource?
+        let frameRate: Float
+        if let shared {
+            frameRate = shared.frameRate
+            source = nil
+        } else {
+            let asset = VideoAssetPolicy.asset(url: url)
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw TrackError.noVideoTrack }
+            let (transform, rate) = try await track.load(.preferredTransform, .nominalFrameRate)
+            frameRate = rate
+            source = FrameSource(asset: asset, track: track, transform: transform, maxSide: options.maxSide)
+        }
         // Chunked backward reads can hand back the frame straddling a boundary twice (retimed);
         // anything closer than half a frame to the last handled frame is the same picture.
         let halfFrame = 0.5 / Double(frameRate > 0 ? frameRate : 30)
-        let source = FrameSource(asset: asset, track: track, transform: transform, maxSide: options.maxSide)
         var targets = boxes.map { Target(observation: VNDetectedObjectObservation(boundingBox: $0.clamped01), size: $0.size) }
         let handler = VNSequenceRequestHandler()
         let span = abs(until - start)
@@ -189,19 +218,32 @@ enum ObjectTracker {
             // The frame shown at `start` (latest frame at or before it) defines the targets.
             var reference: CIImage?
             var classified = false
-            try source.read(from: max(0, start - 0.5), to: until + epsilon) { time, frame in
-                if cancellation.isCancelled { return false }
-                if time <= start + epsilon { // up to the reference frame
-                    if options.reacquireFaces { reference = try frame(true) }
-                    return true
+            if let shared {
+                let range = forwardReadRange(from: start, until: until)
+                let upper = CMTimeRangeGetEnd(range).seconds
+                for frame in shared.frames {
+                    if cancellation.isCancelled { break }
+                    guard frame.time >= range.start.seconds, frame.time < upper,
+                          frame.time > start + epsilon else { continue }
+                    if try !step(FrameSource.prepared(frame.image, transform: shared.transform,
+                                                     maxSide: options.maxSide), at: frame.time) { break }
                 }
-                if !classified {
-                    classified = true
-                    if let reference { try classify(reference) }
+            } else if let source {
+                try source.read(from: max(0, start - 0.5), to: until + epsilon) { time, frame in
+                    if cancellation.isCancelled { return false }
+                    if time <= start + epsilon { // up to the reference frame
+                        if options.reacquireFaces { reference = try frame(true) }
+                        return true
+                    }
+                    if !classified {
+                        classified = true
+                        if let reference { try classify(reference) }
+                    }
+                    return try step(frame(false), at: time)
                 }
-                return try step(frame(false), at: time)
             }
         case .backward:
+            guard let source else { throw TrackError.readFailed }
             // Readers only run forward: read short chunks ending at the previous chunk's start
             // and walk each one backward, so memory stays bounded.
             var upper = start + epsilon
@@ -333,10 +375,26 @@ enum ObjectTracker {
         let track: AVAssetTrack
         let transform: CGAffineTransform
         let maxSide: CGFloat
-        private let context = CIContext()
+        // Forward phrase tracking never needs a retained bitmap. Delay the expensive
+        // renderer until a backward/read-ahead caller actually requests one.
+        private let renderer = CachedFrameRenderer()
+
+        private final class CachedFrameRenderer {
+            lazy var context = CIContext()
+        }
 
         init(asset: AVAsset, track: AVAssetTrack, transform: CGAffineTransform, maxSide: CGFloat) {
             self.asset = asset; self.track = track; self.transform = transform; self.maxSide = maxSide
+        }
+
+        static func prepared(_ raw: CIImage, transform: CGAffineTransform, maxSide: CGFloat) -> CIImage {
+            var image = BlurRenderer.oriented(raw, transform: transform)
+            let longest = max(image.extent.width, image.extent.height)
+            if longest > maxSide {
+                let scale = maxSide / longest
+                image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            }
+            return image
         }
 
         /// Calls `body(time, frame)` for each frame in [from, to]; `frame()` builds the image
@@ -360,14 +418,9 @@ enum ObjectTracker {
                 let time = CMSampleBufferGetPresentationTimeStamp(buffer).seconds
                 guard time.isFinite, let pixels = CMSampleBufferGetImageBuffer(buffer) else { continue }
                 let make: (Bool) throws -> CIImage = { cached in
-                    var image = BlurRenderer.oriented(CIImage(cvPixelBuffer: pixels), transform: transform)
-                    let longest = max(image.extent.width, image.extent.height)
-                    if longest > maxSide {
-                        let scale = maxSide / longest
-                        image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                    }
+                    let image = Self.prepared(CIImage(cvPixelBuffer: pixels), transform: transform, maxSide: maxSide)
                     guard cached else { return image }
-                    guard let rendered = context.createCGImage(image, from: image.extent) else {
+                    guard let rendered = renderer.context.createCGImage(image, from: image.extent) else {
                         throw TrackError.nativeFailure(stage: .readerOutput, underlying: nil)
                     }
                     return CIImage(cgImage: rendered)

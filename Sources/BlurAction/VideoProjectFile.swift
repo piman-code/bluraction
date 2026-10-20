@@ -7,6 +7,7 @@ import AppKit
 /// Video v3 is separate from image v1/PDF workspace v2. Original tokens are the
 /// save baseline; Codable models are only an editable/renderable projection.
 struct VideoProjectFile {
+    static let macEditingVersion = 7
     struct Producer: Codable, Equatable {
         var name = "BlurAction"
         var platform = "macos"
@@ -41,7 +42,7 @@ struct VideoProjectFile {
         guard data.count <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
         let inspection = try ProjectJSONTokens.inspect(data)
         // Version 4 exists only for reverse covers; older apps and the Windows reader refuse it.
-        guard inspection.version == 3 || inspection.version == 4, let rawTimeline = inspection.rawTimeline else {
+        guard [3, 4, Int64(macEditingVersion)].contains(inspection.version), let rawTimeline = inspection.rawTimeline else {
             throw ProjectFile.ProjectError.unsupportedVersion
         }
         let tree = try Node.parse(data)
@@ -75,7 +76,7 @@ struct VideoProjectFile {
     /// Codable and then promoted to v3 after those original fields disappeared.
     static func decodeLegacy(_ data: Data) throws -> ProjectFile {
         guard data.count <= ProjectFile.maximumBytes else { throw ProjectFile.ProjectError.tooLarge }
-        guard try version(of: data) == 1 else { throw ProjectFile.ProjectError.unsupportedVersion }
+        guard [1, ProjectFile.macEditingVersion].contains(try version(of: data)) else { throw ProjectFile.ProjectError.unsupportedVersion }
         let tree = try Node.parse(data)
         guard case .object(let root) = tree else { throw ProjectFile.ProjectError.invalidContent }
         let allowed: Set<String> = ["version", "mediaPath", "sourceSHA256", "regions", "drawings"]
@@ -85,6 +86,36 @@ struct VideoProjectFile {
         try validateKnownEdits(tree, original: data)
         try tree.rejectInexactModelIntegers(original: data)
         return try ProjectFile.decode(data)
+    }
+
+    /// The additive Mac single/workspace formats refuse unknown fields too. Original legacy
+    /// formats retain their existing handling; new features never get mislabeled as legacy.
+    static func validateMacSingle(_ data: Data) throws {
+        let tree = try Node.parse(data)
+        guard case .object(let root) = tree,
+              Set(root.keys).isSubset(of: ["version", "mediaPath", "sourceSHA256", "regions", "drawings"]) else {
+            throw ProjectFile.ProjectError.unsupportedVersion
+        }
+        try validateKnownEdits(tree, original: data)
+        try tree.rejectInexactModelIntegers(original: data)
+    }
+
+    static func validateMacWorkspace(_ data: Data) throws {
+        // The dispatch parser validates all tokens, duplicate keys, depth and the existing
+        // 50 MiB workspace limit before the tree is read, without the video 20 MiB limit.
+        _ = try version(of: data)
+        let tree = try Node.parseValidated(data)
+        func allowed(_ node: Node, _ keys: Set<String>) throws {
+            guard case .object(let fields) = node, Set(fields.keys).isSubset(of: keys) else {
+                throw ProjectFile.ProjectError.unsupportedVersion
+            }
+        }
+        try allowed(tree, ["version", "title", "currentIndex", "pages"])
+        for page in try tree.value("pages").arrayValues() {
+            try allowed(page, ["mediaPath", "pdfPageIndex", "sourceSHA256", "pdfGeometryVersion", "regions", "drawings"])
+            try validateKnownEdits(page, original: data)
+        }
+        try tree.rejectInexactModelIntegers(original: data)
     }
 
     private static func validateKnownEdits(_ tree: Node, original data: Data) throws {
@@ -126,7 +157,17 @@ struct VideoProjectFile {
             try fields(try shape.value(kind), required, required, "shape." + kind)
             let effect = try region.value("effect")
             let requiredEffect: Set<String> = ["blurRadius", "featherRadius", "timeRange", "enabled", "keyframes"]
-            try fields(effect, requiredEffect, requiredEffect.union(["style", "color", "groupID", "erasures", "name", "locked", "inverted"]), "effect")
+            try fields(effect, requiredEffect, requiredEffect.union(["style", "color", "groupID", "erasures", "name", "locked", "inverted", "decoration", "trackingReviews", "automaticCover"]), "effect")
+            if let decoration = effect.optional("decoration"), !decoration.isNull {
+                try fields(decoration, ["text", "scale", "color"], ["text", "scale", "color"], "effect.decoration")
+                try color(try decoration.value("color"), "effect.decoration.color")
+            }
+            if let reviews = effect.optional("trackingReviews"), !reviews.isNull {
+                for review in try reviews.arrayValues() {
+                    let keys: Set<String> = ["id", "start", "end", "reason", "status"]
+                    try fields(review, keys, keys, "effect.trackingReviews")
+                }
+            }
             if let flag = effect.optional("inverted") {
                 guard case .bool(let reverse) = flag else { throw ProjectFile.ProjectError.invalidContent }
                 // A reverse cover with rubbed-out parts has no defined meaning (see BlurRenderer).
@@ -145,9 +186,10 @@ struct VideoProjectFile {
         }
     }
 
-    /// 3 for ordinary video projects; 4 once any region is a reverse cover.
+    /// 3 for ordinary video projects, 4 for reverse covers, 7 for labels/review records.
     static func formatVersion(for regions: [ProjectFile.Region]) -> Int {
-        regions.contains { $0.effect.inverted } ? 4 : 3
+        if regions.contains(where: { $0.effect.hasMacExtensions }) { return macEditingVersion }
+        return regions.contains { $0.effect.inverted } ? 4 : 3
     }
 
     static func validProducerVersion(_ value: String) -> Bool {
@@ -375,6 +417,9 @@ struct VideoProjectFile {
         static func encoded<T: Encodable>(_ v: T) throws -> Node { try parse(JSONEncoder().encode(v)) }
         static func parse(_ data: Data) throws -> Node {
             try ProjectJSONTokens.validateObjectOrValueForVideoProject(data)
+            return try parseValidated(data)
+        }
+        static func parseValidated(_ data: Data) throws -> Node {
             var parser = Parser(bytes: Array(data)); return try parser.value()
         }
         func data() throws -> Data {

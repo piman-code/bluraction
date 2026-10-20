@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 /// Saved editing session (`.bluraction`, JSON). Geometry is normalized to a 1×1 canvas so a
 /// project reopens correctly at any window size. The media file itself is referenced, not copied.
+/// Version 5 adds cover labels and review records; an unextended session remains version 1.
 struct ProjectFile: Codable, Equatable {
     struct Region: Codable, Equatable {
         var shape: RegionShape
@@ -12,6 +13,7 @@ struct ProjectFile: Codable, Equatable {
 
     static let fileExtension = "bluraction"
     static let currentVersion = 1
+    static let macEditingVersion = 5
     static let maximumBytes = 20 * 1024 * 1024
     static var contentType: UTType { UTType(filenameExtension: fileExtension) ?? .json }
 
@@ -69,7 +71,13 @@ struct ProjectFile: Codable, Equatable {
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(self)
+        var saved = self
+        saved.version = Self.formatVersion(for: regions)
+        return try encoder.encode(saved)
+    }
+
+    static func formatVersion(for regions: [Region]) -> Int {
+        regions.contains { $0.effect.hasMacExtensions } ? macEditingVersion : currentVersion
     }
 
     /// Decodes and checks an untrusted project: bounded counts, finite in-range numbers.
@@ -79,7 +87,8 @@ struct ProjectFile: Codable, Equatable {
         guard data.count <= maximumBytes else { throw ProjectError.tooLarge }
         let project: ProjectFile
         do { project = try JSONDecoder().decode(ProjectFile.self, from: data) } catch { throw ProjectError.invalidContent }
-        guard project.version == currentVersion else { throw ProjectError.unsupportedVersion }
+        guard project.version == formatVersion(for: project.regions) else { throw ProjectError.unsupportedVersion }
+        if project.version == macEditingVersion { try VideoProjectFile.validateMacSingle(data) }
         guard allowsReverse || !project.regions.contains(where: { $0.effect.inverted }) else { throw ProjectError.unsupportedVersion }
         guard project.isValid else { throw ProjectError.invalidContent }
         return project
@@ -106,6 +115,11 @@ struct ProjectFile: Codable, Equatable {
                   effect.blurRadius.isFinite, (0...500).contains(effect.blurRadius),
                   effect.featherRadius.isFinite, (0...500).contains(effect.featherRadius),
                   effect.erasures.count <= 10_000, effect.erasures.allSatisfy({ $0.isValid && $0.width <= 16 && $0.points.allSatisfy(ok) }),
+                  effect.decoration?.isValid ?? true,
+                  effect.automaticCover?.isValid ?? true,
+                  !(effect.inverted && effect.decoration != nil),
+                  effect.trackingReviews.count <= 10_000, effect.trackingReviews.allSatisfy(\.isValid),
+                  Set(effect.trackingReviews.map(\.id)).count == effect.trackingReviews.count,
                   (effect.name?.count ?? 0) <= 200 else { return false }
             switch region.shape {
             case .rectangle(_, _, let size), .ellipse(_, _, let size):

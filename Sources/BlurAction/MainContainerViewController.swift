@@ -3,13 +3,15 @@ import AVKit
 
 /// 좌측 메인 영역. NSViewController 기반 — contentViewController로 직접 호스팅.
 final class MainContainerViewController: NSViewController {
+    static let sidebarWidth: CGFloat = 330
+    let editorToolBar = InspectorBackgroundStackView()
     let videoContainer = NSView()
     let aspectFitVideo = NSView()
     let playerLayer = AVPlayerLayer()
     let liveBlur: LiveBlurCompositor
     let canvas: VideoCanvasView
 
-    let controlsView = NSView()
+    let controlsView = InspectorBackgroundView()
     let playPauseButton = NSButton(title: "▶", target: nil, action: nil)
     let timeLabel = NSTextField(labelWithString: "00:00.00 / 00:00.00")
     let slider = TrackingSlider()
@@ -68,15 +70,25 @@ final class MainContainerViewController: NSViewController {
         videoContainer.addSubview(aspectFitVideo)
         root.addSubview(videoContainer)
 
+        editorToolBar.identifier = NSUserInterfaceItemIdentifier("editorToolBar")
+        editorToolBar.orientation = .horizontal
+        editorToolBar.alignment = .centerY
+        editorToolBar.spacing = 8
+        editorToolBar.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        editorToolBar.wantsLayer = true
+        editorToolBar.backgroundColor = .windowBackgroundColor
+        editorToolBar.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(editorToolBar)
+
         // 컨트롤 (타임라인)
         controlsView.wantsLayer = true
-        controlsView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        controlsView.backgroundColor = .windowBackgroundColor
         controlsView.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(controlsView)
 
         playPauseButton.bezelStyle = .rounded
         playPauseButton.setContentHuggingPriority(.required, for: .horizontal)
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        timeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         timeLabel.textColor = .secondaryLabelColor
         slider.minValue = 0
         slider.maxValue = 1
@@ -108,9 +120,13 @@ final class MainContainerViewController: NSViewController {
         controlsView.addSubview(stack)
 
         NSLayoutConstraint.activate([
-            videoContainer.topAnchor.constraint(equalTo: root.topAnchor),
+            editorToolBar.topAnchor.constraint(equalTo: root.topAnchor),
+            editorToolBar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            editorToolBar.trailingAnchor.constraint(equalTo: videoContainer.trailingAnchor),
+            editorToolBar.heightAnchor.constraint(equalToConstant: 44),
+            videoContainer.topAnchor.constraint(equalTo: editorToolBar.bottomAnchor),
             videoContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            videoContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -301),
+            videoContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -(Self.sidebarWidth + 1)),
             videoContainer.bottomAnchor.constraint(equalTo: controlsView.topAnchor),
 
             controlsView.leadingAnchor.constraint(equalTo: root.leadingAnchor),

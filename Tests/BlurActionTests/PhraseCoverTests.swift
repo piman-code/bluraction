@@ -141,11 +141,14 @@ struct PhraseCoverTests {
         let session = try await VideoSession.open()
         defer { session.close() }
         let controller = session.controller
-        // Video of 6 seconds is read once a second: hits on samples 1, 2 and 3 only.
-        let calls = CallCounter()
-        controller.recognizeLines = { _ in
-            let index = calls.next()
-            return index >= 1 && index <= 3 ? [AutoDetector.RecognizedLine(text: "홍길동", box: CGRect(x: 0.3, y: 0.3, width: 0.3, height: 0.1))] : []
+        // Inject authored observations: native OCR/track accuracy is tested in PhraseTrackerTests.
+        // This test verifies the controller applies one timed, moving region as one undo step.
+        controller.trackPhrases = { _, _, _, _, _, _ in
+            let samples = [1.0, 2, 3].map {
+                ObjectTracker.Sample(time: $0, box: CGRect(x: 0.2 + $0 * 0.05, y: 0.3, width: 0.3, height: 0.1))
+            }
+            return .init(tracks: [.init(phrase: "홍길동", samples: samples, start: 1, end: 4)],
+                         reviews: [], cancelled: false, recognitionStep: 1)
         }
         controller.findPhrases("홍길동")
         try await waitUntil { !controller.isExporting }
@@ -154,6 +157,10 @@ struct PhraseCoverTests {
         #expect(saved.payload.regions.count == 1)
         #expect(abs(region.effect.timeRange.lowerBound - 1) < 1e-6, "Starts with the first sample that shows it: \(region.effect.timeRange)")
         #expect(abs(region.effect.timeRange.upperBound - 4) < 1e-6, "Ends one step after the last: \(region.effect.timeRange)")
+        #expect(region.effect.keyframes.count == 3)
+        #expect(region.effect.keyframes.last!.rect.minX > region.effect.keyframes.first!.rect.minX)
+        controller.perform(NSSelectorFromString("undoTapped"))
+        #expect(session.canvas.regionsBinding?().isEmpty == true)
     }
 
     @MainActor

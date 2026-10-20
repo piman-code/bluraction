@@ -6,9 +6,7 @@ enum RegionEditing {
     typealias Pair = (shape: RegionShape, effect: RegionEffect)
 
     static func displayed(_ pair: Pair, at time: Double?) -> RegionShape {
-        guard let time, !pair.effect.keyframes.isEmpty else { return pair.shape }
-        return pair.shape.replacing(rect: pair.shape.interpolatedRect(
-            at: time, baseRect: pair.shape.boundingRect, keyframes: pair.effect.keyframes))
+        pair.effect.shape(pair.shape, at: time)
     }
 
     static func inserting(_ frame: RegionKeyframe, into frames: [RegionKeyframe]) -> [RegionKeyframe] {
@@ -21,12 +19,50 @@ enum RegionEditing {
                          anchorTime: Double? = nil, anchorPairs: [Pair]? = nil,
                          creationTime: Double? = nil, videoDuration: Double? = nil) -> [Pair] {
         let byID = Dictionary(pairs.map { ($0.shape.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return shapes.map { shape in
-            guard let old = byID[shape.id] else {
+        return shapes.map { requestedShape in
+            var shape = requestedShape
+            guard var old = byID[shape.id] else {
                 return (shape, .created(at: creationTime ?? time, videoDuration: videoDuration))
             }
             let shown = displayed(old, at: time)
             guard shape != shown else { return old }
+            // A manual edit takes ownership of the shown geometry. Convert the recorded
+            // boxes before dropping automatic metadata so playback cannot reapply padding.
+            if old.effect.automaticCover != nil {
+                let original = old
+                let rotatingTrack = !(original.effect.automaticCover?.evidenceKeyframes.isEmpty ?? true)
+                    && !original.effect.keyframes.isEmpty
+                let materialized: RegionShape
+                if rotatingTrack {
+                    // Rect motion cannot preserve a changing polygon orientation. Keep a
+                    // containing rectangle at every recorded anchor when handing over to
+                    // manual editing, rather than freezing the first polygon and clipping
+                    // later rotations. The requested edit takes effect at its chosen time.
+                    let initialBounds = original.shape.boundingRect.union(original.effect.shape(original.shape, at: nil).boundingRect)
+                    materialized = .rectangle(id: original.shape.id, origin: initialBounds.origin, size: initialBounds.size)
+                    let times = Set(original.effect.keyframes.map(\.time)
+                        + (original.effect.automaticCover?.evidenceKeyframes.map(\.time) ?? []))
+                    old.effect.keyframes = times.sorted().map { time in
+                        let tracked = original.shape.interpolatedRect(at: time, baseRect: original.shape.boundingRect, keyframes: original.effect.keyframes)
+                        let bounds = tracked.union(original.effect.shape(original.shape, at: time).boundingRect)
+                        return RegionKeyframe(time: time, rect: bounds)
+                    }
+                    let generousAtEdit = time.map { original.shape.interpolatedRect(at: $0, baseRect: original.shape.boundingRect, keyframes: original.effect.keyframes) } ?? original.shape.boundingRect
+                    let editedBounds = MotionTrack.shifted(generousAtEdit.union(shown.boundingRect), from: shown.boundingRect, to: shape.boundingRect)
+                    shape = .rectangle(id: shape.id, origin: editedBounds.origin, size: editedBounds.size)
+                } else {
+                    materialized = original.effect.shape(original.shape, at: nil)
+                    old.effect.keyframes = original.effect.keyframes.map { frame in
+                        RegionKeyframe(time: frame.time, rect: original.effect.shape(original.shape, at: frame.time).boundingRect)
+                    }
+                }
+                if let time, time.isFinite, !old.effect.keyframes.isEmpty, !rotatingTrack {
+                    old.effect.keyframes = inserting(RegionKeyframe(time: time, rect: shown.boundingRect), into: old.effect.keyframes)
+                }
+                old.effect.erasures = old.effect.erasures.map { $0.mapped(from: old.shape.boundingRect, to: materialized.boundingRect) }
+                old.shape = materialized
+                old.effect.automaticCover = nil
+            }
             // Holes live in the base box; whenever the base changes they follow it.
             func rebased(_ base: RegionShape, _ effect: RegionEffect) -> Pair {
                 var effect = effect

@@ -22,6 +22,31 @@ final class MainWindowController: NSWindowController {
     private let rootStack = NSStackView()
     private let sidebarStack = NSStackView()
     private let sidebarHeader = NSStackView()
+    private let sidebarScroll = NSScrollView()
+    private let taskPanelSelector = NSSegmentedControl(labels: ["찾기", "선택한 영역", "확인"], trackingMode: .selectOne, target: nil, action: nil)
+    private let findPanel = NSStackView()
+    private let selectedPanel = NSStackView()
+    private let reviewPanel = NSStackView()
+    private let decorationTools = NSStackView()
+    private let automaticCoverTools = NSStackView()
+    private let safetyMarginSlider = EditingSlider()
+    private let safetyMarginValue = NSTextField(labelWithString: "8px")
+    private let generousCoverButton = NSButton(title: "넉넉하게 가리기", target: nil, action: nil)
+    private let recommendedCoverButton = NSButton(title: "추천 설정", target: nil, action: nil)
+    private let automaticCoverHint = NSTextField(wrappingLabelWithString: "검출한 대상에 맞춰 가림을 조절합니다.")
+    private let reviewTools = NSStackView()
+    private let pinnedLayers = NSStackView()
+    private let outputArea = NSStackView()
+    private let emptyLayersHint = NSTextField(wrappingLabelWithString: "아직 영역이 없습니다.\n찾기 또는 직접 그리기로 추가하세요.")
+    private let selectedTitle = NSTextField(labelWithString: "가림 설정")
+    private let selectedHint = NSTextField(wrappingLabelWithString: "영역을 선택하면 해당 설정을 조절할 수 있습니다.")
+    private let staticReviewHint = NSTextField(wrappingLabelWithString: "전체 이미지·페이지를 확대해 가린 결과를 확인하세요. 레이어에서 숨김·잠금을 조절할 수 있습니다.")
+    private var advancedSettings: InspectorSection?
+    private var outputSettings: InspectorSection?
+    private var blurRow: NSStackView!
+    private var featherRow: NSStackView!
+    private var inspectorConfigured = false
+    private enum InspectorPanel: Int { case find, selected, review }
     private let timelineHost = NSView()
 
     // 메인 영역 (비디오 + 캔버스 + 블러)
@@ -105,20 +130,52 @@ final class MainWindowController: NSWindowController {
     /// pages keep their ids, so the buttons only act on the page the find ran on.
     private var lastFound: (ids: [UUID], url: URL?, page: Int?) = ([], nil, nil)
     /// The running find, so 취소 or closing the window can stop it.
-    private var findTask: Task<Result<[CGRect], Error>, Never>?
+    private var findTask: Task<Result<[AutoDetector.Detection], Error>, Never>?
     private let pickHiddenCheckbox = NSButton(checkboxWithTitle: "숨긴 블러 영역도 캔버스에서 고르기", target: nil, action: nil)
     /// Detector used by 자동 찾기; tests replace it (real face images are not used in tests).
-    var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] = AutoDetector.detect
+    var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] = AutoDetector.detect {
+        didSet { autoDetectDetailed = nil } // Preserve legacy injection without fabricating evidence.
+    }
+    var autoDetectDetailed: ((AutoDetector.Target, CIImage) throws -> [AutoDetector.Detection])? = AutoDetector.detectDetailed
     /// Reader used by 문구 가리기; tests replace it with fixed text.
     var recognizeLines: (CIImage) throws -> [AutoDetector.RecognizedLine] = AutoDetector.recognizedLines
     private let phraseField = NSTextField()
     private let phraseButton = NSButton(title: "문구 찾아 가리기", target: nil, action: nil)
     private var phraseTask: Task<Result<[PhraseCover.Span], Error>, Never>?
+    private var phraseTrackingTask: Task<Result<PhraseTracker.Outcome, Error>, Never>?
+    private var phraseTrackingCancellation: ObjectTracker.Cancellation?
+    /// Tests may supply authored tracking observations while the production path uses Vision.
+    var trackPhrases: (URL, Double, [String], ObjectTracker.Cancellation,
+                      @escaping (CIImage) throws -> [AutoDetector.RecognizedLine],
+                      @escaping (Double) -> Void) async throws -> PhraseTracker.Outcome = {
+        try await PhraseTracker.track(url: $0, duration: $1, phrases: $2, cancellation: $3,
+                                      recognizeLines: $4, progress: $5)
+    }
+    private let decorationField = NSTextField()
+    private let decorationScale = NSSlider(value: 80, minValue: 20, maxValue: 100, target: nil, action: nil)
+    private let decorationApply = NSButton(title: "붙이기", target: nil, action: nil)
+    private let decorationRemove = NSButton(title: "내용 없애기", target: nil, action: nil)
+    private let decorationColor = NSColorWell()
+    private let decorationHint = NSTextField(wrappingLabelWithString: "가림 영역을 고르면 글자·이모지를 붙일 수 있습니다.")
+    private let reviewPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let reviewGo = NSButton(title: "해당 구간으로", target: nil, action: nil)
+    private let reviewRetry = NSButton(title: "이 구간 다시 추적", target: nil, action: nil)
+    private let reviewHold = NSButton(title: "현재 위치로 구간 보정", target: nil, action: nil)
+    private let reviewHint = NSTextField(wrappingLabelWithString: "추적 후 확인할 구간을 여기에 표시합니다.")
+    private var decorationSelection: UUID?
+    private var decorationDisplayed: CoverDecoration?
+    private var reviewSelection: (region: UUID, review: UUID)?
+    private var repairingReview: (region: UUID, review: UUID, end: Double)?
     /// Person under a point on a frame (Vision); tests replace it because synthetic frames have no people.
     var findPersonBox: (CIImage, CGPoint) throws -> CGRect? = AutoDetector.personBox
     private let personButton = NSButton(title: "사람 고르기 (역가림)", target: nil, action: nil)
     private var windowCloseObserver: NSObjectProtocol?
     private var trackingCancellation: ObjectTracker.Cancellation?
+    var trackObjects: (URL, Double, Double, [CGRect], ObjectTracker.Options, ObjectTracker.Cancellation,
+                       @escaping (Double) -> Void) async throws -> [ObjectTracker.Outcome] = {
+        try await ObjectTracker.trackMany(url: $0, from: $1, until: $2, boxes: $3, options: $4,
+                                          cancellation: $5, progress: $6)
+    }
     private var annotationColorRow: NSStackView?
     private let regionTitle = NSTextField(labelWithString: "레이어 (위가 앞)")
     private let regionScroll = NSScrollView()
@@ -231,6 +288,8 @@ final class MainWindowController: NSWindowController {
                 self?.trackingCancellation?.cancel()
                 self?.findTask?.cancel()
                 self?.phraseTask?.cancel()
+                self?.phraseTrackingTask?.cancel()
+                self?.phraseTrackingCancellation?.cancel()
             }
         }
         window.setContentSize(NSSize(width: 1180, height: 700))
@@ -286,17 +345,16 @@ final class MainWindowController: NSWindowController {
         let mainView = mainContainer.view
 
         // 사이드바 컨테이너 view
-        let sidebarView = NSView()
+        let sidebarView = InspectorBackgroundView()
         sidebarView.wantsLayer = true
-        sidebarView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        sidebarView.backgroundColor = .controlBackgroundColor
         sidebarView.translatesAutoresizingMaskIntoConstraints = false
 
         sidebarStack.translatesAutoresizingMaskIntoConstraints = false
         sidebarStack.orientation = .vertical
         sidebarStack.alignment = .leading
-        sidebarStack.spacing = 10
+        sidebarStack.spacing = 14
         sidebarStack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-        let sidebarScroll = NSScrollView()
         sidebarScroll.translatesAutoresizingMaskIntoConstraints = false
         sidebarScroll.hasVerticalScroller = true
         sidebarScroll.drawsBackground = false
@@ -310,15 +368,36 @@ final class MainWindowController: NSWindowController {
         sidebarScroll.documentView = sidebarDocument
         sidebarDocument.addSubview(sidebarStack)
         sidebarView.addSubview(sidebarHeader)
+        sidebarView.addSubview(taskPanelSelector)
         sidebarView.addSubview(sidebarScroll)
+        sidebarView.addSubview(pinnedLayers)
+        sidebarView.addSubview(outputArea)
+        for stack in [pinnedLayers, outputArea] {
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 6
+            stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        }
+        taskPanelSelector.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             sidebarHeader.topAnchor.constraint(equalTo: sidebarView.topAnchor),
             sidebarHeader.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor),
             sidebarHeader.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
             sidebarScroll.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor),
             sidebarScroll.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
-            sidebarScroll.topAnchor.constraint(equalTo: sidebarHeader.bottomAnchor),
-            sidebarScroll.bottomAnchor.constraint(equalTo: sidebarView.bottomAnchor),
+            taskPanelSelector.topAnchor.constraint(equalTo: sidebarHeader.bottomAnchor, constant: 4),
+            taskPanelSelector.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor, constant: 12),
+            taskPanelSelector.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor, constant: -12),
+            sidebarScroll.topAnchor.constraint(equalTo: taskPanelSelector.bottomAnchor, constant: 6),
+            sidebarScroll.bottomAnchor.constraint(equalTo: pinnedLayers.topAnchor),
+            sidebarScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 40),
+            pinnedLayers.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor),
+            pinnedLayers.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
+            pinnedLayers.bottomAnchor.constraint(equalTo: outputArea.topAnchor),
+            outputArea.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor),
+            outputArea.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
+            outputArea.bottomAnchor.constraint(equalTo: sidebarView.bottomAnchor),
             sidebarDocument.widthAnchor.constraint(equalTo: sidebarScroll.contentView.widthAnchor),
             sidebarStack.leadingAnchor.constraint(equalTo: sidebarDocument.leadingAnchor),
             sidebarStack.trailingAnchor.constraint(equalTo: sidebarDocument.trailingAnchor),
@@ -339,14 +418,13 @@ final class MainWindowController: NSWindowController {
         mainView.addSubview(sidebarView)
         mainView.addSubview(divider)
 
-        sidebarView.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        sidebarView.widthAnchor.constraint(equalToConstant: MainContainerViewController.sidebarWidth).isActive = true
         divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
 
         NSLayoutConstraint.activate([
             sidebarView.topAnchor.constraint(equalTo: mainView.topAnchor),
             sidebarView.bottomAnchor.constraint(equalTo: mainView.bottomAnchor),
             sidebarView.trailingAnchor.constraint(equalTo: mainView.trailingAnchor),
-            sidebarView.widthAnchor.constraint(equalToConstant: 300),
 
             divider.topAnchor.constraint(equalTo: sidebarView.topAnchor),
             divider.bottomAnchor.constraint(equalTo: sidebarView.bottomAnchor),
@@ -397,6 +475,7 @@ final class MainWindowController: NSWindowController {
             self.selectedDrawingID = id
             if id != nil { self.selectedID = nil }
             if let id, let drawing = self.annotations.first(where: { $0.id == id }) {
+                self.showSelectionInspector(drawing: true)
                 self.showDrawingStyle(drawing)
                 self.showTextStyle(drawing)
             }
@@ -422,6 +501,7 @@ final class MainWindowController: NSWindowController {
             for index in result.indices where !existing.contains(result[index].shape.id) {
                 self.applyDefaultCover(to: &result[index].effect)
             }
+            result = self.preservingReviewExterior(result, before: self.pairs)
             // A grouped region moved or resized as a whole carries the rest of its group along
             // (a polygon vertex edit is not a box change and stays local).
             let moves = updated.compactMap { shape -> (move: GroupChange, source: UUID)? in
@@ -473,6 +553,7 @@ final class MainWindowController: NSWindowController {
             if let id, self?.multiSelection.contains(id) == false { self?.multiSelection.removeAll() }
             if id != nil { self?.selectedDrawingID = nil }
             self?.selectedID = id
+            if id != nil { self?.showSelectionInspector(drawing: false) }
             self?.refreshSelectedEditor()
             self?.refreshRegionList()
         }
@@ -677,6 +758,20 @@ final class MainWindowController: NSWindowController {
     }
 
     private func configureSidebar() {
+        taskPanelSelector.identifier = NSUserInterfaceItemIdentifier("taskPanelSelector")
+        taskPanelSelector.setAccessibilityLabel("작업 패널")
+        taskPanelSelector.selectedSegment = InspectorPanel.selected.rawValue
+        taskPanelSelector.target = self
+        taskPanelSelector.action = #selector(inspectorPanelChanged(_:))
+        taskPanelSelector.segmentDistribution = .fillEqually
+        for (panel, name) in [(findPanel, "findPanel"), (selectedPanel, "selectedPanel"), (reviewPanel, "reviewPanel"),
+                              (decorationTools, "decorationTools"), (reviewTools, "reviewTools"),
+                              (pinnedLayers, "pinnedLayers"), (outputArea, "outputArea")] {
+            panel.identifier = NSUserInterfaceItemIdentifier(name)
+            panel.orientation = .vertical
+            panel.alignment = .leading
+            panel.spacing = 12
+        }
         toolSegment.selectedSegment = 0
         toolSegment.target = self
         toolSegment.action = #selector(toolChanged(_:))
@@ -722,9 +817,9 @@ final class MainWindowController: NSWindowController {
         annotationWidthSlider.isContinuous = true
         annotationWidthSlider.target = self
         annotationWidthSlider.action = #selector(annotationStyleChanged(_:))
-        annotationHint.font = .systemFont(ofSize: 11)
+        annotationHint.font = .systemFont(ofSize: 12)
         annotationHint.textColor = .secondaryLabelColor
-        annotationHint.preferredMaxLayoutWidth = 260
+        annotationHint.preferredMaxLayoutWidth = 290
         coverSegment.selectedSegment = 0
         coverSegment.target = self
         coverSegment.action = #selector(coverChanged(_:))
@@ -741,9 +836,9 @@ final class MainWindowController: NSWindowController {
         trackMotionCheckbox.target = self
         trackMotionCheckbox.action = #selector(trackMotionChanged(_:))
         trackMotionCheckbox.toolTip = "영상에서 영역·그림을 옮길 때 그 시점의 위치로 기록합니다"
-        trackMotionHint.font = .systemFont(ofSize: 11)
+        trackMotionHint.font = .systemFont(ofSize: 12)
         trackMotionHint.textColor = .secondaryLabelColor
-        trackMotionHint.preferredMaxLayoutWidth = 260
+        trackMotionHint.preferredMaxLayoutWidth = 290
         motionTools.orientation = .vertical
         motionTools.alignment = .leading
         motionTools.spacing = 4
@@ -764,7 +859,7 @@ final class MainWindowController: NSWindowController {
         trackOptions.spacing = 8
         for view in [trackMotionCheckbox, trackMotionHint, trackRow, trackOptions] as [NSView] { motionTools.addArrangedSubview(view) }
         let findTitle = NSTextField(labelWithString: "자동 찾기")
-        findTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        findTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         for (button, action, tip) in [(findFacesButton, #selector(findFacesTapped), "지금 화면에서 얼굴을 찾아 모두 가립니다 (Vision)."),
                                       (findTextButton, #selector(findTextTapped), "지금 화면에서 글자(번호판·명찰·간판 등)를 찾아 가립니다 (Vision).")] {
             button.bezelStyle = .rounded
@@ -775,9 +870,9 @@ final class MainWindowController: NSWindowController {
         trackAfterFindCheckbox.state = .on
         trackAfterFindCheckbox.toolTip = "영상에서 찾은 영역을 바로 앞뒤로 자동 추적해 움직임을 따라가게 합니다."
         let findHint = NSTextField(wrappingLabelWithString: "찾은 곳마다 새 영역이 생깁니다. 이미 가린 곳은 건너뛰고, 잘못 찾은 것은 지우면 됩니다.")
-        findHint.font = .systemFont(ofSize: 11)
+        findHint.font = .systemFont(ofSize: 12)
         findHint.textColor = .secondaryLabelColor
-        findHint.preferredMaxLayoutWidth = 260
+        findHint.preferredMaxLayoutWidth = 290
         let findRow = NSStackView(views: [findFacesButton, findTextButton])
         findRow.spacing = 6
         for (button, action, tip) in [(selectFoundButton, #selector(selectFoundTapped), "방금 찾은 영역들을 다시 함께 고릅니다(그룹·추적·삭제에 씀)."),
@@ -792,36 +887,40 @@ final class MainWindowController: NSWindowController {
         foundRow.spacing = 6
         findTools.orientation = .vertical
         findTools.alignment = .leading
-        findTools.spacing = 6
+        findTools.spacing = 10
         phraseField.placeholderString = "가릴 문구 (쉼표로 여러 개)"
-        phraseField.controlSize = .small
+        phraseField.controlSize = .regular
         phraseField.toolTip = "화면에 나오는 이 글자를 읽어 그 자리를 가립니다. 두 글자 이상, 공백과 기호는 무시합니다."
-        phraseField.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        phraseField.widthAnchor.constraint(equalToConstant: 290).isActive = true
         phraseButton.bezelStyle = .rounded
         phraseButton.controlSize = .small
         phraseButton.target = self
         phraseButton.action = #selector(findPhrasesTapped)
-        phraseButton.toolTip = "영상이면 1초 간격으로 화면 글자를 읽어, 입력한 문구가 보이는 동안 그 자리를 가립니다."
+        phraseButton.title = "문구 찾아 추적"
+        phraseButton.toolTip = "문구를 읽고 그 줄을 추적합니다. 인식이 끊긴 구간은 확인 목록에 남깁니다."
         let phraseRow = NSStackView(views: [phraseField, phraseButton])
+        phraseRow.orientation = .vertical
+        phraseRow.alignment = .leading
         phraseRow.spacing = 6
-        let phraseHint = NSTextField(wrappingLabelWithString: "입력한 문구가 화면에 보이는 동안만 가립니다. 영상은 1초 간격으로 읽으므로 아주 짧게 나오는 글자는 놓칠 수 있습니다.")
-        phraseHint.font = .systemFont(ofSize: 11)
+        let phraseHint = NSTextField(wrappingLabelWithString: "입력한 문구가 포함된 줄을 찾아 추적합니다. 짧거나 흐린 글자는 놓칠 수 있어 결과를 확인하세요. 긴 영상은 실제 검사 간격을 표시합니다.")
+        phraseHint.font = .systemFont(ofSize: 12)
         phraseHint.textColor = .secondaryLabelColor
-        phraseHint.preferredMaxLayoutWidth = 260
+        phraseHint.preferredMaxLayoutWidth = 290
         personButton.bezelStyle = .rounded
         personButton.controlSize = .small
         personButton.target = self
         personButton.action = #selector(pickPersonTapped)
         personButton.toolTip = "영상에서 남길 사람을 캔버스에서 클릭하면, 그 사람만 남기고 나머지 화면을 가립니다. 같은 사람을 자동 추적으로 따라갑니다."
-        for view in [findTitle, findRow, foundRow, trackAfterFindCheckbox, findHint, phraseRow, phraseHint, personButton] as [NSView] { findTools.addArrangedSubview(view) }
+        for view in [findTitle, findRow, foundRow, trackAfterFindCheckbox, findHint, inspectorDivider(), phraseRow, phraseHint, personButton] as [NSView] { findTools.addArrangedSubview(view) }
+        configureCoverAttachments()
         pickHiddenCheckbox.state = .off
         pickHiddenCheckbox.target = self
         pickHiddenCheckbox.action = #selector(pickHiddenChanged(_:))
         pickHiddenCheckbox.toolTip = "끄면 숨긴 블러 영역은 캔버스에서 눌러도 잡히지 않습니다(레이어 목록에서는 고를 수 있음)."
         motionTools.isHidden = true
-        eraserHint.font = .systemFont(ofSize: 11)
+        eraserHint.font = .systemFont(ofSize: 12)
         eraserHint.textColor = .secondaryLabelColor
-        eraserHint.preferredMaxLayoutWidth = 260
+        eraserHint.preferredMaxLayoutWidth = 290
         eraserModeSegment.selectedSegment = 0
         eraserModeSegment.target = self
         eraserModeSegment.action = #selector(eraserStyleChanged(_:))
@@ -853,7 +952,7 @@ final class MainWindowController: NSWindowController {
             eraserTools.addArrangedSubview(button)
         }
         let arrangeTitle = NSTextField(labelWithString: "순서·그룹")
-        arrangeTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        arrangeTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         let orderRow = NSStackView()
         let groupRow = NSStackView()
         for (row, items) in [(orderRow, [("맨 뒤", #selector(sendToBackTapped), "맨 뒤로 보내기 (⇧⌘[)"), ("뒤로", #selector(sendBackwardTapped), "뒤로 보내기 (⌘[)"),
@@ -870,9 +969,9 @@ final class MainWindowController: NSWindowController {
             }
         }
         let arrangeHint = NSTextField(wrappingLabelWithString: "Shift+클릭으로 여러 항목(영역·그림)을 고르고 묶으면 하나를 옮길 때 함께 움직입니다. 겹친 것은 앞·뒤 순서로 가립니다.")
-        arrangeHint.font = .systemFont(ofSize: 11)
+        arrangeHint.font = .systemFont(ofSize: 12)
         arrangeHint.textColor = .secondaryLabelColor
-        arrangeHint.preferredMaxLayoutWidth = 260
+        arrangeHint.preferredMaxLayoutWidth = 290
         arrangeTools.orientation = .vertical
         arrangeTools.alignment = .leading
         arrangeTools.spacing = 6
@@ -908,10 +1007,10 @@ final class MainWindowController: NSWindowController {
         imageFormatPopup.action = #selector(imageFormatChanged(_:))
 
         for label in [sourceInfoLabel, workflowHint, qualityInfoLabel] {
-            label.font = .systemFont(ofSize: 11)
+            label.font = .systemFont(ofSize: 12)
             label.textColor = .secondaryLabelColor
-            label.preferredMaxLayoutWidth = 260
-            label.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+            label.preferredMaxLayoutWidth = 290
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: 290).isActive = true
         }
         sourceInfoLabel.setAccessibilityLabel("원본 파일 사양")
         qualityInfoLabel.setAccessibilityLabel("내보내기 사양")
@@ -937,7 +1036,8 @@ final class MainWindowController: NSWindowController {
 
         regionList.headerView = nil
         regionList.rowSizeStyle = .custom
-        regionList.rowHeight = 34
+        regionList.rowHeight = 44
+        regionList.intercellSpacing = NSSize(width: 0, height: 4)
         regionList.target = self
         regionList.doubleAction = #selector(layerDoubleClicked)
         regionList.setAccessibilityLabel("레이어 목록")
@@ -963,7 +1063,7 @@ final class MainWindowController: NSWindowController {
 
         // 스타일
         for f in [fileTitle, coverTitle, effectTitle, featherTitle, regionTitle, qualityTitle] {
-            f.font = .systemFont(ofSize: 13, weight: .semibold)
+            f.font = .systemFont(ofSize: 14, weight: .semibold)
         }
         fileLabel.lineBreakMode = .byTruncatingMiddle
         fileLabel.textColor = .secondaryLabelColor
@@ -975,9 +1075,9 @@ final class MainWindowController: NSWindowController {
         progressIndicator.heightAnchor.constraint(equalToConstant: 4).isActive = true
 
         // 행 단위 조립
-        let blurRow = NSStackView(views: [blurSlider, blurValueLabel])
+        blurRow = NSStackView(views: [blurSlider, blurValueLabel])
         blurRow.orientation = .horizontal; blurRow.alignment = .centerY; blurRow.spacing = 8
-        let featherRow = NSStackView(views: [featherSlider, featherValueLabel])
+        featherRow = NSStackView(views: [featherSlider, featherValueLabel])
         featherRow.orientation = .horizontal; featherRow.alignment = .centerY; featherRow.spacing = 8
 
         let buttonRow = NSStackView(views: [exportButton, cancelButton])
@@ -986,7 +1086,7 @@ final class MainWindowController: NSWindowController {
         cancelButton.bezelStyle = .rounded
 
         let rangeTitle = NSTextField(labelWithString: "적용 시간 (초)")
-        rangeTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        rangeTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         rangeStart.placeholderString = "시작 (초)"
         rangeEnd.placeholderString = "끝 (초)"
         rangeStart.setAccessibilityLabel("블러 시작 시간 (초)")
@@ -999,10 +1099,10 @@ final class MainWindowController: NSWindowController {
         rangeApply.target = self; rangeApply.action = #selector(applyTimeRange)
         rangeEntire.target = self; rangeEntire.action = #selector(applyEntireVideo)
         rangeApply.bezelStyle = .rounded; rangeEntire.bezelStyle = .rounded
-        rangeHint.font = .systemFont(ofSize: 11)
+        rangeHint.font = .systemFont(ofSize: 12)
         rangeHint.textColor = .secondaryLabelColor
-        rangeHint.preferredMaxLayoutWidth = 260
-        rangeHint.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        rangeHint.preferredMaxLayoutWidth = 290
+        rangeHint.widthAnchor.constraint(lessThanOrEqualToConstant: 290).isActive = true
         let rangeFields = NSStackView(views: [rangeStart, NSTextField(labelWithString: "~"), rangeEnd])
         rangeFields.spacing = 6
         let rangeButtons = NSStackView(views: [rangeApply, rangeEntire])
@@ -1014,7 +1114,7 @@ final class MainWindowController: NSWindowController {
         timeRangeEditor.isHidden = true
 
         let precisionTitle = NSTextField(labelWithString: "위치·크기 정밀 조정")
-        precisionTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        precisionTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         frameRow.addArrangedSubview(previousFrameButton)
         frameRow.addArrangedSubview(nextFrameButton)
         frameRow.spacing = 6
@@ -1045,7 +1145,7 @@ final class MainWindowController: NSWindowController {
         let coordinateHint = NSTextField(wrappingLabelWithString: "원본 왼쪽 위 기준 픽셀 · 영상은 선택한 시간에 기록")
         coordinateHint.font = .systemFont(ofSize: 10)
         coordinateHint.textColor = .secondaryLabelColor
-        coordinateHint.preferredMaxLayoutWidth = 260
+        coordinateHint.preferredMaxLayoutWidth = 290
         preciseTools.orientation = .vertical
         preciseTools.alignment = .leading
         preciseTools.spacing = 6
@@ -1058,49 +1158,168 @@ final class MainWindowController: NSWindowController {
         scrollContainer.translatesAutoresizingMaskIntoConstraints = false
         regionScroll.translatesAutoresizingMaskIntoConstraints = false
         scrollContainer.addSubview(regionScroll)
+        emptyLayersHint.identifier = NSUserInterfaceItemIdentifier("emptyLayersHint")
+        emptyLayersHint.font = .systemFont(ofSize: 12)
+        emptyLayersHint.textColor = .secondaryLabelColor
+        emptyLayersHint.alignment = .center
+        emptyLayersHint.translatesAutoresizingMaskIntoConstraints = false
+        scrollContainer.addSubview(emptyLayersHint)
         NSLayoutConstraint.activate([
             regionScroll.topAnchor.constraint(equalTo: scrollContainer.topAnchor),
             regionScroll.bottomAnchor.constraint(equalTo: scrollContainer.bottomAnchor),
             regionScroll.leadingAnchor.constraint(equalTo: scrollContainer.leadingAnchor),
             regionScroll.trailingAnchor.constraint(equalTo: scrollContainer.trailingAnchor),
-            scrollContainer.heightAnchor.constraint(equalToConstant: 200)
+            scrollContainer.heightAnchor.constraint(equalToConstant: 90),
+            emptyLayersHint.centerYAnchor.constraint(equalTo: scrollContainer.centerYAnchor),
+            emptyLayersHint.leadingAnchor.constraint(equalTo: scrollContainer.leadingAnchor, constant: 8),
+            emptyLayersHint.trailingAnchor.constraint(equalTo: scrollContainer.trailingAnchor, constant: -8)
         ])
 
         for v in [fileTitle, fileLabel, sourceInfoLabel, copyToAllPagesButton] { sidebarHeader.addArrangedSubview(v) }
         copyToAllPagesButton.target = self
         copyToAllPagesButton.action = #selector(copyCurrentPageToAll)
         copyToAllPagesButton.isHidden = true
-        fileLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        fileLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 290).isActive = true
         let annotationColorRow = NSStackView(views: [annotationColorWell, annotationPickButton, annotationColorPopup])
         annotationColorRow.spacing = 6
         annotationColorWell.widthAnchor.constraint(equalToConstant: 44).isActive = true
         coverColorWell.widthAnchor.constraint(equalToConstant: 44).isActive = true
         self.annotationColorRow = annotationColorRow
-        for v in [workflowHint,
-                  toolSegment, modeSegment, annotationColorRow, annotationWidthTitle, annotationWidthSlider, annotationFillPopup, textTools,
-                  annotationHint, eraserTools,
-                  coverTitle, coverSegment, effectTitle, blurRow, featherTitle, featherRow, coverColorRow, findTools, arrangeTools, regionTitle,
-                  scrollContainer, timeRangeEditor, motionTools, preciseTools,
-                  qualityTitle, qualityPopup, qualityInfoLabel, buttonRow, progressIndicator, progressLabel] {
-            sidebarStack.addArrangedSubview(v)
-        }
-        toolChanged(toolSegment)
         imageFormatPopup.addItems(withTitles: ["PNG", "JPEG", "HEIC", "TIFF"])
         imageFormatPopup.isHidden = true
-        sidebarStack.insertArrangedSubview(imageFormatPopup, at: sidebarStack.arrangedSubviews.firstIndex(of: qualityPopup) ?? 0)
         imageFormatPopup.toolTip = "이미지 저장 형식"
+        selectedTitle.font = .systemFont(ofSize: 16, weight: .semibold)
+        for label in [selectedHint, staticReviewHint] {
+            label.font = .systemFont(ofSize: 12)
+            label.textColor = .secondaryLabelColor
+            label.preferredMaxLayoutWidth = 290
+            label.widthAnchor.constraint(lessThanOrEqualToConstant: 290).isActive = true
+        }
+        findPanel.addArrangedSubview(findTools)
+        for view in [selectedTitle, selectedHint, modeSegment, annotationColorRow, annotationWidthTitle,
+                     annotationWidthSlider, annotationFillPopup, textTools, annotationHint, eraserTools,
+                     coverTitle, coverSegment, effectTitle, blurRow!, coverColorRow, automaticCoverTools, decorationTools] {
+            selectedPanel.addArrangedSubview(view)
+        }
+        setupAutomaticCoverControls()
+        let advanced = InspectorSection(title: "고급 설정", identifier: "advancedSettings",
+            views: [featherTitle, featherRow, timeRangeEditor, motionTools, preciseTools, arrangeTools])
+        advancedSettings = advanced
+        selectedPanel.addArrangedSubview(advanced)
+        reviewPanel.addArrangedSubview(reviewTools)
+        reviewPanel.addArrangedSubview(staticReviewHint)
+        for panel in [findPanel, selectedPanel, reviewPanel] {
+            sidebarStack.addArrangedSubview(panel)
+            panel.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor, constant: -24).isActive = true
+        }
+        for view in [regionTitle, scrollContainer] { pinnedLayers.addArrangedSubview(view) }
+        scrollContainer.widthAnchor.constraint(equalTo: pinnedLayers.widthAnchor, constant: -24).isActive = true
+        let output = InspectorSection(title: "출력 설정", identifier: "outputSettings",
+            views: [qualityTitle, imageFormatPopup, qualityPopup, qualityInfoLabel])
+        outputSettings = output
+        selectedPanel.addArrangedSubview(output)
+        let outputShortcut = NSButton(title: "출력 설정…", target: self, action: #selector(showOutputSettings))
+        outputShortcut.identifier = NSUserInterfaceItemIdentifier("outputSettingsShortcut")
+        outputShortcut.bezelStyle = .rounded
+        outputShortcut.controlSize = .small
+        let outputRow = NSStackView(views: [buttonRow, outputShortcut]); outputRow.spacing = 8
+        for view in [outputRow, progressIndicator, progressLabel, workflowHint] { outputArea.addArrangedSubview(view) }
+        toolSegment.setLabel("가리기", forSegment: 0)
+        toolSegment.setAccessibilityLabel("편집 도구")
+        mainContainer.editorToolBar.addArrangedSubview(toolSegment)
+        applyInspectorPolish(outputShortcut: outputShortcut)
+        inspectorConfigured = true
+        showInspectorPanel(.selected)
+        toolChanged(toolSegment)
         regionList.contextMenuHandler = { [weak self] event in
             guard let self else { return }
             _ = self.tableView(self.regionList, menuFor: event)
         }
         // qualityPopup 폭 채우기
         qualityPopup.translatesAutoresizingMaskIntoConstraints = false
-        qualityPopup.leadingAnchor.constraint(equalTo: sidebarStack.leadingAnchor, constant: 12).isActive = true
-        qualityPopup.trailingAnchor.constraint(equalTo: sidebarStack.trailingAnchor, constant: -12).isActive = true
+        qualityPopup.widthAnchor.constraint(equalTo: output.content.widthAnchor).isActive = true
+        for section in [advanced, output] {
+            section.widthAnchor.constraint(equalTo: selectedPanel.widthAnchor).isActive = true
+        }
+    }
 
-        // 메인 영역 너비 채우기
-        sidebarStack.leadingAnchor.constraint(equalTo: scrollContainer.leadingAnchor).isActive = true
-        sidebarStack.trailingAnchor.constraint(equalTo: scrollContainer.trailingAnchor).isActive = true
+    /// Use the existing native controls with the prototype's readable scale and grouping.
+    /// Only the scrolling inspector grows; the pinned layers and output stay compact.
+    private func applyInspectorPolish(outputShortcut: NSButton) {
+        func styleControls(in view: NSView) {
+            if let button = view as? NSButton {
+                button.font = .systemFont(ofSize: button.identifier?.rawValue.hasSuffix("SettingsToggle") == true ? 13 : 12)
+            } else if let field = view as? NSTextField, field.isEditable {
+                field.font = .systemFont(ofSize: 13)
+            }
+            for child in view.subviews { styleControls(in: child) }
+        }
+        for view in [sidebarHeader, sidebarStack, pinnedLayers, outputArea] { styleControls(in: view) }
+        for segment in [taskPanelSelector, toolSegment, modeSegment, coverSegment, eraserModeSegment] {
+            segment.controlSize = .regular
+            segment.font = .systemFont(ofSize: 13, weight: .medium)
+            segment.selectedSegmentBezelColor = .systemBlue
+            segment.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
+        }
+        for segment in [modeSegment, coverSegment, eraserModeSegment] {
+            segment.segmentDistribution = .fillEqually
+            segment.widthAnchor.constraint(equalTo: selectedPanel.widthAnchor).isActive = true
+        }
+        for button in [findFacesButton, findTextButton, phraseButton, personButton,
+                       decorationApply, reviewGo, reviewRetry, reviewHold, exportButton, cancelButton] {
+            button.controlSize = .regular
+            button.font = .systemFont(ofSize: 13, weight: .medium)
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
+        }
+        phraseField.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
+        decorationField.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
+        fileLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        pinnedLayers.spacing = 6
+        outputArea.spacing = 6
+        outputShortcut.font = .systemFont(ofSize: 12)
+        exportButton.bezelColor = .systemBlue
+        exportButton.contentTintColor = .white
+        regionScroll.drawsBackground = false
+        regionList.backgroundColor = .clear
+        for stack in [pinnedLayers, outputArea] {
+            let line = inspectorDivider()
+            stack.addSubview(line)
+            NSLayoutConstraint.activate([
+                line.topAnchor.constraint(equalTo: stack.topAnchor),
+                line.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 12),
+                line.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -12)
+            ])
+        }
+    }
+
+    private func inspectorDivider() -> NSBox {
+        let line = NSBox()
+        line.boxType = .separator
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        line.widthAnchor.constraint(equalToConstant: MainContainerViewController.sidebarWidth - 24).isActive = true
+        return line
+    }
+
+    @objc private func inspectorPanelChanged(_ sender: NSSegmentedControl) {
+        showInspectorPanel(InspectorPanel(rawValue: sender.selectedSegment) ?? .selected)
+    }
+
+    private func showInspectorPanel(_ panel: InspectorPanel) {
+        guard inspectorConfigured else { return }
+        taskPanelSelector.selectedSegment = panel.rawValue
+        findPanel.isHidden = panel != .find
+        selectedPanel.isHidden = panel != .selected
+        reviewPanel.isHidden = panel != .review
+        sidebarScroll.contentView.scroll(to: .zero)
+        sidebarScroll.reflectScrolledClipView(sidebarScroll.contentView)
+    }
+
+    @objc private func showOutputSettings() {
+        showInspectorPanel(.selected)
+        outputSettings?.isExpanded = true
+        sidebarStack.layoutSubtreeIfNeeded()
+        outputSettings?.scrollToVisible(outputSettings?.bounds ?? .zero)
     }
 
     private func configureToolbar() {
@@ -1317,7 +1536,7 @@ final class MainWindowController: NSWindowController {
             let shapes = pairs.enumerated().map { offset, pair in
                 offset == index ? RegionEditing.displayed(pair, at: editTime).replacing(rect: rect) : RegionEditing.displayed(pair, at: editTime)
             }
-            let result = RegionEditing.updating(shapes, in: pairs, time: editTime, recording: motionRecording)
+            let result = preservingReviewExterior(RegionEditing.updating(shapes, in: pairs, time: editTime, recording: motionRecording), before: pairs)
             guard !RegionEditing.equal(result, pairs) else { return }
             checkpoint()
             pairs = result
@@ -1505,6 +1724,7 @@ final class MainWindowController: NSWindowController {
         else if let trackingCancellation { trackingCancellation.cancel() }
         else if let findTask { findTask.cancel() }
         else if let phraseTask { phraseTask.cancel() }
+        else if let phraseTrackingCancellation { phraseTrackingCancellation.cancel(); phraseTrackingTask?.cancel() }
         else { exporter.cancel() }
     }
     func cancelCurrentOperation() { cancelTapped() }
@@ -1530,7 +1750,7 @@ final class MainWindowController: NSWindowController {
 
     /// Follows every listed item from the playhead (several at once, in the chosen direction).
     /// Internal for tests.
-    func startTracking(ids: [UUID], choice: TrackChoice, undoWithPrevious: Bool = false) {
+    func startTracking(ids: [UUID], choice: TrackChoice, until: Double? = nil, undoWithPrevious: Bool = false) {
         guard doc.hasVideo, !isExporting, let url = doc.url, let start = playheadTime,
               canvas.bounds.width > 0, canvas.bounds.height > 0 else {
             NSSound.beep()
@@ -1540,7 +1760,10 @@ final class MainWindowController: NSWindowController {
         let size = canvas.bounds.size
         var items: [UUID] = [], boxes: [CGRect] = [], tooSmall = 0
         for id in ids where !layerState(id).locked {
-            guard let rect = displayedRect(of: id, at: start), rect.width > 0, rect.height > 0 else { continue }
+            let trackingRect = pairs.first(where: { $0.shape.id == id && $0.effect.automaticCover != nil }).map {
+                MotionTrack.rect(at: start, base: $0.shape.boundingRect, keyframes: $0.effect.keyframes)
+            }
+            guard let rect = trackingRect ?? displayedRect(of: id, at: start), rect.width > 0, rect.height > 0 else { continue }
             let box = CGRect(x: rect.minX / size.width, y: rect.minY / size.height,
                              width: rect.width / size.width, height: rect.height / size.height)
             // The tracker needs at least 1% of the picture each way; skip only the tiny ones.
@@ -1554,11 +1777,14 @@ final class MainWindowController: NSWindowController {
                 : tooSmall > 0 ? "너무 작아서 따라갈 수 없습니다. 영역을 조금 더 크게 잡으세요." : "잠긴 레이어는 추적할 수 없습니다."
             return
         }
-        let end = items.map { id -> Double in
+        guard until == nil || until!.isFinite else { return }
+        let itemEnd = items.map { id -> Double in
             let range = timing(of: id)
             return range.map { $0.lowerBound == 0 && $0.upperBound == 0 ? doc.duration : min(doc.duration, $0.upperBound) } ?? doc.duration
         }.max() ?? doc.duration
-        guard choice != .forward || end - start > 0.05 else {
+        let end = until.map { min(itemEnd, max(start, $0)) } ?? itemEnd
+        let minimumSpan = until == nil ? 0.05 : MotionTrack.sameTime
+        guard choice != .forward || end - start > minimumSpan else {
             NSSound.beep(); workflowHint.stringValue = "이 항목은 지금 이후로 표시되는 시간이 없습니다."; return
         }
         guard choice != .backward || start > 0.05 else {
@@ -1579,21 +1805,25 @@ final class MainWindowController: NSWindowController {
         let indicator = progressIndicator
         let report: @Sendable (Double) -> Void = { value in DispatchQueue.main.async { indicator.doubleValue = value } }
         let initial = Dictionary(uniqueKeysWithValues: zip(items, boxes))
+        let run = trackObjects
+        let refinementKinds = Dictionary(uniqueKeysWithValues: pairs.compactMap { pair -> (UUID, AutoDetector.Target)? in
+            guard items.contains(pair.shape.id), let fit = pair.effect.automaticCover,
+                  fit.phrases.isEmpty else { return nil }
+            return (pair.shape.id, fit.kind == .face ? .faces : .text)
+        })
         Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) { () -> Result<[UUID: ObjectTracker.Outcome], Error> in
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<RefinedTracking, Error> in
                 do {
                     var backward: [ObjectTracker.Outcome]?, forward: [ObjectTracker.Outcome]?
                     if choice != .forward {
                         var back = options
                         back.direction = .backward
-                        backward = try await ObjectTracker.trackMany(url: url, from: start, until: 0, boxes: boxes, options: back,
-                                                                     cancellation: cancellation) { report(choice == .both ? $0 / 2 : $0) }
+                        backward = try await run(url, start, 0, boxes, back, cancellation) { report(choice == .both ? $0 / 2 : $0) }
                     }
                     if choice != .backward, !cancellation.isCancelled {
                         var ahead = options
                         ahead.direction = .forward
-                        forward = try await ObjectTracker.trackMany(url: url, from: start, until: end, boxes: boxes, options: ahead,
-                                                                    cancellation: cancellation) { report(choice == .both ? 0.5 + $0 / 2 : $0) }
+                        forward = try await run(url, start, end, boxes, ahead, cancellation) { report(choice == .both ? 0.5 + $0 / 2 : $0) }
                     }
                     var outcomes: [UUID: ObjectTracker.Outcome] = [:]
                     for (index, id) in items.enumerated() {
@@ -1602,15 +1832,46 @@ final class MainWindowController: NSWindowController {
                                                              lostTarget: (backward?[index].lostTarget ?? false) || (forward?[index].lostTarget ?? false),
                                                              cancelled: cancellation.isCancelled)
                     }
-                    return .success(outcomes)
+                    var evidence: [UUID: [PhraseTracker.CoverEvidence]] = [:]
+                    if !cancellation.isCancelled {
+                        for target in AutoDetector.Target.allCases {
+                            let ids = items.filter { refinementKinds[$0] == target }
+                            guard !ids.isEmpty else { continue }
+                            let samples = ids.map { id -> [ObjectTracker.Sample] in
+                                let list = outcomes[id]?.samples ?? []
+                                return ([ObjectTracker.Sample(time: start, box: initial[id] ?? .zero)] + list)
+                                    .sorted { $0.time < $1.time }
+                            }
+                            do {
+                                let refined = try await AutoDetector.refineTracks(url: url, target: target,
+                                    tracks: samples, cancellation: cancellation)
+                                for (id, anchors) in zip(ids, refined) { evidence[id] = anchors }
+                            } catch PageWorkspace.WorkspaceError.sourceChanged { throw PageWorkspace.WorkspaceError.sourceChanged }
+                            catch { // Optional refinement must not discard an already recorded tracking path.
+                                for id in ids { evidence[id] = [] }
+                            }
+                        }
+                    }
+                    if cancellation.isCancelled {
+                        for id in items { outcomes[id]?.cancelled = true }
+                        evidence = [:]
+                    }
+                    return .success(RefinedTracking(outcomes: outcomes, evidence: evidence))
                 } catch { return .failure(error) }
             }.value
-            self?.finishTracking(result, start: start, initialBoxes: initial, undoWithPrevious: undoWithPrevious, skipped: tooSmall)
+            let requestedRange = (choice == .forward ? start : 0)...max(choice == .backward ? start : end, start)
+            self?.finishTracking(result, start: start, initialBoxes: initial, undoWithPrevious: undoWithPrevious,
+                                 skipped: tooSmall, requestedRange: requestedRange)
         }
     }
 
-    private func finishTracking(_ result: Result<[UUID: ObjectTracker.Outcome], Error>, start: Double, initialBoxes: [UUID: CGRect],
-                                undoWithPrevious: Bool, skipped: Int = 0) {
+    private struct RefinedTracking {
+        var outcomes: [UUID: ObjectTracker.Outcome]
+        var evidence: [UUID: [PhraseTracker.CoverEvidence]]
+    }
+    private func finishTracking(_ result: Result<RefinedTracking, Error>, start: Double, initialBoxes: [UUID: CGRect],
+                                undoWithPrevious: Bool, skipped: Int = 0, requestedRange: ClosedRange<Double>? = nil) {
+        defer { repairingReview = nil }
         trackingCancellation = nil
         setExporting(false)
         progressIndicator.isHidden = true
@@ -1619,8 +1880,9 @@ final class MainWindowController: NSWindowController {
         switch result {
         case .failure(let error):
             showError(error.localizedDescription)
-        case .success(let outcomes):
-            applyTrackingResults(outcomes, start: start, initialBoxes: initialBoxes, newUndoStep: !undoWithPrevious)
+        case .success(let refined):
+            applyTrackingResults(refined.outcomes, start: start, initialBoxes: initialBoxes, newUndoStep: !undoWithPrevious,
+                                 requestedRange: requestedRange, coverEvidence: refined.evidence)
             if skipped > 0 { workflowHint.stringValue += " 너무 작은 \(skipped)개는 건너뛰었습니다." }
         }
     }
@@ -1635,10 +1897,16 @@ final class MainWindowController: NSWindowController {
     /// follow its movement. Tracking back before an item's start extends its time range.
     /// Internal for tests.
     func applyTrackingResults(_ outcomes: [UUID: ObjectTracker.Outcome], start: Double, initialBoxes: [UUID: CGRect],
-                              newUndoStep: Bool = true) {
+                              newUndoStep: Bool = true, requestedRange: ClosedRange<Double>? = nil,
+                              coverEvidence: [UUID: [PhraseTracker.CoverEvidence]] = [:]) {
         let size = canvas.bounds.size
+        let repair = repairingReview
+        let frameTolerance = 1 / max(1, doc.videoFPS) + 0.000_001
         let usable = outcomes.filter { !$0.value.samples.isEmpty }
-        guard !usable.isEmpty, size.width > 0, size.height > 0 else {
+        let uncertainRegions = outcomes.filter { (id, outcome) in
+            (outcome.lostTarget || outcome.cancelled) && pairs.contains { $0.shape.id == id } && repair?.region != id
+        }
+        guard (!usable.isEmpty || !uncertainRegions.isEmpty), size.width > 0, size.height > 0 else {
             let cancelled = outcomes.values.contains { $0.cancelled }
             workflowHint.stringValue = cancelled ? "자동 추적을 취소했습니다." : "대상을 따라가지 못했습니다. 영역을 대상에 딱 맞게 잡고 다시 시도하세요."
             return
@@ -1646,7 +1914,23 @@ final class MainWindowController: NSWindowController {
         func canvasRect(_ box: CGRect) -> CGRect {
             CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
         }
-        func merged(_ frames: [RegionKeyframe], anchor: CGRect, tracked: [RegionKeyframe]) -> [RegionKeyframe] {
+        func merged(_ frames: [RegionKeyframe], base: CGRect, anchor: CGRect, tracked: [RegionKeyframe], isRepair: Bool) -> [RegionKeyframe] {
+            if isRepair, let repair {
+                // Keep every original key outside the reviewed range. Just outside its exact
+                // endpoints, restore the old interpolated path, so repair cannot warp nearby
+                // unreviewed footage. Do not use inserting here: it merges near timestamps.
+                let high = min(max(start, repair.end), max(start, tracked.last?.time ?? start))
+                var result = frames.filter { $0.time < start || $0.time > high }
+                let before = start.nextDown, after = high.nextUp
+                for boundary in [before, after] where boundary >= 0 && boundary.isFinite {
+                    if !result.contains(where: { $0.time == boundary }) {
+                        result.append(.init(time: boundary, rect: MotionTrack.rect(at: boundary, base: base, keyframes: frames)))
+                    }
+                }
+                result.append(.init(time: start, rect: anchor))
+                result += tracked.filter { $0.time > start && $0.time <= high }
+                return result.sorted { $0.time < $1.time }
+            }
             let low = min(start, tracked.first?.time ?? start), high = max(start, tracked.last?.time ?? start)
             var result = frames.filter { $0.time < low - MotionTrack.sameTime || $0.time > high + MotionTrack.sameTime }
             for frame in [RegionKeyframe(time: start, rect: anchor)] + tracked { result = MotionTrack.inserting(frame, into: result) }
@@ -1658,6 +1942,7 @@ final class MainWindowController: NSWindowController {
         }
         if newUndoStep { checkpoint() }
         var positions = 0, lost = 0, earliest = start, latest = start
+        var addedReviews = 0, repaired = false
         for (id, outcome) in usable {
             let samples = outcome.samples
             positions += samples.count
@@ -1665,10 +1950,45 @@ final class MainWindowController: NSWindowController {
             earliest = min(earliest, samples.first?.time ?? start)
             latest = max(latest, samples.last?.time ?? start)
             if let index = pairs.firstIndex(where: { $0.shape.id == id }) {
-                let anchor = RegionEditing.displayed(pairs[index], at: start).boundingRect
-                let tracked = samples.map { RegionKeyframe(time: $0.time, rect: canvasRect($0.box)) }
-                pairs[index].effect.keyframes = merged(pairs[index].effect.keyframes, anchor: anchor, tracked: tracked)
-                pairs[index].effect.timeRange = extended(pairs[index].effect.timeRange, from: samples.first?.time ?? start)
+                let anchor = pairs[index].effect.automaticCover == nil
+                    ? RegionEditing.displayed(pairs[index], at: start).boundingRect
+                    : MotionTrack.rect(at: start, base: pairs[index].shape.boundingRect, keyframes: pairs[index].effect.keyframes)
+                // Object tracking alone cannot verify changing facial pose or lettering angle.
+                // Keep the stored recommendation for still-frame edits, but use the generous mask on this path.
+                if let fit = pairs[index].effect.automaticCover {
+                    let anchors = coverEvidence[id] ?? []
+                    if anchors.isEmpty {
+                        pairs[index].effect.automaticCover?.mode = .generous
+                        pairs[index].effect.automaticCover?.evidenceKeyframes = []
+                    }
+                    else {
+                        var updated = fittedCover(fit, anchors: anchors)
+                        if let repair, repair.region == id {
+                            updated.evidenceKeyframes += fit.evidenceKeyframes.filter { $0.time < start || $0.time > repair.end }
+                            updated.evidenceKeyframes.sort { $0.time < $1.time }
+                        }
+                        pairs[index].effect.automaticCover = updated
+                        let expected = [ObjectTracker.Sample(time: start, box: initialBoxes[id] ?? .zero)] + samples
+                        pairs[index].effect.trackingReviews += refinementGaps(samples: expected, anchors: anchors,
+                            start: requestedRange?.lowerBound ?? min(start, samples.first?.time ?? start),
+                            end: requestedRange?.upperBound ?? max(start, samples.last?.time ?? start))
+                    }
+                }
+                let isRepair = repair?.region == id
+                let completedRepair = isRepair && !outcome.lostTarget && !outcome.cancelled &&
+                    (samples.last?.time ?? start) >= (repair?.end ?? .infinity) - frameTolerance
+                var tracked = samples.map { RegionKeyframe(time: $0.time, rect: canvasRect($0.box)) }
+                if completedRepair, let repair, let last = tracked.last, last.time < repair.end {
+                    tracked.append(.init(time: repair.end, rect: last.rect))
+                }
+                pairs[index].effect.keyframes = merged(pairs[index].effect.keyframes, base: pairs[index].shape.boundingRect,
+                    anchor: anchor, tracked: tracked, isRepair: isRepair)
+                if !isRepair { pairs[index].effect.timeRange = extended(pairs[index].effect.timeRange, from: samples.first?.time ?? start) }
+                if completedRepair, let repair,
+                   let reviewIndex = pairs[index].effect.trackingReviews.firstIndex(where: { $0.id == repair.review }) {
+                    pairs[index].effect.trackingReviews[reviewIndex].status = .corrected
+                    repaired = true
+                }
             } else if let index = annotations.firstIndex(where: { $0.id == id }) {
                 let anchor = annotations[index].displayed(at: start).bounds
                 let origin = canvasRect(initialBoxes[id] ?? .zero)
@@ -1676,8 +1996,28 @@ final class MainWindowController: NSWindowController {
                     let box = canvasRect(sample.box)
                     return RegionKeyframe(time: sample.time, rect: anchor.offsetBy(dx: box.midX - origin.midX, dy: box.midY - origin.midY))
                 }
-                annotations[index].keyframes = merged(annotations[index].keyframes, anchor: anchor, tracked: tracked)
+                annotations[index].keyframes = merged(annotations[index].keyframes, base: annotations[index].bounds,
+                    anchor: anchor, tracked: tracked, isRepair: false)
                 annotations[index].timeRange = extended(annotations[index].timeRange, from: samples.first?.time ?? start)
+            }
+        }
+        for (id, outcome) in uncertainRegions {
+            guard let index = pairs.firstIndex(where: { $0.shape.id == id }) else { continue }
+            let backwards = (outcome.samples.first?.time ?? start) < start
+            let range = requestedRange ?? (backwards ? 0...start : start...max(start, doc.duration))
+            let first = max(range.lowerBound, min(range.upperBound, outcome.samples.first?.time ?? start))
+            let last = max(range.lowerBound, min(range.upperBound, outcome.samples.last?.time ?? start))
+            let reason: TrackingReview.Reason = outcome.cancelled ? .cancelled : .lostTarget
+            var intervals: [ClosedRange<Double>] = []
+            if first - range.lowerBound > frameTolerance { intervals.append(range.lowerBound...first) }
+            if range.upperBound - last > frameTolerance { intervals.append(last...range.upperBound) }
+            if intervals.isEmpty { intervals.append(last...last) }
+            for interval in intervals {
+                guard !pairs[index].effect.trackingReviews.contains(where: {
+                    $0.status == .needsReview && $0.reason == reason && $0.start == interval.lowerBound && $0.end == interval.upperBound
+                }), pairs[index].effect.trackingReviews.count < 10_000 else { continue }
+                pairs[index].effect.trackingReviews.append(.init(start: interval.lowerBound, end: interval.upperBound, reason: reason))
+                addedReviews += 1
             }
         }
         var note = usable.count > 1
@@ -1685,6 +2025,8 @@ final class MainWindowController: NSWindowController {
             : "자동 추적: \(positions)개 위치를 \(format(earliest))~\(format(latest)) 구간에 기록했습니다."
         if lost > 0 { note += usable.count > 1 ? " \(lost)개는 대상이 가려지거나 사라져 중간에 멈췄습니다." : " 대상이 가려지거나 사라져 거기서 멈췄습니다." }
         if outcomes.values.contains(where: { $0.cancelled }) { note += " (취소한 곳까지)" }
+        if addedReviews > 0 { note += " 확인할 구간 \(addedReviews)개를 기록했습니다." }
+        if repair != nil { note += repaired ? " 선택한 구간의 보정을 완료했습니다." : " 끝까지 따라가지 못해 확인할 구간을 유지했습니다." }
         workflowHint.stringValue = note + " ⌘Z로 되돌립니다."
         refreshAfterEdit()
     }
@@ -1705,6 +2047,7 @@ final class MainWindowController: NSWindowController {
     func findAndCover(_ target: AutoDetector.Target, completion: (() -> Void)? = nil) {
         guard !isExporting, doc.mediaKind != .none, canvas.bounds.width > 0, canvas.bounds.height > 0 else { NSSound.beep(); return }
         let detect = autoDetect
+        let detailed = autoDetectDetailed
         let time = doc.hasVideo ? playheadTime : nil
         let url = doc.url
         let still = doc.hasVideo ? nil : doc.currentCGImage
@@ -1720,14 +2063,16 @@ final class MainWindowController: NSWindowController {
         progressIndicator.startAnimation(nil)
         cancelButton.isHidden = false
         progressLabel.stringValue = "\(target.label) 찾는 중… (취소할 수 있음)"
-        let task = Task.detached(priority: .userInitiated) { () -> Result<[CGRect], Error> in
+        let task = Task.detached(priority: .userInitiated) { () -> Result<[AutoDetector.Detection], Error> in
             do {
                 let image: CIImage
                 if let still { image = CIImage(cgImage: still) }
                 else if let url, let time { image = try await AutoDetector.frame(of: url, at: time) }
                 else { throw AutoDetector.DetectError.frameUnavailable }
                 try Task.checkCancellation()
-                let found = try detect(target, image)
+                let found = try detailed?(target, image) ?? detect(target, image).map {
+                    AutoDetector.Detection(generousBox: $0, target: target, evidencePoints: [], reliable: false)
+                }
                 try Task.checkCancellation()
                 return .success(found)
             } catch { return .failure(error) }
@@ -1769,12 +2114,13 @@ final class MainWindowController: NSWindowController {
         }
     }
 
-    private func coverFound(_ result: Result<[CGRect], Error>, target: AutoDetector.Target, time: Double?) {
-        let boxes: [CGRect]
+    private func coverFound(_ result: Result<[AutoDetector.Detection], Error>, target: AutoDetector.Target, time: Double?) {
+        let detections: [AutoDetector.Detection]
         switch result {
         case .failure(let error): workflowHint.stringValue = error.localizedDescription; return
-        case .success(let found): boxes = found
+        case .success(let found): detections = found
         }
+        let boxes = detections.map(\.generousBox)
         let size = canvas.bounds.size
         guard !isExporting, size.width > 0, size.height > 0 else { return }
         // Areas with eraser marks may have holes, so they never count as covering.
@@ -1782,22 +2128,29 @@ final class MainWindowController: NSWindowController {
             .map { RegionEditing.displayed($0, at: time) }
         /// Points spread over the cover this find would make (an oval for faces, the box for text);
         /// the place is skipped only when existing areas' actual shapes hold every one (a sliver left showing gets covered).
-        func alreadyCovered(_ box: CGRect) -> Bool {
+        func alreadyCovered(_ detection: AutoDetector.Detection) -> Bool {
             guard !covering.isEmpty else { return false }
+            let box = detection.generousBox
             let rect = CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
+            let base: RegionShape = target == .faces ? .ellipse(id: UUID(), origin: rect.origin, size: rect.size)
+                : .rectangle(id: UUID(), origin: rect.origin, size: rect.size)
+            let proposed = detection.reliable ? automaticCover(kind: target == .faces ? .face : .text,
+                points: detection.evidencePoints, box: box)?.shape(base: base, rect: rect, time: nil, reviews: []) : nil
+            let area = proposed?.boundingRect ?? rect
             var inside = 0, total = 0
             for row in 0..<12 {
                 for column in 0..<12 {
                     let u = (Double(column) + 0.5) / 12, v = (Double(row) + 0.5) / 12
-                    if target == .faces, (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5) > 0.25 { continue }
-                    let point = CGPoint(x: rect.minX + u * rect.width, y: rect.minY + v * rect.height)
+                    if proposed == nil && target == .faces, (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5) > 0.25 { continue }
+                    let point = CGPoint(x: area.minX + u * area.width, y: area.minY + v * area.height)
+                    if let proposed, !proposed.contains(point: point, threshold: 0) { continue }
                     total += 1
                     if covering.contains(where: { $0.contains(point: point, threshold: 0.5) }) { inside += 1 }
                 }
             }
             return total > 0 && inside == total
         }
-        let fresh = boxes.filter { !alreadyCovered($0) }
+        let fresh = detections.filter { !alreadyCovered($0) }
         guard !fresh.isEmpty else {
             workflowHint.stringValue = boxes.isEmpty ? "\(target.label)을 찾지 못했습니다." : "찾은 \(target.label)은 이미 모두 가려져 있습니다."
             return
@@ -1805,7 +2158,8 @@ final class MainWindowController: NSWindowController {
         let existing = pairs.filter { $0.effect.name?.hasPrefix(target.label + " ") == true }.count
         var created: [UUID] = []
         checkpoint()
-        for (offset, box) in fresh.enumerated() {
+        for (offset, detection) in fresh.enumerated() {
+            let box = detection.generousBox
             let rect = CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
             let id = UUID()
             let shape: RegionShape = target == .faces ? .ellipse(id: id, origin: rect.origin, size: rect.size)
@@ -1813,6 +2167,11 @@ final class MainWindowController: NSWindowController {
             var effect = RegionEffect.created(at: time, videoDuration: doc.hasVideo ? doc.duration : nil)
             applyDefaultCover(to: &effect)
             effect.name = "\(target.label) \(existing + offset + 1)"
+            if detection.reliable {
+                effect.automaticCover = automaticCover(kind: target == .faces ? .face : .text,
+                    points: detection.evidencePoints, box: box)
+                if effect.automaticCover != nil { effect.featherRadius = min(effect.featherRadius, 2) }
+            }
             pairs.append((shape, effect))
             created.append(id)
         }
@@ -1838,6 +2197,10 @@ final class MainWindowController: NSWindowController {
         guard !parsed.phrases.isEmpty else {
             workflowHint.stringValue = "가릴 문구를 두 글자 이상 입력하세요. 여러 개는 쉼표로 나눕니다."
             completion?()
+            return
+        }
+        if doc.hasVideo {
+            findAndTrackPhrases(parsed.phrases, completion: completion)
             return
         }
         let phrases = parsed.phrases, tooShort = parsed.tooShort
@@ -1878,7 +2241,13 @@ final class MainWindowController: NSWindowController {
                 }
                 try Task.checkCancellation()
                 // A still image has one sample: each hit is simply a place to cover.
-                if still != nil { return .success(samples.flatMap(\.hits).map { PhraseCover.Span(box: $0, start: 0, end: 0) }) }
+                if let still {
+                    let lines = try recognize(CIImage(cgImage: still))
+                    return .success(lines.filter { PhraseCover.matches($0.text, phrases: phrases) }.map {
+                        PhraseCover.Span(box: PhraseCover.coverBox($0.box), start: 0, end: 0,
+                                         evidencePoints: AutoDetector.phraseEvidence(line: $0, phrases: phrases))
+                    })
+                }
                 return .success(PhraseCover.spans(samples: samples, step: sampling.step, duration: duration))
             } catch { return .failure(error) }
         }
@@ -1933,6 +2302,10 @@ final class MainWindowController: NSWindowController {
             if isVideo { effect.timeRange = span.start...span.end }
             applyDefaultCover(to: &effect)
             effect.name = "문구 \(existing + offset + 1)"
+            if let points = span.evidencePoints {
+                effect.automaticCover = automaticCover(kind: .text, points: points, box: span.box)
+                if effect.automaticCover != nil { effect.featherRadius = min(effect.featherRadius, 2) }
+            }
             pairs.append((.rectangle(id: id, origin: rect.origin, size: rect.size), effect))
             created.append(id)
         }
@@ -2110,7 +2483,7 @@ final class MainWindowController: NSWindowController {
         isExporting = value
         canvas.isEditable = !value && doc.mediaKind != .none
         exportButton.isEnabled = !value && doc.mediaKind != .none && hasEffectiveEffect
-        for control in [blurSlider, featherSlider, toolSegment, modeSegment, annotationColorPopup, annotationWidthSlider, qualityPopup, imageFormatPopup,
+        for control in [blurSlider, featherSlider, toolSegment, modeSegment, annotationColorPopup, annotationWidthSlider, qualityPopup, imageFormatPopup, eraserSizeSlider,
                         annotationColorWell, annotationPickButton, annotationFillPopup, coverSegment, coverColorWell, coverPickButton,
                         trackMotionCheckbox, eraserModeSegment, eraseFromNowCheckbox, eraserTargetPopup,
                         textFontPopup, textBoldCheckbox, textBackgroundPopup, trackDirectionPopup, smoothTrackingCheckbox,
@@ -2123,6 +2496,7 @@ final class MainWindowController: NSWindowController {
         mainContainer.previousPageButton.isEnabled = !value && (pageWorkspace?.currentIndex ?? 0) > 0
         mainContainer.nextPageButton.isEnabled = !value && (pageWorkspace.map { $0.currentIndex + 1 < $0.pages.count } ?? false)
         copyToAllPagesButton.isEnabled = !value
+        refreshEraserControls()
         for control in [rangeStart, rangeEnd, rangeApply, rangeEntire] as [NSControl] {
             control.isEnabled = !value && doc.hasVideo && hasSelection
         }
@@ -2252,6 +2626,11 @@ final class MainWindowController: NSWindowController {
     }
 
     @objc private func toolChanged(_ sender: NSSegmentedControl) {
+        updateToolPresentation(resetInteraction: true)
+    }
+
+    private func updateToolPresentation(resetInteraction: Bool) {
+        let sender = toolSegment
         let drawing = sender.selectedSegment == 1
         let erasing = sender.selectedSegment == 2
         let labels = drawing ? ["사각형", "타원", "선", "펜", "화살표", "글자"] : ["사각형", "원", "점찍기", "자유"]
@@ -2271,9 +2650,22 @@ final class MainWindowController: NSWindowController {
         annotationFillPopup.isHidden = !drawing
         annotationHint.isHidden = !drawing
         eraserTools.isHidden = !erasing
-        canvas.resetInteraction()
+        if resetInteraction { canvas.resetInteraction() }
         refreshCoverControls()
         refreshTextControls()
+        showInspectorPanel(.selected)
+    }
+
+    /// Selecting a layer exposes its style without cancelling the in-progress canvas drag.
+    private func showSelectionInspector(drawing: Bool) {
+        let keepReview = !drawing && taskPanelSelector.selectedSegment == InspectorPanel.review.rawValue
+            && reviewSelection?.region == selectedID && selectedID != nil
+        let tool = drawing ? 1 : 0
+        if toolSegment.selectedSegment != tool {
+            toolSegment.selectedSegment = tool
+            updateToolPresentation(resetInteraction: false)
+        }
+        showInspectorPanel(keepReview ? .review : .selected)
     }
 
     /// Cover controls follow the blur tool and the selected region's (or next region's) style.
@@ -2288,9 +2680,11 @@ final class MainWindowController: NSWindowController {
         let showsStrength = blurTool && style != .solid
         effectTitle.stringValue = style == .mosaic ? "모자이크 크기" : "블러 강도"
         effectTitle.isHidden = !showsStrength; blurSlider.isHidden = !showsStrength; blurValueLabel.isHidden = !showsStrength
+        blurRow?.isHidden = !showsStrength
         featherTitle.isHidden = !blurTool; featherSlider.isHidden = !blurTool; featherValueLabel.isHidden = !blurTool
+        featherRow?.isHidden = !blurTool
         coverColorRow.isHidden = !(blurTool && style == .solid)
-        findTools.isHidden = !blurTool
+        decorationTools.isHidden = !blurTool
     }
 
     private var selectedFillOpacity: CGFloat {
@@ -2903,8 +3297,8 @@ final class MainWindowController: NSWindowController {
             guard pair.effect.groupID == move.group, pair.shape.id != source, !pair.effect.locked else { return shown }
             return shown.replacing(rect: move.apply(shown.boundingRect))
         }
-        pairs = RegionEditing.updating(shapes, in: pairs, time: editTime, recording: motionRecording,
-                                       anchorTime: gestureStartTime, anchorPairs: gestureSnapshot)
+        pairs = preservingReviewExterior(RegionEditing.updating(shapes, in: pairs, time: editTime, recording: motionRecording,
+                                       anchorTime: gestureStartTime, anchorPairs: gestureSnapshot), before: pairs)
         for index in annotations.indices where annotations[index].groupID == move.group && annotations[index].id != source
             && !annotations[index].locked {
             let shown = annotations[index].displayed(at: editTime)
@@ -3008,6 +3402,10 @@ final class MainWindowController: NSWindowController {
               pairs[index].effect.inverted != reversed else { return }
         if reversed, !pairs[index].effect.erasures.isEmpty {
             showError("지우개로 지운 부분이 있는 영역은 역가림으로 바꿀 수 없습니다. 지운 부분을 되돌린 뒤 다시 시도하세요.")
+            return
+        }
+        if reversed, pairs[index].effect.decoration != nil {
+            workflowHint.stringValue = "붙인 글자·이모지를 먼저 없앤 뒤 역가림으로 바꿔 주세요."
             return
         }
         endGesture()
@@ -3235,7 +3633,7 @@ final class MainWindowController: NSWindowController {
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
             let data = try VideoProjectFile.read(at: url, maximumBytes: ProjectFile.maximumBytes)
-            if try VideoProjectFile.version(of: data) == 3 {
+            if [3, 4, 7].contains(try VideoProjectFile.version(of: data)) {
                 let project = try VideoProjectFile.decode(data)
                 return (project.edits, project, url)
             }
@@ -3282,9 +3680,9 @@ final class MainWindowController: NSWindowController {
         do {
             let data = try VideoProjectFile.read(at: url)
             switch try VideoProjectFile.version(of: data) {
-            case 2: try openWorkspaceProject(MultiPageProjectFile.decode(data), relativeTo: url)
-            case 1: openSingleProject(try VideoProjectFile.decodeLegacy(data), projectURL: url)
-            case 3: openVideoProjectFile(try VideoProjectFile.decode(data), projectURL: url)
+            case 2, 6: try openWorkspaceProject(MultiPageProjectFile.decode(data), relativeTo: url)
+            case 1, 5: openSingleProject(try VideoProjectFile.decodeLegacy(data), projectURL: url)
+            case 3, 4, 7: openVideoProjectFile(try VideoProjectFile.decode(data), projectURL: url)
             default: throw ProjectFile.ProjectError.unsupportedVersion
             }
         } catch { showError(error.localizedDescription) }
@@ -3613,6 +4011,14 @@ final class MainWindowController: NSWindowController {
     }
 
     private func refreshSelectedEditor() {
+        refreshCoverAttachments()
+        refreshAutomaticCoverControls()
+        let hasCover = selectedID.flatMap { id in pairs.first { $0.shape.id == id } } != nil
+        selectedTitle.stringValue = selectedDrawingID != nil ? "그림 설정" : hasCover ? "선택한 가림" : toolSegment.selectedSegment == 2 ? "지우개 설정" : "새 영역 설정"
+        selectedHint.stringValue = hasSelection ? "선택한 항목의 설정입니다. 레이어에서 다른 항목을 고를 수 있습니다."
+            : "미리보기에서 영역을 그리거나 레이어를 선택하세요."
+        selectedHint.isHidden = hasSelection
+        modeSegment.isHidden = toolSegment.selectedSegment == 2 || hasSelection
         if let id = selectedDrawingID, let drawing = annotations.first(where: { $0.id == id }) {
             showTextStyle(drawing)
         }
@@ -4130,13 +4536,14 @@ final class MainWindowController: NSWindowController {
         let chrome = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 0, height: 0)).height
         let maxWidth = max(640, visible.width - 48)
         let maxHeight = max(420, visible.height - chrome - 48)
-        let mediaWidth = maxWidth - 301
-        let mediaHeight = maxHeight - 60
+        let sidebarWidth = MainContainerViewController.sidebarWidth + 1
+        let mediaWidth = maxWidth - sidebarWidth
+        let mediaHeight = maxHeight - 104
         let scale = min(1, mediaWidth / size.width, mediaHeight / size.height)
         let minimumWidth: CGFloat = forWorkspace ? min(maxWidth, 1180) : 640
-        let minimumHeight: CGFloat = forWorkspace ? min(maxHeight, 760) : 420
-        let target = CGSize(width: max(minimumWidth, ceil(size.width * scale) + 301),
-                            height: max(minimumHeight, ceil(size.height * scale) + 60))
+        let minimumHeight: CGFloat = min(maxHeight, forWorkspace ? 760 : 700)
+        let target = CGSize(width: max(minimumWidth, ceil(size.width * scale) + sidebarWidth),
+                            height: max(minimumHeight, ceil(size.height * scale) + 104))
         guard let content = window.contentView,
               abs(content.bounds.width - target.width) > 1 ||
               abs(content.bounds.height - target.height) > 1 else { return }
@@ -4190,6 +4597,7 @@ final class MainWindowController: NSWindowController {
         defer { refreshingList = false }
         regionList.reloadData()
         let rows = layerRows
+        emptyLayersHint.isHidden = !rows.isEmpty
         if multiSelection.count > 1 {
             regionList.selectRowIndexes(IndexSet(multiSelection.compactMap { id in rows.firstIndex { $0.id == id } }), byExtendingSelection: false)
         } else if let id = currentSelectionID, let row = rows.firstIndex(where: { $0.id == id }) {
@@ -4347,6 +4755,7 @@ final class MainWindowController: NSWindowController {
                 $0.mapped(from: pairs[index].shape.boundingRect, to: frozen.boundingRect)
             }
             pairs[index].shape = frozen
+            pairs[index].effect.automaticCover = nil
             pairs[index].effect.keyframes = []
         } else if let index = annotations.firstIndex(where: { $0.id == id }) {
             checkpoint()
@@ -4467,12 +4876,13 @@ extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
         let item = rows[row]
         let container = NSView()
         container.wantsLayer = true
+        container.layer?.cornerRadius = 6
         let image = NSImageView()
         let text = NSTextField(labelWithString: layerName(of: item.id))
         text.lineBreakMode = .byTruncatingTail
-        text.font = .systemFont(ofSize: 12)
+        text.font = .systemFont(ofSize: 13, weight: .medium)
         let detail = NSTextField(labelWithString: "")
-        detail.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        detail.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
         let eye = NSButton(image: NSImage(), target: self, action: #selector(toggleLayerVisibility(_:)))
@@ -4525,7 +4935,9 @@ extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
         lock.setAccessibilityLabel(locked ? "\(text.stringValue) 잠금 풀기" : "\(text.stringValue) 잠그기")
         lock.contentTintColor = locked ? .systemOrange : .tertiaryLabelColor
         if currentSelectionID == item.id {
-            container.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.12).cgColor
+            container.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.25).cgColor
+            container.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.65).cgColor
+            container.layer?.borderWidth = 1
         } else if multiSelection.contains(item.id) {
             container.layer?.backgroundColor = NSColor.systemPurple.withAlphaComponent(0.12).cgColor
         }
@@ -4536,7 +4948,7 @@ extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
         NSLayoutConstraint.activate([
             image.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
             image.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            image.widthAnchor.constraint(equalToConstant: 14), image.heightAnchor.constraint(equalToConstant: 14),
+            image.widthAnchor.constraint(equalToConstant: 18), image.heightAnchor.constraint(equalToConstant: 18),
             lock.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
             lock.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             lock.widthAnchor.constraint(equalToConstant: 18), lock.heightAnchor.constraint(equalToConstant: 18),
@@ -4544,10 +4956,10 @@ extension MainWindowController: NSTableViewDataSource, NSTableViewDelegate {
             eye.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             eye.widthAnchor.constraint(equalToConstant: 20), eye.heightAnchor.constraint(equalToConstant: 18),
             text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
-            text.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
+            text.topAnchor.constraint(equalTo: container.topAnchor, constant: 5),
             text.trailingAnchor.constraint(lessThanOrEqualTo: eye.leadingAnchor, constant: -4),
             detail.leadingAnchor.constraint(equalTo: text.leadingAnchor),
-            detail.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 0),
+            detail.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 2),
             detail.trailingAnchor.constraint(lessThanOrEqualTo: eye.leadingAnchor, constant: -4)
         ])
         return container
@@ -4639,4 +5051,462 @@ final class FlippedDocumentView: NSView { override var isFlipped: Bool { true } 
 
 extension NSPasteboard.PasteboardType {
     static let blurActionLayerRow = NSPasteboard.PasteboardType("local.piman.BlurAction.layer-row")
+}
+
+// MARK: - Cover labels and reviewable tracking
+extension MainWindowController {
+    private func configureCoverAttachments() {
+        let title = NSTextField(labelWithString: "가림에 글자·이모지 붙이기")
+        title.font = .systemFont(ofSize: 14, weight: .semibold)
+        decorationField.placeholderString = "예: 학생 A 또는 🙂"
+        decorationField.setAccessibilityLabel("가림에 붙일 내용")
+        decorationField.widthAnchor.constraint(equalToConstant: 195).isActive = true
+        decorationScale.setAccessibilityLabel("가림 안의 글자 크기")
+        decorationScale.toolTip = "가림 영역 안에서 차지할 크기 (비율 유지·중앙 맞춤)"
+        decorationScale.widthAnchor.constraint(equalToConstant: 135).isActive = true
+        decorationColor.color = .white
+        decorationColor.setAccessibilityLabel("가림 글자 색")
+        decorationColor.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        decorationApply.target = self; decorationApply.action = #selector(applyDecorationTapped)
+        decorationRemove.target = self; decorationRemove.action = #selector(removeDecorationTapped)
+        for button in [decorationApply, decorationRemove, reviewGo, reviewRetry, reviewHold] {
+            button.bezelStyle = .rounded; button.controlSize = .small
+        }
+        let content = NSStackView(views: [decorationField, decorationApply]); content.spacing = 6
+        let appearance = NSStackView(views: [decorationScale, decorationColor, decorationRemove]); appearance.spacing = 6
+        let reviewTitle = NSTextField(labelWithString: "추적 확인·보정")
+        reviewTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        reviewPopup.widthAnchor.constraint(equalToConstant: 265).isActive = true
+        reviewPopup.setAccessibilityLabel("확인할 추적 구간")
+        reviewGo.target = self; reviewGo.action = #selector(goToReviewTapped)
+        reviewRetry.target = self; reviewRetry.action = #selector(retryReviewTapped)
+        reviewHold.target = self; reviewHold.action = #selector(holdReviewTapped)
+        for label in [decorationHint, reviewHint] {
+            label.font = .systemFont(ofSize: 12); label.textColor = .secondaryLabelColor
+            label.preferredMaxLayoutWidth = 290
+        }
+        for view in [inspectorDivider(), title, content, appearance, decorationHint] as [NSView] { decorationTools.addArrangedSubview(view) }
+        for view in [reviewTitle, reviewPopup, reviewGo, reviewRetry, reviewHold, reviewHint] as [NSView] {
+            reviewTools.addArrangedSubview(view)
+        }
+    }
+
+    @discardableResult
+    func setCoverDecoration(_ id: UUID, text: String, scale: CGFloat = 0.8,
+                            color: RGBAColor = RGBAColor(red: 1, green: 1, blue: 1, alpha: 1)) -> Bool {
+        guard !isExporting, let index = pairs.firstIndex(where: { $0.shape.id == id }),
+              !pairs[index].effect.locked, !pairs[index].effect.inverted else { return false }
+        let label = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil
+            : CoverDecoration(text: text, scale: scale, color: color)
+        guard label?.isValid ?? true else {
+            workflowHint.stringValue = "내용은 1,000자 이내, 크기는 10~100%로 입력하세요."
+            return false
+        }
+        guard label != pairs[index].effect.decoration else { return true }
+        endGesture(); checkpoint()
+        pairs[index].effect.decoration = label
+        decorationSelection = nil
+        refreshAfterEdit()
+        return true
+    }
+
+    @objc private func applyDecorationTapped() {
+        guard let id = selectedID, let color = decorationColor.color.usingColorSpace(.sRGB) else { return }
+        _ = setCoverDecoration(id, text: decorationField.stringValue, scale: CGFloat(decorationScale.doubleValue / 100),
+                               color: RGBAColor(red: color.redComponent, green: color.greenComponent,
+                                                blue: color.blueComponent, alpha: color.alphaComponent))
+    }
+    @objc private func removeDecorationTapped() {
+        guard let id = selectedID else { return }; _ = setCoverDecoration(id, text: "")
+    }
+
+    var pendingTrackingReviews: [(regionID: UUID, review: TrackingReview)] {
+        pairs.flatMap { pair in pair.effect.trackingReviews.filter { $0.status == .needsReview }
+            .map { (regionID: pair.shape.id, review: $0) } }
+            .sorted { $0.review.start < $1.review.start }
+    }
+    private var chosenTrackingReview: (regionID: UUID, review: TrackingReview)? {
+        let rows = pendingTrackingReviews, index = reviewPopup.indexOfSelectedItem
+        return rows.indices.contains(index) ? rows[index] : nil
+    }
+    /// Position edits while correcting a review must not bend the path outside that interval.
+    private func preservingReviewExterior(_ changed: [RegionEditing.Pair], before: [RegionEditing.Pair]) -> [RegionEditing.Pair] {
+        guard let selection = reviewSelection, let time = editTime,
+              let original = before.first(where: { $0.shape.id == selection.region }),
+              let issue = original.effect.trackingReviews.first(where: { $0.id == selection.review && $0.status == .needsReview }),
+              time >= issue.start, time <= issue.end,
+              let index = changed.firstIndex(where: { $0.shape.id == selection.region }) else { return changed }
+        var result = changed
+        guard !RegionEditing.equal([original], [changed[index]]) else { return changed }
+        let rect = RegionEditing.displayed(changed[index], at: time).boundingRect
+        var frames = changed[index].effect.keyframes.filter { $0.time >= issue.start && $0.time <= issue.end }
+        frames = MotionTrack.inserting(.init(time: time, rect: rect), into: frames)
+        frames += original.effect.keyframes.filter { $0.time < issue.start || $0.time > issue.end }
+        for boundary in [issue.start.nextDown, issue.end.nextUp] where boundary >= 0 && boundary <= doc.duration {
+            if !frames.contains(where: { $0.time == boundary }) {
+                frames.append(.init(time: boundary, rect: RegionEditing.displayed(original, at: boundary).boundingRect))
+            }
+        }
+        result[index].shape = original.effect.automaticCover == nil ? original.shape
+            : .rectangle(id: original.shape.id, origin: original.shape.boundingRect.origin, size: original.shape.boundingRect.size)
+        result[index].effect.keyframes = frames.sorted { $0.time < $1.time }
+        return result
+    }
+    private func refreshCoverAttachments() {
+        let pair = selectedID.flatMap { id in pairs.first { $0.shape.id == id } }
+        let canEdit = !isExporting && pair != nil && pair?.effect.locked == false && pair?.effect.inverted == false
+        for control in [decorationField, decorationScale, decorationColor, decorationApply, decorationRemove] as [NSControl] {
+            control.isEnabled = canEdit
+        }
+        if decorationSelection != selectedID || decorationDisplayed != pair?.effect.decoration {
+            // Preserve unapplied drafts across playhead/selection-editor refreshes.
+                decorationField.stringValue = pair?.effect.decoration?.text ?? ""
+                decorationScale.doubleValue = Double(pair?.effect.decoration?.scale ?? 0.8) * 100
+                if let c = pair?.effect.decoration?.color {
+                    decorationColor.color = NSColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+                } else { decorationColor.color = .white }
+            decorationSelection = selectedID
+            decorationDisplayed = pair?.effect.decoration
+        }
+        decorationHint.stringValue = pair?.effect.inverted == true ? "역가림 영역에는 내용을 붙이지 않습니다."
+            : pair?.effect.locked == true ? "잠금을 풀면 붙인 내용을 수정할 수 있습니다."
+            : "가림과 함께 이동·확대되고 같은 시간 동안 표시됩니다."
+        let oldID = reviewPopup.selectedItem?.representedObject as? UUID
+        let rows = pendingTrackingReviews
+        taskPanelSelector.setLabel(rows.isEmpty ? "확인" : "확인 \(rows.count)", forSegment: InspectorPanel.review.rawValue)
+        reviewTools.isHidden = !doc.hasVideo
+        staticReviewHint.isHidden = doc.hasVideo
+        reviewPopup.removeAllItems()
+        for row in rows {
+            let reason: String
+            switch row.review.reason {
+            case .lostTarget: reason = "추적 끊김"
+            case .recognitionGap: reason = "문구 재확인 필요"
+            case .cancelled: reason = "중단된 추적"
+            case .sampledInterval: reason = "긴 검사 간격"
+            }
+            reviewPopup.addItem(withTitle: String(format: "%.2f–%.2f초 · %@", row.review.start, row.review.end, reason))
+            reviewPopup.lastItem?.representedObject = row.review.id
+        }
+        if let index = rows.firstIndex(where: { $0.review.id == oldID }) { reviewPopup.selectItem(at: index) }
+        if rows.isEmpty { reviewPopup.addItem(withTitle: "확인할 구간 없음") }
+        reviewPopup.isEnabled = doc.hasVideo && !isExporting && !rows.isEmpty
+        reviewGo.isEnabled = reviewPopup.isEnabled
+        let current = chosenTrackingReview
+        let atReview = current.map { reviewSelection?.region == $0.regionID && reviewSelection?.review == $0.review.id } ?? false
+        let unlocked = current.map { !layerState($0.regionID).locked } ?? false
+        reviewRetry.isEnabled = reviewPopup.isEnabled && atReview && unlocked
+        reviewHold.isEnabled = reviewRetry.isEnabled
+        reviewHint.stringValue = rows.isEmpty ? "자동 검사는 모든 누락을 찾지 못합니다. 출력 전 전체 결과를 확인하세요."
+            : "\(rows.count)개 구간: 이동한 뒤 가림 위치를 조정하고 다시 추적하거나 현재 위치로 구간을 덮으세요."
+    }
+
+    @discardableResult
+    func selectTrackingReview(regionID: UUID, reviewID: UUID) -> Bool {
+        guard doc.hasVideo, !isExporting,
+              let row = pendingTrackingReviews.first(where: { $0.regionID == regionID && $0.review.id == reviewID }) else { return false }
+        stopPlayback(); endGesture()
+        reviewSelection = (regionID, reviewID)
+        selectedID = regionID; selectedDrawingID = nil; multiSelection = []
+        canvas.selectRegion(id: regionID)
+        trackMotion = true; trackMotionCheckbox.state = .on
+        seek(to: row.review.start)
+        if let index = pendingTrackingReviews.firstIndex(where: { $0.review.id == reviewID }) { reviewPopup.selectItem(at: index) }
+        refreshSelectedEditor()
+        workflowHint.stringValue = "가림을 대상에 맞춘 뒤 ‘이 구간 다시 추적’ 또는 ‘현재 위치로 구간 보정’을 누르세요."
+        showInspectorPanel(.review)
+        return true
+    }
+    @objc private func goToReviewTapped() {
+        guard let row = chosenTrackingReview else { return }
+        _ = selectTrackingReview(regionID: row.regionID, reviewID: row.review.id)
+    }
+    @objc private func retryReviewTapped() {
+        guard let row = chosenTrackingReview else { return }
+        retryTrackingReview(regionID: row.regionID, reviewID: row.review.id)
+    }
+    func retryTrackingReview(regionID: UUID, reviewID: UUID) {
+        guard !isExporting, doc.hasVideo, let time = playheadTime,
+              let row = pendingTrackingReviews.first(where: { $0.regionID == regionID && $0.review.id == reviewID }),
+              !layerState(regionID).locked else { return }
+        guard abs(time - row.review.start) <= max(0.1, 1 / max(1, doc.videoFPS)) else {
+            workflowHint.stringValue = "해당 구간의 시작으로 이동한 뒤 위치를 맞춰 주세요."; return
+        }
+        repairingReview = (regionID, reviewID, row.review.end)
+        startTracking(ids: [regionID], choice: .forward, until: row.review.end)
+        if !isTracking { repairingReview = nil }
+    }
+    @objc private func holdReviewTapped() {
+        guard let row = chosenTrackingReview else { return }
+        _ = holdTrackingReview(regionID: row.regionID, reviewID: row.review.id)
+    }
+    @discardableResult
+    func holdTrackingReview(regionID: UUID, reviewID: UUID) -> Bool {
+        guard doc.hasVideo, !isExporting, selectedID == regionID,
+              let index = pairs.firstIndex(where: { $0.shape.id == regionID }), !pairs[index].effect.locked,
+              let issueIndex = pairs[index].effect.trackingReviews.firstIndex(where: { $0.id == reviewID && $0.status == .needsReview }),
+              let time = playheadTime else { return false }
+        let issue = pairs[index].effect.trackingReviews[issueIndex]
+        guard time >= issue.start - 0.05, time <= issue.end + 0.05 else { return false }
+        let old = pairs[index].effect
+        let rect = old.automaticCover == nil ? RegionEditing.displayed(pairs[index], at: time).boundingRect
+            : MotionTrack.rect(at: time, base: pairs[index].shape.boundingRect, keyframes: old.keyframes)
+        var frames = old.keyframes.filter { $0.time < issue.start || $0.time > issue.end }
+        for boundary in [issue.start.nextDown, issue.end.nextUp] where boundary >= 0 && boundary <= doc.duration {
+            if !frames.contains(where: { $0.time == boundary }) {
+                frames.append(.init(time: boundary, rect: old.automaticCover == nil ? old.shape(pairs[index].shape, at: boundary).boundingRect
+                    : MotionTrack.rect(at: boundary, base: pairs[index].shape.boundingRect, keyframes: old.keyframes)))
+            }
+        }
+        frames.append(.init(time: issue.start, rect: rect))
+        if issue.end != issue.start { frames.append(.init(time: issue.end, rect: rect)) }
+        frames.sort { $0.time < $1.time }
+        endGesture(); checkpoint()
+        pairs[index].effect.keyframes = frames
+        if pairs[index].effect.automaticCover != nil {
+            pairs[index].effect.automaticCover?.mode = .generous
+            pairs[index].effect.automaticCover?.evidenceKeyframes = []
+        }
+        pairs[index].effect.trackingReviews[issueIndex].status = .corrected
+        reviewSelection = nil
+        refreshAfterEdit()
+        workflowHint.stringValue = "선택한 구간을 현재 가림 위치로 보정했습니다. ⌘Z로 되돌립니다."
+        return true
+    }
+
+    private func findAndTrackPhrases(_ phrases: [String], completion: (() -> Void)?) {
+        guard let url = doc.url else { completion?(); return }
+        do { try doc.validateSourceUnchanged() } catch { showError(error.localizedDescription); completion?(); return }
+        stopPlayback(); endGesture()
+        let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: nil)
+        let duration = doc.duration, recognize = recognizeLines, run = trackPhrases
+        let cancellation = ObjectTracker.Cancellation()
+        phraseTrackingCancellation = cancellation
+        setExporting(true)
+        let step = PhraseCover.sampleTimes(duration: duration, step: PhraseTracker.defaultRecognitionStep).step
+        progressIndicator.doubleValue = 0; progressIndicator.isHidden = false; cancelButton.isHidden = false
+        progressLabel.stringValue = String(format: "문구 찾아 추적 중 · 문자 재확인 %.2f초 간격", step)
+        let indicator = progressIndicator
+        let report: (Double) -> Void = { value in DispatchQueue.main.async { indicator.doubleValue = value * 100 } }
+        let task = Task.detached(priority: .userInitiated) { () -> Result<PhraseTracker.Outcome, Error> in
+            do { return .success(try await run(url, duration, phrases, cancellation, recognize, report)) }
+            catch { return .failure(error) }
+        }
+        phraseTrackingTask = task
+        Task { [weak self] in
+            let result = await task.value
+            guard let self else { completion?(); return }
+            self.phraseTrackingTask = nil; self.phraseTrackingCancellation = nil
+            self.progressIndicator.isHidden = true; self.cancelButton.isHidden = true
+            self.progressLabel.stringValue = ""; self.setExporting(false)
+            guard !task.isCancelled, !cancellation.isCancelled else {
+                self.workflowHint.stringValue = "문구 추적을 취소했습니다. 기존 편집을 유지했습니다."; completion?(); return
+            }
+            guard context == FindContext(url: self.doc.url, page: self.pageWorkspace?.currentIndex, time: nil) else { completion?(); return }
+            do {
+                try self.doc.validateSourceUnchanged()
+                switch result {
+                case .failure(let error): self.showError(error.localizedDescription)
+                case .success(let outcome):
+                    if !outcome.cancelled { try self.applyPhraseTracking(outcome) }
+                }
+            } catch { self.showError(error.localizedDescription) }
+            completion?()
+        }
+    }
+
+    func applyPhraseTracking(_ outcome: PhraseTracker.Outcome) throws {
+        guard !isExporting, doc.hasVideo, !outcome.cancelled else { return }
+        guard outcome.recognitionStep.isFinite, outcome.recognitionStep > 0,
+              Set(outcome.tracks.map(\.id)).count == outcome.tracks.count,
+              outcome.tracks.allSatisfy({ track in
+                  track.start.isFinite && track.end.isFinite && track.start >= 0 && track.end <= doc.duration + 0.01 &&
+                  track.end >= track.start && track.samples.count <= 100_000 && track.samples.allSatisfy {
+                      $0.time.isFinite && $0.time >= track.start - 0.01 && $0.time <= track.end + 0.01 &&
+                      $0.box.minX.isFinite && $0.box.minY.isFinite && $0.box.width.isFinite && $0.box.height.isFinite &&
+                      $0.box.width > 0 && $0.box.height > 0
+                  }
+              }), outcome.reviews.allSatisfy({ issue in
+                  issue.start.isFinite && issue.end.isFinite && issue.start >= 0 && issue.end >= issue.start &&
+                  outcome.tracks.contains { $0.id == issue.trackID && issue.start >= $0.start - 0.01 && issue.end <= $0.end + 0.01 }
+              }) else { throw ProjectFile.ProjectError.invalidContent }
+        let usable = outcome.tracks.filter { !$0.samples.isEmpty && $0.end > $0.start }
+        guard pairs.count + usable.count <= 1_000 else { throw ProjectFile.ProjectError.tooLarge }
+        let size = canvas.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        func rect(_ box: CGRect) -> CGRect {
+            CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
+        }
+        guard !usable.isEmpty else {
+            workflowHint.stringValue = String(format: "문구를 찾지 못했습니다. 문자 검사 %.2f초 간격 · 짧거나 흐린 글자는 놓칠 수 있습니다.", outcome.recognitionStep)
+            return
+        }
+        var candidate = pairs
+        var ids: [UUID] = []
+        for track in usable {
+            let id = UUID(), box = rect(track.samples[0].box)
+            var effect = RegionEffect.alwaysOn(); applyDefaultCover(to: &effect)
+            effect.name = "문구 \(String(track.phrase.prefix(190)))"
+            effect.timeRange = track.start...min(doc.duration, track.end)
+            effect.keyframes = track.samples.sorted { $0.time < $1.time }.map { .init(time: $0.time, rect: rect($0.box)) }
+            effect.trackingReviews = outcome.reviews.filter { $0.trackID == track.id }.map {
+                let reason: TrackingReview.Reason
+                switch $0.reason {
+                case .trackingLost: reason = .lostTarget
+                case .samplingGap: reason = .sampledInterval
+                case .textUnconfirmed, .sceneChange: reason = .recognitionGap
+                }
+                return TrackingReview(start: $0.start, end: min(doc.duration, $0.end), reason: reason)
+            }
+            if let anchor = track.coverEvidence.first,
+               let fit = automaticCover(kind: .text, points: anchor.points, box: track.samples[0].box) {
+                effect.automaticCover = fittedCover(fit, anchors: track.coverEvidence)
+                effect.automaticCover?.phrases = PhraseCover.parse(track.phrase).phrases
+                effect.featherRadius = min(effect.featherRadius, 2)
+                effect.trackingReviews += refinementGaps(samples: track.samples, anchors: track.coverEvidence,
+                                                        start: track.start, end: track.end)
+            }
+            candidate.append((.rectangle(id: id, origin: box.origin, size: box.size), effect)); ids.append(id)
+        }
+        // Validate the complete candidate before touching existing editing or its Undo history.
+        let unit = CGSize(width: 1, height: 1)
+        let validated = ProjectFile(mediaPath: doc.url?.lastPathComponent ?? "video",
+            regions: RegionEditing.scaled(candidate, from: size, to: unit).map { .init(shape: $0.shape, effect: $0.effect) },
+            drawings: annotations.map { $0.scaled(from: size, to: unit) })
+        _ = try ProjectFile.decode(validated.encoded(), allowsReverse: true)
+        endGesture(); checkpoint(); pairs = candidate
+        canvas.setRegionsFromExternal(pairs.map(\.shape)); lastFound = (ids, doc.url, pageWorkspace?.currentIndex)
+        if let id = ids.first { canvas.selectRegion(id: id) }; multiSelection = ids.count > 1 ? ids : []
+        refreshAfterEdit()
+        workflowHint.stringValue = String(format: "문구 %d곳 추적 · 문자 재확인 %.2f초 간격 · 확인할 구간 %d개. 짧은 등장도 전체 결과에서 확인하세요.",
+                                         ids.count, outcome.recognitionStep, pendingTrackingReviews.count)
+        showInspectorPanel(pendingTrackingReviews.isEmpty ? .selected : .review)
+    }
+}
+
+extension MainWindowController {
+    private func automaticCover(kind: AutomaticCover.Kind, points: [CGPoint], box: CGRect) -> AutomaticCover? {
+        guard box.width > 0, box.height > 0, !points.isEmpty else { return nil }
+        let local = points.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
+        let value = AutomaticCover(kind: kind, evidencePoints: local, sourceSize: doc.appliedVideoSize,
+                                   baseNormalizedSize: box.size)
+        return value.isValid ? value : nil
+    }
+
+    private func setupAutomaticCoverControls() {
+        automaticCoverTools.orientation = .vertical
+        automaticCoverTools.alignment = .leading
+        automaticCoverTools.spacing = 8
+        automaticCoverTools.identifier = NSUserInterfaceItemIdentifier("automaticCoverTools")
+        let title = NSTextField(labelWithString: "가림 영역 다듬기")
+        title.font = .systemFont(ofSize: 14, weight: .semibold)
+        let marginTitle = NSTextField(labelWithString: "안전 여백 · 원본 픽셀")
+        marginTitle.font = .systemFont(ofSize: 12)
+        safetyMarginSlider.minValue = 4; safetyMarginSlider.maxValue = 32; safetyMarginSlider.doubleValue = 8
+        safetyMarginSlider.isContinuous = true
+        safetyMarginSlider.identifier = NSUserInterfaceItemIdentifier("safetyMarginSlider")
+        safetyMarginSlider.setAccessibilityLabel("안전 여백")
+        safetyMarginSlider.target = self; safetyMarginSlider.action = #selector(safetyMarginChanged(_:))
+        safetyMarginSlider.editingBegan = { [weak self] in self?.beginGesture() }
+        safetyMarginSlider.editingEnded = { [weak self] in self?.endGesture() }
+        let row = NSStackView(views: [safetyMarginSlider, safetyMarginValue]); row.spacing = 8
+        generousCoverButton.target = self; generousCoverButton.action = #selector(generousCoverTapped)
+        recommendedCoverButton.target = self; recommendedCoverButton.action = #selector(recommendedCoverTapped)
+        generousCoverButton.identifier = NSUserInterfaceItemIdentifier("generousCoverButton")
+        recommendedCoverButton.identifier = NSUserInterfaceItemIdentifier("recommendedCoverButton")
+        let buttons = NSStackView(views: [generousCoverButton, recommendedCoverButton]); buttons.spacing = 8
+        automaticCoverHint.font = .systemFont(ofSize: 12)
+        automaticCoverHint.textColor = .secondaryLabelColor
+        automaticCoverHint.preferredMaxLayoutWidth = 290
+        for item in [title, marginTitle, row, buttons, automaticCoverHint] { automaticCoverTools.addArrangedSubview(item) }
+    }
+
+    @objc private func safetyMarginChanged(_ sender: NSSlider) {
+        guard let id = selectedID else { return }
+        _ = setAutomaticCover(id, margin: sender.doubleValue.rounded())
+    }
+    @objc private func generousCoverTapped() {
+        guard let id = selectedID else { return }; _ = setAutomaticCover(id, mode: .generous)
+    }
+    @objc private func recommendedCoverTapped() {
+        guard let id = selectedID else { return }; _ = setAutomaticCover(id, margin: 8, mode: .recommended)
+    }
+
+    /// Each edit belongs to this cover, follows Undo/save, and never resolves a review.
+    @discardableResult
+    func setAutomaticCover(_ id: UUID, margin: Double? = nil, mode: AutomaticCover.Mode? = nil) -> Bool {
+        guard !isExporting, let index = pairs.firstIndex(where: { $0.shape.id == id }),
+              !pairs[index].effect.locked, pairs[index].effect.erasures.isEmpty,
+              var fit = pairs[index].effect.automaticCover else { return false }
+        if let margin { guard margin.isFinite, (4...32).contains(margin) else { return false }; fit.safetyMargin = margin }
+        if let mode {
+            if mode == .recommended, doc.hasVideo, !pairs[index].effect.keyframes.isEmpty,
+               fit.evidenceKeyframes.isEmpty { return false }
+            fit.mode = mode
+        }
+        guard fit.isValid, fit != pairs[index].effect.automaticCover else { return false }
+        if gestureSnapshot == nil { checkpoint(coalescing: "automatic-cover-\(id)") }
+        pairs[index].effect.automaticCover = fit
+        refreshAfterEdit()
+        return true
+    }
+
+    private func refreshAutomaticCoverControls() {
+        let pair = selectedID.flatMap { id in pairs.first { $0.shape.id == id } }
+        guard let pair, let fit = pair.effect.automaticCover else { automaticCoverTools.isHidden = true; return }
+        automaticCoverTools.isHidden = false
+        let editable = !isExporting && !pair.effect.locked && pair.effect.erasures.isEmpty
+        safetyMarginSlider.doubleValue = fit.safetyMargin
+        safetyMarginValue.stringValue = "\(Int(fit.safetyMargin))px"
+        safetyMarginSlider.isEnabled = editable && fit.mode == .recommended
+        generousCoverButton.isEnabled = editable && fit.mode != .generous
+        recommendedCoverButton.isEnabled = editable && (!doc.hasVideo || pair.effect.keyframes.isEmpty || !fit.evidenceKeyframes.isEmpty)
+        automaticCoverHint.stringValue = fit.mode == .generous
+            ? "기존의 넉넉한 범위입니다."
+            : "대상에 맞춘 가림 · 확인이 필요한 구간은 넉넉하게 유지합니다. 전체 결과를 확인하세요."
+    }
+}
+
+extension MainWindowController {
+    private func fittedCover(_ fit: AutomaticCover, anchors: [PhraseTracker.CoverEvidence]) -> AutomaticCover {
+        var result = fit
+        var frames: [AutomaticCover.EvidenceKeyframe] = []
+        for anchor in anchors.sorted(by: { $0.time < $1.time }) where anchor.generousBox.width > 0 && anchor.generousBox.height > 0 {
+            let box = anchor.generousBox
+            let points = anchor.points.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
+            var test = fit; test.evidencePoints = points; test.evidenceKeyframes = []
+            guard test.isValid else { continue }
+            if frames.last?.time == anchor.time { frames.removeLast() }
+            frames.append(.init(time: anchor.time, points: points))
+        }
+        result.evidenceKeyframes = frames
+        if frames.isEmpty { result.mode = .generous }
+        return result
+    }
+
+    /// Every interval used for a reduced video mask must have observed geometry at both
+    /// frame endpoints. Missing/ambiguous evidence is a persisted review, never a silent guess.
+    private func refinementGaps(samples: [ObjectTracker.Sample], anchors: [PhraseTracker.CoverEvidence],
+                                start: Double, end: Double) -> [TrackingReview] {
+        let times = anchors.map(\.time).sorted()
+        let frame = 1 / max(1, doc.videoFPS)
+        let ordered = samples.sorted { $0.time < $1.time }
+        var missing: [ClosedRange<Double>] = []
+        func present(_ t: Double) -> Bool { times.contains { abs($0 - t) < 1.0 / 6000 } }
+        func add(_ low: Double, _ high: Double) {
+            let low = max(start, low), high = min(end, high)
+            guard high > low else { return }
+            if let last = missing.last, low <= last.upperBound + 0.000001 {
+                missing[missing.count - 1] = last.lowerBound...max(last.upperBound, high)
+            } else { missing.append(low...high) }
+        }
+        if let first = ordered.first, first.time > start + 0.000001 { add(start, first.time) }
+        for (a, b) in zip(ordered, ordered.dropFirst()) {
+            if !present(a.time) || !present(b.time) || b.time - a.time > frame * 1.5 { add(a.time, b.time) }
+        }
+        if let last = ordered.last {
+            if !present(last.time) || end - last.time > frame * 1.5 { add(last.time, end) }
+        } else { add(start, end) }
+        return missing.map { TrackingReview(start: $0.lowerBound, end: $0.upperBound, reason: .recognitionGap) }
+    }
 }
