@@ -10,6 +10,48 @@ import Darwin
 extension MainWindowController {
     // MARK: - Automatic finding (faces, text)
 
+    // State and detectors live in `finding`; tests read and replace them through these names.
+    var lastFound: (ids: [UUID], url: URL?, page: Int?) {
+        get { finding.lastFound }
+        set { finding.lastFound = newValue }
+    }
+    var findTask: Task<Result<[AutoDetector.Detection], Error>, Never>? {
+        get { finding.findTask }
+        set { finding.findTask = newValue }
+    }
+    var phraseTask: Task<Result<[PhraseCover.Span], Error>, Never>? {
+        get { finding.phraseTask }
+        set { finding.phraseTask = newValue }
+    }
+    var phraseTrackingTask: Task<Result<PhraseTracker.Outcome, Error>, Never>? {
+        get { finding.phraseTrackingTask }
+        set { finding.phraseTrackingTask = newValue }
+    }
+    var phraseTrackingCancellation: ObjectTracker.Cancellation? {
+        get { finding.phraseTrackingCancellation }
+        set { finding.phraseTrackingCancellation = newValue }
+    }
+    var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] {
+        get { finding.autoDetect }
+        set { finding.autoDetect = newValue }
+    }
+    var autoDetectDetailed: ((AutoDetector.Target, CIImage) throws -> [AutoDetector.Detection])? {
+        get { finding.autoDetectDetailed }
+        set { finding.autoDetectDetailed = newValue }
+    }
+    var recognizeLines: (CIImage) throws -> [AutoDetector.RecognizedLine] {
+        get { finding.recognizeLines }
+        set { finding.recognizeLines = newValue }
+    }
+    var trackPhrases: FindCoordinator.TrackPhrases {
+        get { finding.trackPhrases }
+        set { finding.trackPhrases = newValue }
+    }
+    var findPersonBox: (CIImage, CGPoint) throws -> CGRect? {
+        get { finding.findPersonBox }
+        set { finding.findPersonBox = newValue }
+    }
+
     @objc func findFacesTapped() { findAndCover(.faces) }
     @objc func findTextTapped() { findAndCover(.text) }
 
@@ -18,8 +60,6 @@ extension MainWindowController {
     /// new areas can be tracked both ways right away. Internal for tests.
     func findAndCover(_ target: AutoDetector.Target, completion: (() -> Void)? = nil) {
         guard !isExporting, doc.mediaKind != .none, canvas.bounds.width > 0, canvas.bounds.height > 0 else { NSSound.beep(); return }
-        let detect = autoDetect
-        let detailed = autoDetectDetailed
         let time = doc.hasVideo ? playheadTime : nil
         let url = doc.url
         let still = doc.hasVideo ? nil : doc.currentCGImage
@@ -35,21 +75,7 @@ extension MainWindowController {
         progressIndicator.startAnimation(nil)
         cancelButton.isHidden = false
         progressLabel.stringValue = "\(target.label) 찾는 중… (취소할 수 있음)"
-        let task = Task.detached(priority: .userInitiated) { () -> Result<[AutoDetector.Detection], Error> in
-            do {
-                let image: CIImage
-                if let still { image = CIImage(cgImage: still) }
-                else if let url, let time { image = try await AutoDetector.frame(of: url, at: time) }
-                else { throw AutoDetector.DetectError.frameUnavailable }
-                try Task.checkCancellation()
-                let found = try detailed?(target, image) ?? detect(target, image).map {
-                    AutoDetector.Detection(generousBox: $0, target: target, evidencePoints: [], reliable: false)
-                }
-                try Task.checkCancellation()
-                return .success(found)
-            } catch { return .failure(error) }
-        }
-        findTask = task
+        let task = finding.startDetection(target, still: still, url: url, time: time)
         Task { [weak self] in
             let result = await task.value
             guard let self else { completion?(); return }
@@ -76,15 +102,7 @@ extension MainWindowController {
         }
     }
 
-    struct FindContext: Equatable {
-        let url: URL?
-        let page: Int?
-        let time: Double?
-        static func == (a: FindContext, b: FindContext) -> Bool {
-            a.url == b.url && a.page == b.page && (a.time == nil) == (b.time == nil)
-                && abs((a.time ?? 0) - (b.time ?? 0)) < MotionTrack.sameTime
-        }
-    }
+    typealias FindContext = FindCoordinator.FindContext
 
     private func coverFound(_ result: Result<[AutoDetector.Detection], Error>, target: AutoDetector.Target, time: Double?) {
         let detections: [AutoDetector.Detection]
@@ -156,7 +174,6 @@ extension MainWindowController {
             return
         }
         let phrases = parsed.phrases, tooShort = parsed.tooShort
-        let recognize = recognizeLines
         let url = doc.url
         let still = doc.hasVideo ? nil : doc.currentCGImage
         let isVideo = doc.hasVideo
@@ -177,33 +194,8 @@ extension MainWindowController {
             self.progressIndicator.doubleValue = Double(done) / Double(max(1, total)) * 100
             self.progressLabel.stringValue = "문구 찾는 중 \(done)/\(total) (취소할 수 있음)"
         }
-        let task = Task.detached(priority: .userInitiated) { () -> Result<[PhraseCover.Span], Error> in
-            do {
-                var samples: [(time: Double, hits: [CGRect])] = []
-                for (index, time) in sampling.times.enumerated() {
-                    try Task.checkCancellation()
-                    let image: CIImage
-                    if let still { image = CIImage(cgImage: still) }
-                    else if let url { image = try await AutoDetector.frame(of: url, at: time) }
-                    else { throw AutoDetector.DetectError.frameUnavailable }
-                    let lines = try recognize(image)
-                    let hits = lines.filter { PhraseCover.matches($0.text, phrases: phrases) }.map { PhraseCover.coverBox($0.box) }
-                    samples.append((time, hits))
-                    await report(index + 1, sampling.times.count)
-                }
-                try Task.checkCancellation()
-                // A still image has one sample: each hit is simply a place to cover.
-                if let still {
-                    let lines = try recognize(CIImage(cgImage: still))
-                    return .success(lines.filter { PhraseCover.matches($0.text, phrases: phrases) }.map {
-                        PhraseCover.Span(box: PhraseCover.coverBox($0.box), start: 0, end: 0,
-                                         evidencePoints: AutoDetector.phraseEvidence(line: $0, phrases: phrases))
-                    })
-                }
-                return .success(PhraseCover.spans(samples: samples, step: sampling.step, duration: duration))
-            } catch { return .failure(error) }
-        }
-        phraseTask = task
+        let task = finding.startPhraseSearch(phrases, still: still, url: url, sampling: sampling,
+                                             duration: duration, report: report)
         Task { [weak self] in
             let result = await task.value
             guard let self else { completion?(); return }
@@ -292,19 +284,12 @@ extension MainWindowController {
             return
         }
         guard let time = playheadTime else { return }
-        let find = findPersonBox
         stopPlayback()
         endGesture()
         let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: time)
         setExporting(true)
         workflowHint.stringValue = "사람 찾는 중…"
-        let task = Task.detached(priority: .userInitiated) { () -> Result<CGRect?, Error> in
-            do {
-                let image = try await AutoDetector.frame(of: url, at: time)
-                try Task.checkCancellation()
-                return .success(try find(image, normal))
-            } catch { return .failure(error) }
-        }
+        let task = finding.startPersonSearch(url: url, time: time, point: normal)
         Task { [weak self] in
             let result = await task.value
             guard let self else { return }
@@ -347,9 +332,7 @@ extension MainWindowController {
 
     /// Areas from the latest find that still exist on the page it ran on, in creation order.
     var foundIDsStillHere: [UUID] {
-        guard lastFound.url == doc.url, lastFound.page == pageWorkspace?.currentIndex else { return [] }
-        let present = Set(pairs.map(\.shape.id))
-        return lastFound.ids.filter(present.contains)
+        finding.foundIDs(url: doc.url, page: pageWorkspace?.currentIndex, present: Set(pairs.map(\.shape.id)))
     }
 
     /// Picks the latest find's areas again, together. Internal for tests.

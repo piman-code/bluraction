@@ -15,16 +15,15 @@ extension MainWindowController {
         guard let media = doc.url, canvas.bounds.width > 0, canvas.bounds.height > 0 else {
             throw ProjectFile.ProjectError.invalidContent
         }
-        let unit = CGSize(width: 1, height: 1)
-        let regions = RegionEditing.scaled(pairs, from: canvas.bounds.size, to: unit).map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }
-        let drawings = annotations.map { $0.scaled(from: canvas.bounds.size, to: unit) }
+        let regions = ProjectConversion.normalizedRegions(pairs, from: canvas.bounds.size)
+        let drawings = ProjectConversion.normalizedDrawings(annotations, from: canvas.bounds.size)
         try doc.validateSourceUnchanged()
         if let binding = doc.videoProjectBinding {
             let version = try Self.projectProducerVersion(producerVersion)
             let reference = ProjectFile.mediaReference(for: media, projectURL: projectURL)
             if let baseline = videoProjectBaseline, let nativeBaseline = videoProjectNativeBaseline {
                 let current = ProjectFile(mediaPath: reference,
-                    regions: pairs.map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }, drawings: annotations)
+                    regions: ProjectConversion.regions(pairs), drawings: annotations)
                 let normalized = ProjectFile(mediaPath: reference, regions: regions, drawings: drawings)
                 return try baseline.updated(mediaPath: reference, binding: binding, producerVersion: version,
                     baseline: nativeBaseline, current: current, normalized: normalized).encoded()
@@ -79,13 +78,13 @@ extension MainWindowController {
             throw ProjectFile.ProjectError.invalidContent
         }
         let version = try Self.projectProducerVersion(producerVersion)
-        let size = canvas.bounds.size, unit = CGSize(width: 1, height: 1)
+        let size = canvas.bounds.size
         let reference = ProjectFile.mediaReference(for: media, projectURL: url)
         let current = ProjectFile(mediaPath: reference,
-            regions: pairs.map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }, drawings: annotations)
+            regions: ProjectConversion.regions(pairs), drawings: annotations)
         let normalized = ProjectFile(mediaPath: reference,
-            regions: RegionEditing.scaled(pairs, from: size, to: unit).map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) },
-            drawings: annotations.map { $0.scaled(from: size, to: unit) })
+            regions: ProjectConversion.normalizedRegions(pairs, from: size),
+            drawings: ProjectConversion.normalizedDrawings(annotations, from: size))
         let project: VideoProjectFile
         if let baseline = videoProjectBaseline, let native = videoProjectNativeBaseline {
             project = try baseline.updated(mediaPath: reference, binding: binding, producerVersion: version,
@@ -340,33 +339,8 @@ extension MainWindowController {
     func importProjectItems(_ project: ProjectFile) {
         guard !isExporting, canvas.bounds.width > 0, canvas.bounds.height > 0 else { return }
         endGesture()
-        let unit = CGSize(width: 1, height: 1), size = canvas.bounds.size
-        var groups: [UUID: UUID] = [:]
-        func newGroup(_ id: UUID?) -> UUID? { id.map { old in groups[old] ?? { let new = UUID(); groups[old] = new; return new }() } }
-        func clipped(_ range: ClosedRange<Double>) -> ClosedRange<Double> {
-            guard doc.hasVideo, !(range.lowerBound == 0 && range.upperBound == 0), range.upperBound > doc.duration else { return range }
-            return min(range.lowerBound, doc.duration)...doc.duration
-        }
-        let imported = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size).map { pair -> RegionEditing.Pair in
-            let id = UUID()
-            let shape: RegionShape
-            switch pair.shape {
-            case .rectangle(_, let o, let s): shape = .rectangle(id: id, origin: o, size: s)
-            case .ellipse(_, let o, let s): shape = .ellipse(id: id, origin: o, size: s)
-            case .polygon(_, let p): shape = .polygon(id: id, points: p)
-            }
-            var effect = pair.effect
-            effect.groupID = newGroup(effect.groupID)
-            effect.timeRange = clipped(effect.timeRange)
-            return (shape, effect)
-        }
-        let drawings = project.drawings.map { drawing -> DrawingAnnotation in
-            var copy = drawing.scaled(from: unit, to: size)
-            copy.id = UUID()
-            copy.groupID = newGroup(drawing.groupID)
-            copy.timeRange = clipped(copy.timeRange)
-            return copy
-        }
+        let (imported, drawings) = ProjectConversion.importedItems(project, canvasSize: canvas.bounds.size,
+                                                                   clipDuration: doc.hasVideo ? doc.duration : nil)
         guard !imported.isEmpty || !drawings.isEmpty else { NSSound.beep(); return }
         checkpoint()
         pairs.append(contentsOf: imported)
@@ -389,22 +363,9 @@ extension MainWindowController {
             showError("화면을 준비하지 못해 프로젝트 내용을 적용하지 못했습니다. 창을 키운 뒤 다시 열어 주세요.")
             return
         }
-        let unit = CGSize(width: 1, height: 1)
         // A template applied to a shorter video: clip ranges that run past the end.
-        func clipped(_ range: ClosedRange<Double>) -> ClosedRange<Double> {
-            guard clipToTarget, doc.hasVideo, !(range.lowerBound == 0 && range.upperBound == 0), range.upperBound > doc.duration else { return range }
-            return min(range.lowerBound, doc.duration)...doc.duration
-        }
-        pairs = RegionEditing.scaled(project.regions.map { ($0.shape, $0.effect) }, from: unit, to: size).map { pair in
-            var effect = pair.effect
-            effect.timeRange = clipped(effect.timeRange)
-            return (pair.shape, effect)
-        }
-        annotations = project.drawings.map { drawing in
-            var scaled = drawing.scaled(from: unit, to: size)
-            scaled.timeRange = clipped(scaled.timeRange)
-            return scaled
-        }
+        (pairs, annotations) = ProjectConversion.appliedItems(project, canvasSize: size,
+                                                              clipDuration: clipToTarget && doc.hasVideo ? doc.duration : nil)
         history.clearSteps()
         canvas.setRegionsFromExternal(pairs.map(\.shape))
         workflowHint.stringValue = "프로젝트를 열었습니다: 영역 \(pairs.count)개 · 그림 \(annotations.count)개"

@@ -233,20 +233,14 @@ extension MainWindowController {
         do { try doc.validateSourceUnchanged() } catch { showError(error.localizedDescription); completion?(); return }
         stopPlayback(); endGesture()
         let context = FindContext(url: url, page: pageWorkspace?.currentIndex, time: nil)
-        let duration = doc.duration, recognize = recognizeLines, run = trackPhrases
-        let cancellation = ObjectTracker.Cancellation()
-        phraseTrackingCancellation = cancellation
+        let duration = doc.duration
         setExporting(true)
         let step = PhraseCover.sampleTimes(duration: duration, step: PhraseTracker.defaultRecognitionStep).step
         progressIndicator.doubleValue = 0; progressIndicator.isHidden = false; cancelButton.isHidden = false
         progressLabel.stringValue = String(format: "문구 찾아 추적 중 · 문자 재확인 %.2f초 간격", step)
         let indicator = progressIndicator
         let report: (Double) -> Void = { value in DispatchQueue.main.async { indicator.doubleValue = value * 100 } }
-        let task = Task.detached(priority: .userInitiated) { () -> Result<PhraseTracker.Outcome, Error> in
-            do { return .success(try await run(url, duration, phrases, cancellation, recognize, report)) }
-            catch { return .failure(error) }
-        }
-        phraseTrackingTask = task
+        let (task, cancellation) = finding.startPhraseTracking(phrases, url: url, duration: duration, report: report)
         Task { [weak self] in
             let result = await task.value
             guard let self else { completion?(); return }

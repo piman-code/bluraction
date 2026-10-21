@@ -13,8 +13,18 @@ extension MainWindowController {
     enum TrackChoice: Int { case forward, backward, both }
 
     /// True once a running tracking task has been asked to stop (window close or 취소). Internal for tests.
-    var trackingStopRequested: Bool { trackingCancellation?.isCancelled ?? false }
-    var isTracking: Bool { trackingCancellation != nil }
+    var trackingStopRequested: Bool { tracking.trackingStopRequested }
+    var isTracking: Bool { tracking.isTracking }
+    var trackingCancellation: ObjectTracker.Cancellation? { tracking.trackingCancellation }
+    var repairingReview: (region: UUID, review: UUID, end: Double)? {
+        get { tracking.repairingReview }
+        set { tracking.repairingReview = newValue }
+    }
+    /// The tracker; tests replace it.
+    var trackObjects: TrackingCoordinator.TrackObjects {
+        get { tracking.trackObjects }
+        set { tracking.trackObjects = newValue }
+    }
 
     @objc func autoTrackTapped() {
         let ids = multiSelection.count > 1 ? multiSelection : [currentSelectionID].compactMap { $0 }
@@ -73,8 +83,7 @@ extension MainWindowController {
         options.reacquireFaces = reacquireFacesCheckbox.state == .on
         stopPlayback()
         endGesture()
-        let cancellation = ObjectTracker.Cancellation()
-        trackingCancellation = cancellation
+        let cancellation = tracking.begin()
         setExporting(true)
         progressIndicator.doubleValue = 0
         progressIndicator.isHidden = false
@@ -83,74 +92,26 @@ extension MainWindowController {
         let indicator = progressIndicator
         let report: @Sendable (Double) -> Void = { value in DispatchQueue.main.async { indicator.doubleValue = value } }
         let initial = Dictionary(uniqueKeysWithValues: zip(items, boxes))
-        let run = trackObjects
         let refinementKinds = Dictionary(uniqueKeysWithValues: pairs.compactMap { pair -> (UUID, AutoDetector.Target)? in
             guard items.contains(pair.shape.id), let fit = pair.effect.automaticCover,
                   fit.phrases.isEmpty else { return nil }
             return (pair.shape.id, fit.kind == .face ? .faces : .text)
         })
+        let request = TrackingCoordinator.Request(url: url, start: start, end: end, choice: choice, items: items,
+                                                  boxes: boxes, options: options, refinementKinds: refinementKinds)
+        let tracking = tracking
         Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) { () -> Result<RefinedTracking, Error> in
-                do {
-                    var backward: [ObjectTracker.Outcome]?, forward: [ObjectTracker.Outcome]?
-                    if choice != .forward {
-                        var back = options
-                        back.direction = .backward
-                        backward = try await run(url, start, 0, boxes, back, cancellation) { report(choice == .both ? $0 / 2 : $0) }
-                    }
-                    if choice != .backward, !cancellation.isCancelled {
-                        var ahead = options
-                        ahead.direction = .forward
-                        forward = try await run(url, start, end, boxes, ahead, cancellation) { report(choice == .both ? 0.5 + $0 / 2 : $0) }
-                    }
-                    var outcomes: [UUID: ObjectTracker.Outcome] = [:]
-                    for (index, id) in items.enumerated() {
-                        let samples = ((backward?[index].samples ?? []) + (forward?[index].samples ?? [])).sorted { $0.time < $1.time }
-                        outcomes[id] = ObjectTracker.Outcome(samples: samples,
-                                                             lostTarget: (backward?[index].lostTarget ?? false) || (forward?[index].lostTarget ?? false),
-                                                             cancelled: cancellation.isCancelled)
-                    }
-                    var evidence: [UUID: [PhraseTracker.CoverEvidence]] = [:]
-                    if !cancellation.isCancelled {
-                        for target in AutoDetector.Target.allCases {
-                            let ids = items.filter { refinementKinds[$0] == target }
-                            guard !ids.isEmpty else { continue }
-                            let samples = ids.map { id -> [ObjectTracker.Sample] in
-                                let list = outcomes[id]?.samples ?? []
-                                return ([ObjectTracker.Sample(time: start, box: initial[id] ?? .zero)] + list)
-                                    .sorted { $0.time < $1.time }
-                            }
-                            do {
-                                let refined = try await AutoDetector.refineTracks(url: url, target: target,
-                                    tracks: samples, cancellation: cancellation)
-                                for (id, anchors) in zip(ids, refined) { evidence[id] = anchors }
-                            } catch PageWorkspace.WorkspaceError.sourceChanged { throw PageWorkspace.WorkspaceError.sourceChanged }
-                            catch { // Optional refinement must not discard an already recorded tracking path.
-                                for id in ids { evidence[id] = [] }
-                            }
-                        }
-                    }
-                    if cancellation.isCancelled {
-                        for id in items { outcomes[id]?.cancelled = true }
-                        evidence = [:]
-                    }
-                    return .success(RefinedTracking(outcomes: outcomes, evidence: evidence))
-                } catch { return .failure(error) }
-            }.value
+            let result = await tracking.run(request, cancellation: cancellation, report: report)
             let requestedRange = (choice == .forward ? start : 0)...max(choice == .backward ? start : end, start)
             self?.finishTracking(result, start: start, initialBoxes: initial, undoWithPrevious: undoWithPrevious,
                                  skipped: tooSmall, requestedRange: requestedRange)
         }
     }
 
-    private struct RefinedTracking {
-        var outcomes: [UUID: ObjectTracker.Outcome]
-        var evidence: [UUID: [PhraseTracker.CoverEvidence]]
-    }
-    private func finishTracking(_ result: Result<RefinedTracking, Error>, start: Double, initialBoxes: [UUID: CGRect],
+    private func finishTracking(_ result: Result<TrackingCoordinator.RefinedTracking, Error>, start: Double, initialBoxes: [UUID: CGRect],
                                 undoWithPrevious: Bool, skipped: Int = 0, requestedRange: ClosedRange<Double>? = nil) {
         defer { repairingReview = nil }
-        trackingCancellation = nil
+        tracking.end()
         setExporting(false)
         progressIndicator.isHidden = true
         cancelButton.isHidden = true

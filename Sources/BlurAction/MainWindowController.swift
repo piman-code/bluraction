@@ -126,31 +126,11 @@ final class MainWindowController: NSWindowController {
     let trackAfterFindCheckbox = NSButton(checkboxWithTitle: "영상: 찾은 뒤 앞뒤로 자동 추적", target: nil, action: nil)
     let selectFoundButton = NSButton(title: "찾은 것 고르기", target: nil, action: nil)
     let deleteFoundButton = NSButton(title: "찾은 것 지우기", target: nil, action: nil)
-    /// Areas the latest find created, and the document and page it ran on. Areas copied to other
-    /// pages keep their ids, so the buttons only act on the page the find ran on.
-    var lastFound: (ids: [UUID], url: URL?, page: Int?) = ([], nil, nil)
-    /// The running find, so 취소 or closing the window can stop it.
-    var findTask: Task<Result<[AutoDetector.Detection], Error>, Never>?
+    /// Running finds, the latest find's areas and the detectors (see `+Finding`).
+    let finding = FindCoordinator()
     let pickHiddenCheckbox = NSButton(checkboxWithTitle: "숨긴 블러 영역도 캔버스에서 고르기", target: nil, action: nil)
-    /// Detector used by 자동 찾기; tests replace it (real face images are not used in tests).
-    var autoDetect: (AutoDetector.Target, CIImage) throws -> [CGRect] = AutoDetector.detect {
-        didSet { autoDetectDetailed = nil } // Preserve legacy injection without fabricating evidence.
-    }
-    var autoDetectDetailed: ((AutoDetector.Target, CIImage) throws -> [AutoDetector.Detection])? = AutoDetector.detectDetailed
-    /// Reader used by 문구 가리기; tests replace it with fixed text.
-    var recognizeLines: (CIImage) throws -> [AutoDetector.RecognizedLine] = AutoDetector.recognizedLines
     let phraseField = NSTextField()
     let phraseButton = NSButton(title: "문구 찾아 가리기", target: nil, action: nil)
-    var phraseTask: Task<Result<[PhraseCover.Span], Error>, Never>?
-    var phraseTrackingTask: Task<Result<PhraseTracker.Outcome, Error>, Never>?
-    var phraseTrackingCancellation: ObjectTracker.Cancellation?
-    /// Tests may supply authored tracking observations while the production path uses Vision.
-    var trackPhrases: (URL, Double, [String], ObjectTracker.Cancellation,
-                      @escaping (CIImage) throws -> [AutoDetector.RecognizedLine],
-                      @escaping (Double) -> Void) async throws -> PhraseTracker.Outcome = {
-        try await PhraseTracker.track(url: $0, duration: $1, phrases: $2, cancellation: $3,
-                                      recognizeLines: $4, progress: $5)
-    }
     let decorationField = NSTextField()
     let decorationScale = NSSlider(value: 80, minValue: 20, maxValue: 100, target: nil, action: nil)
     let decorationApply = NSButton(title: "붙이기", target: nil, action: nil)
@@ -165,17 +145,10 @@ final class MainWindowController: NSWindowController {
     var decorationSelection: UUID?
     var decorationDisplayed: CoverDecoration?
     var reviewSelection: (region: UUID, review: UUID)?
-    var repairingReview: (region: UUID, review: UUID, end: Double)?
-    /// Person under a point on a frame (Vision); tests replace it because synthetic frames have no people.
-    var findPersonBox: (CIImage, CGPoint) throws -> CGRect? = AutoDetector.personBox
     let personButton = NSButton(title: "사람 고르기 (역가림)", target: nil, action: nil)
     private var windowCloseObserver: NSObjectProtocol?
-    var trackingCancellation: ObjectTracker.Cancellation?
-    var trackObjects: (URL, Double, Double, [CGRect], ObjectTracker.Options, ObjectTracker.Cancellation,
-                       @escaping (Double) -> Void) async throws -> [ObjectTracker.Outcome] = {
-        try await ObjectTracker.trackMany(url: $0, from: $1, until: $2, boxes: $3, options: $4,
-                                          cancellation: $5, progress: $6)
-    }
+    /// The running automatic tracking and the tracker (see `+Tracking`).
+    let tracking = TrackingCoordinator()
     var annotationColorRow: NSStackView?
     let regionTitle = NSTextField(labelWithString: "레이어 (위가 앞)")
     let regionScroll = NSScrollView()
@@ -286,10 +259,7 @@ final class MainWindowController: NSWindowController {
                                                                      object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.trackingCancellation?.cancel()
-                self?.findTask?.cancel()
-                self?.phraseTask?.cancel()
-                self?.phraseTrackingTask?.cancel()
-                self?.phraseTrackingCancellation?.cancel()
+                self?.finding.cancelAll()
             }
         }
         window.setContentSize(NSSize(width: 1180, height: 700))
