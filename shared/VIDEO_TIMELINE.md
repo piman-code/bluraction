@@ -13,8 +13,8 @@ Version 4 is the same video layout with one addition: a region effect may carry 
 when a reverse cover exists; ordinary video projects stay version 3 with no `inverted` key. A reverse
 cover cannot carry `erasures`. Version 4 is refused by the shared reader and older apps, so they fail
 closed instead of drawing the cover the wrong way round. Image and page projects never carry it.
-The JSON schema still describes version 3 only: its v3 regions deliberately share the v1 definitions
-(a test guards that), so version 4 needs a separate schema decision before it is documented there.
+The portable JSON schema still describes version 3 only: its v3 regions deliberately share the v1
+definitions (a test guards that). Version 4 is described in the Mac-only `bluraction-project-mac.schema.json`.
 
 Video v3 requires the existing single-media `mediaPath`, `regions`, `drawings`,
 plus `version:3`, `mediaKind:"video"`, mandatory original `sourceSHA256`,

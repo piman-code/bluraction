@@ -1,0 +1,466 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:bluraction:project:mac-v4-v7",
+  "title": "BlurAction Mac-only project formats v4-v7",
+  "$comment": "Structural schema only, and a companion to bluraction-project.schema.json, whose $defs it references by $id. Only the Mac app reads these versions; the shared reader and the Windows app refuse them. Runtime checks additionally enforce that the version matches the content (an extension field selects v5/v6/v7, a reverse cover alone selects v4), exact integers, and the cross-field rules noted per definition. Unknown fields are refused, not retained. See COMPATIBILITY.md and VIDEO_TIMELINE.md.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/v4"
+    },
+    {
+      "$ref": "#/$defs/v5"
+    },
+    {
+      "$ref": "#/$defs/v6"
+    },
+    {
+      "$ref": "#/$defs/v7"
+    }
+  ],
+  "$defs": {
+    "evidencePoint": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 3
+        },
+        {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 3
+        }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "coverDecoration": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "x-swift-graphemeLimit": 1000,
+          "$comment": "Not blank; no NUL."
+        },
+        "scale": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1
+        },
+        "color": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/color"
+        }
+      },
+      "required": [
+        "text",
+        "scale",
+        "color"
+      ],
+      "additionalProperties": false
+    },
+    "trackingReview": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/uuid"
+        },
+        "start": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end": {
+          "type": "number",
+          "minimum": 0
+        },
+        "reason": {
+          "enum": [
+            "lostTarget",
+            "recognitionGap",
+            "cancelled",
+            "sampledInterval"
+          ]
+        },
+        "status": {
+          "enum": [
+            "needsReview",
+            "corrected"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "start",
+        "end",
+        "reason",
+        "status"
+      ],
+      "additionalProperties": false,
+      "$comment": "Runtime also requires start <= end and ids unique within one effect."
+    },
+    "evidenceKeyframe": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidencePoint"
+          },
+          "minItems": 3,
+          "maxItems": 512
+        }
+      },
+      "required": [
+        "time",
+        "points"
+      ],
+      "additionalProperties": false
+    },
+    "automaticCover": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "face",
+            "text"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "recommended",
+            "generous"
+          ]
+        },
+        "evidencePoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidencePoint"
+          },
+          "minItems": 3,
+          "maxItems": 512
+        },
+        "sourceSize": {
+          "type": "array",
+          "items": false,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number",
+              "maximum": 100000,
+              "minimum": 1
+            },
+            {
+              "type": "number",
+              "maximum": 100000,
+              "minimum": 1
+            }
+          ]
+        },
+        "baseNormalizedSize": {
+          "type": "array",
+          "items": false,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number",
+              "maximum": 4,
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "maximum": 4,
+              "exclusiveMinimum": 0
+            }
+          ]
+        },
+        "safetyMargin": {
+          "type": "number",
+          "minimum": 4,
+          "maximum": 32
+        },
+        "evidenceKeyframes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceKeyframe"
+          },
+          "maxItems": 10000
+        },
+        "phrases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "x-swift-graphemeLimit": 200
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "kind",
+        "evidencePoints",
+        "sourceSize",
+        "baseNormalizedSize",
+        "safetyMargin",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "$comment": "Runtime also requires a hull of at least 3 evidence points, strictly increasing keyframe times and normalized phrases."
+    },
+    "macEffect": {
+      "allOf": [
+        {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/effect"
+        }
+      ],
+      "properties": {
+        "inverted": {
+          "type": "boolean"
+        },
+        "decoration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/coverDecoration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trackingReviews": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/trackingReview"
+              },
+              "maxItems": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "automaticCover": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/automaticCover"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "unevaluatedProperties": false,
+      "$comment": "A reverse cover (inverted:true) carries no erasures and no decoration."
+    },
+    "macRegion": {
+      "type": "object",
+      "properties": {
+        "shape": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/shape"
+        },
+        "effect": {
+          "$ref": "#/$defs/macEffect"
+        }
+      },
+      "required": [
+        "shape",
+        "effect"
+      ],
+      "additionalProperties": false
+    },
+    "macDrawing": {
+      "allOf": [
+        {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/drawing"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "macRegions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/macRegion"
+      },
+      "maxItems": 1000
+    },
+    "macDrawings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/macDrawing"
+      },
+      "maxItems": 5000
+    },
+    "macPage": {
+      "allOf": [
+        {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/page"
+        }
+      ],
+      "properties": {
+        "regions": {
+          "$ref": "#/$defs/macRegions"
+        },
+        "drawings": {
+          "$ref": "#/$defs/macDrawings"
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "v4": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 4
+        },
+        "mediaKind": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v3/properties/mediaKind"
+        },
+        "mediaPath": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v3/properties/mediaPath"
+        },
+        "sourceSHA256": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v3/properties/sourceSHA256"
+        },
+        "producer": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/videoProducer"
+        },
+        "timeline": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/videoTimeline"
+        },
+        "regions": {
+          "$ref": "#/$defs/macRegions"
+        },
+        "drawings": {
+          "$ref": "#/$defs/macDrawings"
+        }
+      },
+      "required": [
+        "version",
+        "mediaKind",
+        "mediaPath",
+        "sourceSHA256",
+        "producer",
+        "timeline",
+        "regions",
+        "drawings"
+      ],
+      "additionalProperties": false,
+      "x-maxUTF8Bytes": 20971520,
+      "$comment": "Video v3 layout; regions may be reverse covers (inverted:true). Written only when a reverse cover exists and no extension field is used."
+    },
+    "v5": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 5
+        },
+        "mediaPath": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v1/properties/mediaPath"
+        },
+        "sourceSHA256": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v1/properties/sourceSHA256"
+        },
+        "regions": {
+          "$ref": "#/$defs/macRegions"
+        },
+        "drawings": {
+          "$ref": "#/$defs/macDrawings"
+        }
+      },
+      "required": [
+        "version",
+        "mediaPath",
+        "regions",
+        "drawings"
+      ],
+      "additionalProperties": false,
+      "x-maxUTF8Bytes": 20971520,
+      "$comment": "v1 single-media layout with extension fields."
+    },
+    "v6": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 6
+        },
+        "title": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v2/properties/title"
+        },
+        "currentIndex": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v2/properties/currentIndex"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/macPage"
+          },
+          "minItems": 1,
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "version",
+        "title",
+        "currentIndex",
+        "pages"
+      ],
+      "additionalProperties": false,
+      "x-maxUTF8Bytes": 52428800,
+      "$comment": "v2 ordered-workspace layout with extension fields."
+    },
+    "v7": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 7
+        },
+        "mediaKind": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v3/properties/mediaKind"
+        },
+        "mediaPath": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v3/properties/mediaPath"
+        },
+        "sourceSHA256": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/v3/properties/sourceSHA256"
+        },
+        "producer": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/videoProducer"
+        },
+        "timeline": {
+          "$ref": "urn:bluraction:project:v1-v2-v3#/$defs/videoTimeline"
+        },
+        "regions": {
+          "$ref": "#/$defs/macRegions"
+        },
+        "drawings": {
+          "$ref": "#/$defs/macDrawings"
+        }
+      },
+      "required": [
+        "version",
+        "mediaKind",
+        "mediaPath",
+        "sourceSHA256",
+        "producer",
+        "timeline",
+        "regions",
+        "drawings"
+      ],
+      "additionalProperties": false,
+      "x-maxUTF8Bytes": 20971520,
+      "$comment": "Video v3/v4 layout with extension fields; reverse covers may also be present."
+    }
+  }
+}
