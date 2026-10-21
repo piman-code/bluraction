@@ -499,20 +499,20 @@ struct PageWorkspaceTests {
         #expect(container.canvas.regionsBinding?().count == 0)
         controller.perform(NSSelectorFromString("addRegionTapped"))
         #expect(container.canvas.regionsBinding?().count == 1)
-        container.nextPageButton.performClick(nil)
+        click(container.nextPageButton)
         #expect(container.pageLabel.stringValue == "2 / 2")
         #expect(container.canvas.regionsBinding?().count == 0)
-        container.previousPageButton.performClick(nil)
+        click(container.previousPageButton)
         #expect(container.canvas.regionsBinding?().count == 1)
         controller.perform(NSSelectorFromString("undoTapped"))
         #expect(container.canvas.regionsBinding?().count == 0)
         controller.perform(NSSelectorFromString("addRegionTapped"))
         controller.applyCurrentPageToAll()
-        container.nextPageButton.performClick(nil)
+        click(container.nextPageButton)
         #expect(container.canvas.regionsBinding?().count == 1)
         controller.perform(NSSelectorFromString("addRegionTapped"))
         #expect(container.canvas.regionsBinding?().count == 2)
-        container.previousPageButton.performClick(nil)
+        click(container.previousPageButton)
         #expect(container.canvas.regionsBinding?().count == 1)
     }
 
@@ -554,18 +554,18 @@ struct PageWorkspaceTests {
         #expect(container.pageLabel.stringValue == "1 / 3")
         let pdfWindowSize = try #require(controller.window?.contentView?.bounds.size)
         controller.perform(NSSelectorFromString("addRegionTapped"))
-        container.nextPageButton.performClick(nil)
+        click(container.nextPageButton)
         #expect(container.pageLabel.stringValue == "2 / 3")
         #expect(controller.window?.contentView?.bounds.size == pdfWindowSize)
         #expect(container.canvas.regionsBinding?().isEmpty == true)
-        container.previousPageButton.performClick(nil)
+        click(container.previousPageButton)
         controller.applyCurrentPageToAll()
-        container.nextPageButton.performClick(nil)
+        click(container.nextPageButton)
         #expect(container.canvas.regionsBinding?().count == 1)
         controller.perform(NSSelectorFromString("addRegionTapped"))
         #expect(container.canvas.regionsBinding?().count == 2)
         captureWindow(controller.window, name: "pdf-page-two")
-        container.nextPageButton.performClick(nil)
+        click(container.nextPageButton)
         #expect(container.canvas.regionsBinding?().count == 1)
         let pdfProjectURL = dir.appendingPathComponent("pdf-session.bluraction")
         try controller.saveWorkspaceProject(to: pdfProjectURL)
@@ -578,7 +578,7 @@ struct PageWorkspaceTests {
         let reopenedContainer = try #require(reopenedController.window?.contentViewController as? MainContainerViewController)
         #expect(reopenedContainer.pageLabel.stringValue == "3 / 3")
         #expect(reopenedContainer.canvas.regionsBinding?().count == 1)
-        reopenedContainer.previousPageButton.performClick(nil)
+        click(reopenedContainer.previousPageButton)
         #expect(reopenedContainer.canvas.regionsBinding?().count == 2)
         let pdfResult = dir.appendingPathComponent("pdf-result.pdf")
         try reopenedPDFProject.workspace(relativeTo: pdfProjectURL).exportPDF(to: pdfResult)
@@ -590,7 +590,7 @@ struct PageWorkspaceTests {
         #expect(imageWindowSize.height >= min(760, (NSScreen.main?.visibleFrame.height ?? 760) - 80))
         controller.perform(NSSelectorFromString("addRegionTapped"))
         controller.applyCurrentPageToAll()
-        container.nextPageButton.performClick(nil)
+        click(container.nextPageButton)
         #expect(container.canvas.regionsBinding?().count == 1)
         #expect(controller.window?.contentView?.bounds.size == imageWindowSize)
         captureWindow(controller.window, name: "image-page-two")
@@ -619,5 +619,14 @@ struct PageWorkspaceTests {
         let output = URL(fileURLWithPath: destination, isDirectory: true)
             .appendingPathComponent("\(name)-\(UUID().uuidString).png")
         try? data.write(to: output)
+    }
+
+    /// Sends the button's action directly. `performClick` spins a nested
+    /// event loop that can end a test run early. Toggle-style
+    /// buttons (checkbox, disclosure, on/off) change state first, as a click would.
+    private func click(_ button: NSButton) {
+        guard button.isEnabled, let action = button.action else { return }
+        if let cell = button.cell as? NSButtonCell, !cell.showsStateBy.isEmpty { button.setNextState() }
+        NSApp.sendAction(action, to: button.target, from: button)
     }
 }
