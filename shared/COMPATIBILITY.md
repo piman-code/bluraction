@@ -105,6 +105,28 @@ The original Swift decoder uses `decodeIfPresent` for added optional fields, so 
 
 Swift `String.count` limits are extended grapheme clusters: media paths ≤4,096, title ≤255, name/fontName ≤200, text ≤1,000. Python's standard library has no complete UAX #29 grapheme iterator. ASCII limits are enforced exactly except CRLF, which Swift counts as one cluster. Strings whose code-point count exceeds the limit and contains non-ASCII or CRLF are retained with `required_reviews` for host grapheme validation. The Windows Qt adapter uses `QTextBoundaryFinder.Grapheme`, respects UTF-16 boundaries, and resolves only the exact known grapheme review reasons after checking the complete tree. Unknown extension and legacy PDF reviews remain separate; a host review cannot be cleared merely by an acknowledgement flag. The schema uses `x-swift-graphemeLimit` annotations instead of an inaccurate JSON Schema `maxLength`. `required_reviews` is **not permission to render/export**: adapters must resolve all review reasons or refuse the operation. The same rule applies to unknown extension fields whose rendering meaning is not known.
 
+## Mac-only extension formats v5, v6 and v7
+
+The Mac app writes three extension versions when a region effect carries any of `decoration`, `trackingReviews` (non-empty) or `automaticCover`. A project without them keeps its original version and bytes.
+
+| Version | Same layout as | Written when |
+| --- | --- | --- |
+| 5 | v1 single-media | a region uses an extension field |
+| 6 | v2 ordered workspace | any page's region uses an extension field |
+| 7 | v3/v4 video | a region uses an extension field; reverse covers (`inverted:true`) may also be present |
+
+The version must match the content: a v5/v6/v7 file without an extension field, or a v1/v2/v3/v4 file with one, is refused. In these versions, unknown fields are **refused**, not retained for review. That covers the root, each page, region, effect, keyframe, erasure, drawing and the three records below. Inexact integers in model fields are also refused. The shared Python reader, the Windows app and Mac builds before these formats all refuse v5–v7 as unknown versions, so the new data is never dropped silently. The JSON schema still describes v1–v3 only; as with v4 (see [VIDEO_TIMELINE.md](VIDEO_TIMELINE.md)), adding these versions needs a separate schema decision.
+
+All three fields are optional effect fields; omitted or `null` means none.
+
+| Record | Fields (all required) | Rules (`CoverDecoration.swift`, `TrackingReview.swift`, `AutomaticCover.swift`) |
+| --- | --- | --- |
+| `decoration` | `text`, `scale`, `color` | Text drawn centred on the cover. `text` not blank, ≤1,000 graphemes, no NUL. `scale` 0.1…1. `color` is an RGBA color. Not applied to reverse covers. |
+| `trackingReviews[]` | `id`, `start`, `end`, `reason`, `status` | `id` is a UUID, unique within the effect. `start`/`end` are finite seconds with 0 ≤ start ≤ end. `reason` is one of `lostTarget`, `recognitionGap`, `cancelled`, `sampledInterval`. `status` is `needsReview` or `corrected`. At most 10,000 per effect. |
+| `automaticCover` | `kind`, `evidencePoints`, `sourceSize`, `baseNormalizedSize`, `safetyMargin`, `mode`; optional `evidenceKeyframes`, `phrases` | `kind` is `face` or `text`. `mode` is `recommended` or `generous`. `safetyMargin` is 4…32 source pixels. `sourceSize` components are 1…100,000 pixels. `baseNormalizedSize` components are in (0, 4]. `evidencePoints` holds 3…512 `[x,y]` points in −2…3, local to the tracking box, with a hull of at least 3 points. `evidenceKeyframes[]` is `{time, points}` with strictly increasing finite nonnegative times, at most 10,000. `phrases` holds at most 64 normalized phrases of 1…200 graphemes. |
+
+`automaticCover` never replaces the stored base shape. The base shape and keyframes stay the generous fallback that `mode:"generous"` restores. `recommended` derives the displayed and exported shape from the evidence and the source-pixel margin at render time. A future reader that renders these covers must reproduce `AutomaticCover.shape(base:rect:time:reviews:)`, not approximate it.
+
 ## Paths, source identity and relinking
 
 Project loading validates JSON only and never opens a referenced media file. `resolve_reference` uses lexical PurePath operations; it does not search the disk. Relative references resolve to the filename next to the project, matching the Mac basename rule, with both separator syntaxes flattened to prevent traversal. A new relative reference should be a bare filename.
