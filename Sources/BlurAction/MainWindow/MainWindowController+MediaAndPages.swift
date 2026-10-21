@@ -25,7 +25,7 @@ extension MainWindowController {
     }
     var mediaLoadSessionDiagnostics: MediaLoadSessionDiagnostics {
         MediaLoadSessionDiagnostics(sourceURL: doc.url, sourceSHA256: doc.sourceSHA256,
-            undoDepth: undoStack.count, redoDepth: redoStack.count,
+            undoDepth: history.undo.count, redoDepth: history.redo.count,
             selectedRegion: selectedID, selectedDrawing: selectedDrawingID,
             multiSelection: multiSelection, workspaceIndex: pageWorkspace?.currentIndex,
             dirty: window?.isDocumentEdited ?? false, pending: pendingDocument != nil)
@@ -153,8 +153,7 @@ extension MainWindowController {
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
         player.currentItem?.cancelPendingSeeks()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
-        pairs.removeAll(); annotations.removeAll(); undoStack.removeAll(); redoStack.removeAll(); gestureSnapshot = nil
-        gestureAnnotations = nil
+        pairs.removeAll(); annotations.removeAll(); history.clearForNewDocument()
         selectedID = nil
         selectedDrawingID = nil
         multiSelection.removeAll()
@@ -197,8 +196,8 @@ extension MainWindowController {
         let edit = normalizedEdit(EditorSnapshot(pairs: pairs, annotations: annotations))
         workspace.pages[workspace.currentIndex].regions = edit.regions
         workspace.pages[workspace.currentIndex].drawings = edit.drawings
-        workspace.pages[workspace.currentIndex].undo = undoStack.map(normalizedEdit)
-        workspace.pages[workspace.currentIndex].redo = redoStack.map(normalizedEdit)
+        workspace.pages[workspace.currentIndex].undo = history.undo.map(normalizedEdit)
+        workspace.pages[workspace.currentIndex].redo = history.redo.map(normalizedEdit)
         pageWorkspace = workspace
     }
 
@@ -206,8 +205,7 @@ extension MainWindowController {
         let snapshot = canvasEdit(PageWorkspace.Edit(regions: page.regions, drawings: page.drawings))
         pairs = snapshot.pairs
         annotations = snapshot.annotations
-        undoStack = page.undo.map(canvasEdit)
-        redoStack = page.redo.map(canvasEdit)
+        history.replaceSteps(undo: page.undo.map(canvasEdit), redo: page.redo.map(canvasEdit))
         selectedID = nil
         selectedDrawingID = nil
         multiSelection.removeAll()
@@ -223,8 +221,8 @@ extension MainWindowController {
             let edit = normalizedEdit(EditorSnapshot(pairs: pairs, annotations: annotations))
             workspace.pages[workspace.currentIndex].regions = edit.regions
             workspace.pages[workspace.currentIndex].drawings = edit.drawings
-            workspace.pages[workspace.currentIndex].undo = undoStack.map(normalizedEdit)
-            workspace.pages[workspace.currentIndex].redo = redoStack.map(normalizedEdit)
+            workspace.pages[workspace.currentIndex].undo = history.undo.map(normalizedEdit)
+            workspace.pages[workspace.currentIndex].redo = history.redo.map(normalizedEdit)
         }
         workspace.currentIndex = index
         load(url: workspace.pages[index].source.url, project: nil, pageImage: image,

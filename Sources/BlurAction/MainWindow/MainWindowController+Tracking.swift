@@ -193,30 +193,11 @@ extension MainWindowController {
             CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
         }
         func merged(_ frames: [RegionKeyframe], base: CGRect, anchor: CGRect, tracked: [RegionKeyframe], isRepair: Bool) -> [RegionKeyframe] {
-            if isRepair, let repair {
-                // Keep every original key outside the reviewed range. Just outside its exact
-                // endpoints, restore the old interpolated path, so repair cannot warp nearby
-                // unreviewed footage. Do not use inserting here: it merges near timestamps.
-                let high = min(max(start, repair.end), max(start, tracked.last?.time ?? start))
-                var result = frames.filter { $0.time < start || $0.time > high }
-                let before = start.nextDown, after = high.nextUp
-                for boundary in [before, after] where boundary >= 0 && boundary.isFinite {
-                    if !result.contains(where: { $0.time == boundary }) {
-                        result.append(.init(time: boundary, rect: MotionTrack.rect(at: boundary, base: base, keyframes: frames)))
-                    }
-                }
-                result.append(.init(time: start, rect: anchor))
-                result += tracked.filter { $0.time > start && $0.time <= high }
-                return result.sorted { $0.time < $1.time }
-            }
-            let low = min(start, tracked.first?.time ?? start), high = max(start, tracked.last?.time ?? start)
-            var result = frames.filter { $0.time < low - MotionTrack.sameTime || $0.time > high + MotionTrack.sameTime }
-            for frame in [RegionKeyframe(time: start, rect: anchor)] + tracked { result = MotionTrack.inserting(frame, into: result) }
-            return result
+            TrackingMerge.keyframes(frames, base: base, anchor: anchor, tracked: tracked, start: start,
+                                    repairEnd: isRepair ? repair?.end : nil)
         }
         func extended(_ range: ClosedRange<Double>, from earliest: Double) -> ClosedRange<Double> {
-            guard !(range.lowerBound == 0 && range.upperBound == 0), earliest < range.lowerBound else { return range }
-            return max(0, earliest)...range.upperBound
+            TrackingMerge.extended(range, from: earliest)
         }
         if newUndoStep { checkpoint() }
         var positions = 0, lost = 0, earliest = start, latest = start

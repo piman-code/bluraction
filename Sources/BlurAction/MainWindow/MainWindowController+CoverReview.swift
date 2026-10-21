@@ -340,11 +340,7 @@ extension MainWindowController {
 
 extension MainWindowController {
     func automaticCover(kind: AutomaticCover.Kind, points: [CGPoint], box: CGRect) -> AutomaticCover? {
-        guard box.width > 0, box.height > 0, !points.isEmpty else { return nil }
-        let local = points.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
-        let value = AutomaticCover(kind: kind, evidencePoints: local, sourceSize: doc.appliedVideoSize,
-                                   baseNormalizedSize: box.size)
-        return value.isValid ? value : nil
+        FindPlacement.automaticCover(kind: kind, points: points, box: box, sourceSize: doc.appliedVideoSize)
     }
 
     func setupAutomaticCoverControls() {
@@ -423,44 +419,11 @@ extension MainWindowController {
 
 extension MainWindowController {
     func fittedCover(_ fit: AutomaticCover, anchors: [PhraseTracker.CoverEvidence]) -> AutomaticCover {
-        var result = fit
-        var frames: [AutomaticCover.EvidenceKeyframe] = []
-        for anchor in anchors.sorted(by: { $0.time < $1.time }) where anchor.generousBox.width > 0 && anchor.generousBox.height > 0 {
-            let box = anchor.generousBox
-            let points = anchor.points.map { CGPoint(x: ($0.x - box.minX) / box.width, y: ($0.y - box.minY) / box.height) }
-            var test = fit; test.evidencePoints = points; test.evidenceKeyframes = []
-            guard test.isValid else { continue }
-            if frames.last?.time == anchor.time { frames.removeLast() }
-            frames.append(.init(time: anchor.time, points: points))
-        }
-        result.evidenceKeyframes = frames
-        if frames.isEmpty { result.mode = .generous }
-        return result
+        TrackingMerge.fittedCover(fit, anchors: anchors)
     }
 
-    /// Every interval used for a reduced video mask must have observed geometry at both
-    /// frame endpoints. Missing/ambiguous evidence is a persisted review, never a silent guess.
     func refinementGaps(samples: [ObjectTracker.Sample], anchors: [PhraseTracker.CoverEvidence],
                                 start: Double, end: Double) -> [TrackingReview] {
-        let times = anchors.map(\.time).sorted()
-        let frame = 1 / max(1, doc.videoFPS)
-        let ordered = samples.sorted { $0.time < $1.time }
-        var missing: [ClosedRange<Double>] = []
-        func present(_ t: Double) -> Bool { times.contains { abs($0 - t) < 1.0 / 6000 } }
-        func add(_ low: Double, _ high: Double) {
-            let low = max(start, low), high = min(end, high)
-            guard high > low else { return }
-            if let last = missing.last, low <= last.upperBound + 0.000001 {
-                missing[missing.count - 1] = last.lowerBound...max(last.upperBound, high)
-            } else { missing.append(low...high) }
-        }
-        if let first = ordered.first, first.time > start + 0.000001 { add(start, first.time) }
-        for (a, b) in zip(ordered, ordered.dropFirst()) {
-            if !present(a.time) || !present(b.time) || b.time - a.time > frame * 1.5 { add(a.time, b.time) }
-        }
-        if let last = ordered.last {
-            if !present(last.time) || end - last.time > frame * 1.5 { add(last.time, end) }
-        } else { add(start, end) }
-        return missing.map { TrackingReview(start: $0.lowerBound, end: $0.upperBound, reason: .recognitionGap) }
+        TrackingMerge.refinementGaps(samples: samples, anchors: anchors, start: start, end: end, fps: doc.videoFPS)
     }
 }

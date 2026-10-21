@@ -405,8 +405,7 @@ extension MainWindowController {
             scaled.timeRange = clipped(scaled.timeRange)
             return scaled
         }
-        undoStack.removeAll()
-        redoStack.removeAll()
+        history.clearSteps()
         canvas.setRegionsFromExternal(pairs.map(\.shape))
         workflowHint.stringValue = "프로젝트를 열었습니다: 영역 \(pairs.count)개 · 그림 \(annotations.count)개"
         refreshAfterEdit()

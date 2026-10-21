@@ -98,29 +98,9 @@ extension MainWindowController {
         // Areas with eraser marks may have holes, so they never count as covering.
         let covering = pairs.filter { $0.effect.isActive(at: time) && $0.effect.erasures.isEmpty }
             .map { RegionEditing.displayed($0, at: time) }
-        /// Points spread over the cover this find would make (an oval for faces, the box for text);
-        /// the place is skipped only when existing areas' actual shapes hold every one (a sliver left showing gets covered).
         func alreadyCovered(_ detection: AutoDetector.Detection) -> Bool {
-            guard !covering.isEmpty else { return false }
-            let box = detection.generousBox
-            let rect = CGRect(x: box.minX * size.width, y: box.minY * size.height, width: box.width * size.width, height: box.height * size.height)
-            let base: RegionShape = target == .faces ? .ellipse(id: UUID(), origin: rect.origin, size: rect.size)
-                : .rectangle(id: UUID(), origin: rect.origin, size: rect.size)
-            let proposed = detection.reliable ? automaticCover(kind: target == .faces ? .face : .text,
-                points: detection.evidencePoints, box: box)?.shape(base: base, rect: rect, time: nil, reviews: []) : nil
-            let area = proposed?.boundingRect ?? rect
-            var inside = 0, total = 0
-            for row in 0..<12 {
-                for column in 0..<12 {
-                    let u = (Double(column) + 0.5) / 12, v = (Double(row) + 0.5) / 12
-                    if proposed == nil && target == .faces, (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5) > 0.25 { continue }
-                    let point = CGPoint(x: area.minX + u * area.width, y: area.minY + v * area.height)
-                    if let proposed, !proposed.contains(point: point, threshold: 0) { continue }
-                    total += 1
-                    if covering.contains(where: { $0.contains(point: point, threshold: 0.5) }) { inside += 1 }
-                }
-            }
-            return total > 0 && inside == total
+            FindPlacement.isAlreadyCovered(detection, target: target, canvasSize: size,
+                                           sourceSize: doc.appliedVideoSize, covering: covering)
         }
         let fresh = detections.filter { !alreadyCovered($0) }
         guard !fresh.isEmpty else {

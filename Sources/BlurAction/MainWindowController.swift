@@ -211,20 +211,20 @@ final class MainWindowController: NSWindowController {
     var pageWorkspace: PageWorkspace?
     var workspaceWindowFitted = false
     var pairs: [(shape: RegionShape, effect: RegionEffect)] = []
-    struct EditorSnapshot { var pairs: [(shape: RegionShape, effect: RegionEffect)]; var annotations: [DrawingAnnotation] }
+    typealias EditorSnapshot = EditHistory.Snapshot
     var annotations: [DrawingAnnotation] = []
-    var undoStack: [EditorSnapshot] = []
-    var redoStack: [EditorSnapshot] = []
+    /// Undo/redo steps and the mouse gesture in progress.
+    var history = EditHistory()
+    var gestureSnapshot: [RegionEditing.Pair]? { history.gestureSnapshot }
+    var gestureAnnotations: [DrawingAnnotation]? { history.gestureAnnotations }
+    var gestureStartTime: Double? { history.gestureStartTime }
     var selectedID: UUID? = nil
     /// Selected drawing (mutually exclusive with `selectedID`).
     var selectedDrawingID: UUID?
-    var gestureSnapshot: [RegionEditing.Pair]?
-    var gestureAnnotations: [DrawingAnnotation]?
     /// Motion recording switch: edits on video become positions at the edit time.
     var trackMotion = true
     var motionRecording: Bool { trackMotion && doc.hasVideo }
     var defaultCoverStyle: RegionEffect.CoverStyle = .blur
-    var gestureStartTime: Double?
     /// Editing is locked while exporting, tracking or finding. Readable for tests.
     private(set) var isExporting = false
     var refreshingList = false
@@ -525,12 +525,7 @@ final class MainWindowController: NSWindowController {
             guard let self else { return }
             self.pairs = RegionEditing.scaled(self.pairs, from: old, to: new)
             self.annotations = self.annotations.map { $0.scaled(from: old, to: new) }
-            self.undoStack = self.undoStack.map { EditorSnapshot(pairs: RegionEditing.scaled($0.pairs, from: old, to: new), annotations: $0.annotations.map { $0.scaled(from: old, to: new) }) }
-            self.redoStack = self.redoStack.map { EditorSnapshot(pairs: RegionEditing.scaled($0.pairs, from: old, to: new), annotations: $0.annotations.map { $0.scaled(from: old, to: new) }) }
-            if let snapshot = self.gestureSnapshot {
-                self.gestureSnapshot = RegionEditing.scaled(snapshot, from: old, to: new)
-            }
-            self.gestureAnnotations = self.gestureAnnotations?.map { $0.scaled(from: old, to: new) }
+            self.history.rescale(from: old, to: new)
             if var baseline = self.videoProjectNativeBaseline {
                 baseline.regions = RegionEditing.scaled(baseline.regions.map { ($0.shape, $0.effect) }, from: old, to: new)
                     .map { ProjectFile.Region(shape: $0.shape, effect: $0.effect) }
@@ -603,39 +598,20 @@ final class MainWindowController: NSWindowController {
         return time.isFinite ? min(doc.duration, max(0, time)) : nil
     }
 
-    /// Continuous controls outside a mouse gesture (color panel drags) coalesce per item and key.
-    private var coalescedEdit: (key: String, at: Date)?
+    private var currentSnapshot: EditorSnapshot { EditorSnapshot(pairs: pairs, annotations: annotations) }
 
+    /// Continuous controls outside a mouse gesture (color panel drags) coalesce per item and key.
     func checkpoint(coalescing key: String? = nil) {
-        if let key, let last = coalescedEdit, last.key == key, Date().timeIntervalSince(last.at) < 1 {
-            coalescedEdit = (key, Date())
-            return
-        }
-        coalescedEdit = key.map { ($0, Date()) }
-        undoStack.append(EditorSnapshot(pairs: pairs, annotations: annotations))
-        if undoStack.count > 50 { undoStack.removeFirst() }
-        redoStack.removeAll()
+        history.checkpoint(currentSnapshot, coalescing: key)
     }
 
     func beginGesture() {
-        guard gestureSnapshot == nil, !isExporting else { return }
-        gestureSnapshot = pairs
-        gestureAnnotations = annotations
-        gestureStartTime = editTime
+        guard !isExporting else { return }
+        history.beginGesture(currentSnapshot, time: editTime)
     }
 
     func endGesture() {
-        guard let before = gestureSnapshot else { return }
-        let beforeAnnotations = gestureAnnotations ?? annotations
-        gestureSnapshot = nil
-        gestureAnnotations = nil
-        gestureStartTime = nil
-        if !RegionEditing.equal(before, pairs) || beforeAnnotations != annotations {
-            coalescedEdit = nil
-            undoStack.append(EditorSnapshot(pairs: before, annotations: beforeAnnotations))
-            if undoStack.count > 50 { undoStack.removeFirst() }
-            redoStack.removeAll()
-        }
+        history.endGesture(current: currentSnapshot)
     }
 
     // MARK: - Actions
@@ -775,10 +751,8 @@ final class MainWindowController: NSWindowController {
     @objc func undoTapped() {
         guard !isExporting else { return }
         endGesture()
-        guard let prev = undoStack.popLast() else { BLog("[undo] stack empty"); return }
-        coalescedEdit = nil
-        redoStack.append(EditorSnapshot(pairs: pairs, annotations: annotations))
-        BLog("[undo] restoring \(prev.pairs.count) regions from stack depth=\(undoStack.count)")
+        guard let prev = history.undo(current: currentSnapshot) else { BLog("[undo] stack empty"); return }
+        BLog("[undo] restoring \(prev.pairs.count) regions from stack depth=\(history.undo.count)")
         self.pairs = prev.pairs
         self.annotations = prev.annotations
         if let id = selectedDrawingID, !annotations.contains(where: { $0.id == id }) { selectedDrawingID = nil }
@@ -794,10 +768,8 @@ final class MainWindowController: NSWindowController {
     @objc func redoTapped() {
         guard !isExporting else { return }
         endGesture()
-        guard let next = redoStack.popLast() else { BLog("[redo] stack empty"); return }
-        coalescedEdit = nil
-        undoStack.append(EditorSnapshot(pairs: pairs, annotations: annotations))
-        BLog("[redo] restoring \(next.pairs.count) regions from stack depth=\(redoStack.count)")
+        guard let next = history.redo(current: currentSnapshot) else { BLog("[redo] stack empty"); return }
+        BLog("[redo] restoring \(next.pairs.count) regions from stack depth=\(history.redo.count)")
         self.pairs = next.pairs
         self.annotations = next.annotations
         if let id = selectedDrawingID, !annotations.contains(where: { $0.id == id }) { selectedDrawingID = nil }
